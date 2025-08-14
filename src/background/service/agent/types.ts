@@ -1,4 +1,4 @@
-// Stub types for agent functionality
+// Types for agent functionality
 export interface ExecutionEvent {
   type: string;
   actor: string;
@@ -13,6 +13,12 @@ export interface ActionResult {
   code?: string;
   data?: any;
   details?: any;
+  balance?: string;
+  txHash?: string;
+  connected?: boolean;
+  switched?: boolean;
+  fallback?: boolean;
+  outputAmount?: string;
 }
 
 export interface AgentContext {
@@ -22,6 +28,40 @@ export interface AgentContext {
   eventHandler: (event: ExecutionEvent) => void;
   sendConfirmationRequest?: (confirmation: any) => Promise<any>;
   llm?: any;
+}
+
+export interface ActionStep {
+  id: string;
+  name: string;
+  description: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  startTime?: number;
+  endTime?: number;
+  result?: ActionResult;
+  error?: string;
+  type?: string;
+  params?: any;
+  dependencies?: string[];
+  riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH';
+}
+
+export interface ActionDefinition {
+  name: string;
+  description: string;
+  timeout: number;
+  category: 'system' | 'web3' | 'utility' | 'browser';
+  handler: (...args: unknown[]) => unknown;
+  dependencies: string[];
+  riskLevel: 'high' | 'low' | 'medium';
+  retryable: boolean;
+  schema?: any;
+}
+
+export interface Web3Context {
+  currentChain: number;
+  currentAddress: string;
+  balances: Record<string, string>;
+  riskLevel: string;
 }
 
 export class Executor {

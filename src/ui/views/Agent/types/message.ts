@@ -7,10 +7,22 @@ export enum Actors {
   VALIDATOR = 'validator',
 }
 
+export interface FunctionCall {
+  id: string;
+  name: string;
+  arguments: Record<string, any>;
+  result?: any;
+  status: 'pending' | 'executing' | 'completed' | 'failed';
+  timestamp: number;
+}
+
 export interface Message {
   actor: Actors;
   content: string;
   timestamp: number;
+  isStreaming?: boolean;
+  messageId?: string;
+  functionCalls?: FunctionCall[];
 }
 
 export interface ActorProfile {

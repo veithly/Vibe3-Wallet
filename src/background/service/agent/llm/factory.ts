@@ -1,10 +1,12 @@
-import { createLogger } from '../../../../utils/logger';
+import { createLogger } from '@/utils/logger';
 import type { ProviderConfig, ModelConfig } from '../storage/index';
 import { ProviderTypeEnum } from '../storage/types';
-import { IWeb3LLM, LLMResponse, Web3Context, LLMAction } from './types';
+import { IWeb3LLM, LLMResponse, Web3Context, LLMAction, FunctionSchema, StreamingLLMResponse, FunctionCall } from './types';
 import type { BaseChatModel as IBaseChatModel } from './messages';
 import { BaseMessage, HumanMessage } from './messages';
 import { Web3Intent } from '../intent/IntentRecognizer';
+import { toolRegistry } from '../tools/ToolRegistry';
+import { StreamingHandler, createStreamingChunk } from '../streaming/StreamingHandler';
 
 const logger = createLogger('LLMFactory');
 
@@ -100,11 +102,13 @@ class MockChatModel implements IBaseChatModel {
   }
 }
 
-// Web3LLM class that implements the IWeb3LLM interface
+// Enhanced Web3LLM class with function calling and streaming support
 class Web3LLM implements IWeb3LLM {
   private model: IBaseChatModel;
   private providerType: string;
   private modelName: string;
+  private _supportsFunctionCalling: boolean;
+  private supportsStreaming: boolean;
 
   constructor(
     model: IBaseChatModel,
@@ -114,51 +118,36 @@ class Web3LLM implements IWeb3LLM {
     this.model = model;
     this.providerType = providerType;
     this.modelName = modelName;
+    this._supportsFunctionCalling = this.detectFunctionCallingSupport();
+    this.supportsStreaming = this.detectStreamingSupport();
 
-    logger.info(`Initialized Web3LLM with ${providerType}/${modelName}`);
+    logger.info(`Initialized Web3LLM with ${providerType}/${modelName}`, {
+      functionCalling: this._supportsFunctionCalling,
+      streaming: this.supportsStreaming
+    });
   }
 
   async generateResponse(
     messages: BaseMessage[],
     context: Web3Context,
-    intent?: Web3Intent
+    intent?: Web3Intent,
+    tools?: FunctionSchema[]
   ): Promise<LLMResponse> {
     logger.info('Generating Web3LLM response', {
       messageCount: messages.length,
       providerType: this.providerType,
       modelName: this.modelName,
       hasIntent: !!intent,
+      hasTools: !!tools && tools.length > 0,
+      functionCallingSupported: this.supportsFunctionCalling
     });
 
     try {
-      // Create enhanced prompt with Web3 context
-      const prompt = this.createPrompt(messages, context, intent);
-
-      // Generate response from LLM
-      const llmResponse = await this.model.invoke([new HumanMessage(prompt)]);
-      const responseText = llmResponse.content as string;
-
-      // Extract actions from response
-      const actions = this.extractActions(responseText);
-
-      // Calculate confidence based on action extraction quality
-      const confidence = this.calculateConfidence(actions, responseText);
-
-      // Extract thinking process
-      const thinking = this.extractThinking(responseText);
-
-      logger.info('LLM response generated successfully', {
-        responseLength: responseText.length,
-        actionsCount: actions.length,
-        confidence,
-      });
-
-      return {
-        response: responseText,
-        actions,
-        confidence,
-        thinking,
-      };
+      if (this._supportsFunctionCalling && tools && tools.length > 0) {
+        return await this.generateFunctionCallingResponse(messages, context, tools, intent);
+      } else {
+        return await this.generateLegacyResponse(messages, context, intent);
+      }
     } catch (error) {
       logger.error('Failed to generate LLM response:', error);
 
@@ -168,14 +157,246 @@ class Web3LLM implements IWeb3LLM {
           thinking: 'Error occurred while processing request',
           actions: [],
           confidence: 0.1,
-          reply:
-            'I apologize, but I encountered an error while processing your request. Please try again.',
+          reply: 'I apologize, but I encountered an error while processing your request. Please try again.',
         }),
         actions: [],
         confidence: 0.1,
         thinking: 'Error occurred',
       };
     }
+  }
+
+  async generateStreamingResponse(
+    messages: BaseMessage[],
+    context: Web3Context,
+    intent?: Web3Intent,
+    tools?: FunctionSchema[],
+    onChunk?: (chunk: StreamingLLMResponse) => void
+  ): Promise<LLMResponse> {
+    if (!this.supportsStreaming) {
+      // Fall back to non-streaming response
+      const response = await this.generateResponse(messages, context, intent, tools);
+      if (onChunk) {
+        // Send as single chunk for compatibility
+        onChunk(createStreamingChunk('content', { content: response.response }));
+        if (response.functionCalls) {
+          for (const functionCall of response.functionCalls) {
+            onChunk(createStreamingChunk('function_call', { functionCall }));
+          }
+        }
+        onChunk(createStreamingChunk('done'));
+      }
+      return response;
+    }
+
+    logger.info('Generating streaming Web3LLM response', {
+      messageCount: messages.length,
+      providerType: this.providerType,
+      hasTools: !!tools && tools.length > 0
+    });
+
+    try {
+      return await this.generateStreamingResponseInternal(messages, context, intent, tools, onChunk);
+    } catch (error) {
+      logger.error('Failed to generate streaming response:', error);
+      
+      // Fall back to non-streaming
+      return await this.generateResponse(messages, context, intent, tools);
+    }
+  }
+
+  supportsFunctionCalling(): boolean {
+    return this._supportsFunctionCalling;
+  }
+
+  getAvailableTools(): FunctionSchema[] {
+    return toolRegistry.getFunctionSchemas();
+  }
+
+  private async generateFunctionCallingResponse(
+    messages: BaseMessage[],
+    context: Web3Context,
+    tools: FunctionSchema[],
+    intent?: Web3Intent
+  ): Promise<LLMResponse> {
+    // Create enhanced prompt with function calling capabilities
+    const prompt = this.createFunctionCallingPrompt(messages, context, tools, intent);
+
+    // Generate response from LLM
+    const llmResponse = await this.model.invoke([new HumanMessage(prompt)]);
+    const responseText = llmResponse.content as string;
+
+    // Parse function calls from response
+    const functionCalls = this.parseFunctionCalls(responseText, tools);
+    
+    // Extract actions from function calls
+    const actions = this.convertFunctionCallsToActions(functionCalls);
+
+    // Extract thinking and response
+    const thinking = this.extractThinking(responseText);
+    const reply = this.extractReply(responseText);
+
+    // Calculate confidence
+    const confidence = this.calculateConfidence(actions, responseText);
+
+    logger.info('Function calling response generated successfully', {
+      responseLength: responseText.length,
+      functionCallsCount: functionCalls.length,
+      actionsCount: actions.length,
+      confidence,
+    });
+
+    return {
+      response: reply,
+      actions,
+      confidence,
+      thinking,
+      functionCalls
+    };
+  }
+
+  private async generateLegacyResponse(
+    messages: BaseMessage[],
+    context: Web3Context,
+    intent?: Web3Intent
+  ): Promise<LLMResponse> {
+    // Use the original prompt generation for non-function calling models
+    const prompt = this.createPrompt(messages, context, intent);
+
+    // Generate response from LLM
+    const llmResponse = await this.model.invoke([new HumanMessage(prompt)]);
+    const responseText = llmResponse.content as string;
+
+    // Extract actions from response
+    const actions = this.extractActions(responseText);
+
+    // Calculate confidence
+    const confidence = this.calculateConfidence(actions, responseText);
+
+    // Extract thinking process
+    const thinking = this.extractThinking(responseText);
+
+    logger.info('Legacy response generated successfully', {
+      responseLength: responseText.length,
+      actionsCount: actions.length,
+      confidence,
+    });
+
+    return {
+      response: responseText,
+      actions,
+      confidence,
+      thinking,
+    };
+  }
+
+  private async generateStreamingResponseInternal(
+    messages: BaseMessage[],
+    context: Web3Context,
+    intent?: Web3Intent,
+    tools?: FunctionSchema[],
+    onChunk?: (chunk: StreamingLLMResponse) => void
+  ): Promise<LLMResponse> {
+    const streamingHandler = new StreamingHandler({
+      enableStreaming: true,
+      onChunk,
+      onFunctionCall: (functionCall) => {
+        logger.info('Function call detected in streaming response', functionCall);
+      }
+    });
+
+    const generateResponse = async () => {
+      if (this._supportsFunctionCalling && tools && tools.length > 0) {
+        const response = await this.generateFunctionCallingResponse(messages, context, tools, intent);
+        return {
+          content: response.response,
+          functionCalls: response.functionCalls || []
+        };
+      } else {
+        const response = await this.generateLegacyResponse(messages, context, intent);
+        return {
+          content: response.response,
+          functionCalls: []
+        };
+      }
+    };
+
+    const streamingResult = await streamingHandler.startStreaming(generateResponse);
+    
+    // Convert streaming result to LLMResponse
+    return {
+      response: streamingResult.content,
+      actions: [],
+      confidence: 0.8,
+      thinking: 'Generated via streaming response',
+      functionCalls: streamingResult.functionCalls
+    };
+  }
+
+  private createFunctionCallingPrompt(
+    messages: BaseMessage[],
+    context: Web3Context,
+    tools: FunctionSchema[],
+    intent?: Web3Intent
+  ): string {
+    const availableTools = tools || this.getAvailableTools();
+    
+    const systemPrompt = `You are Vibe3 AI, an intelligent Web3 assistant with advanced function calling capabilities.
+
+Your capabilities include:
+- Understanding complex Web3 instructions and breaking them down into function calls
+- Using available tools to execute blockchain operations
+- Providing clear explanations of operations, risks, and costs
+- Maintaining security awareness and guiding users through safe practices
+
+Key principles:
+1. **Security First**: Always verify contract addresses, warn about high-risk operations
+2. **Transparency**: Clearly explain fees, slippage, and estimated times
+3. **Efficiency**: Use the most appropriate tools for each task
+4. **User Control**: Never proceed without user confirmation for significant operations
+
+Available Tools:
+${this.formatToolsForPrompt(availableTools)}
+
+When responding:
+1. Use natural language to explain what you're doing
+2. Call functions when you need to execute operations
+3. Provide clear explanations of the results
+4. Ask for confirmation when needed
+
+Example response format:
+{
+  "thinking": "I need to check the user's ETH balance before proceeding with the swap",
+  "actions": [
+    {
+      "type": "checkBalance",
+      "params": {"address": "0x..."}
+    }
+  ],
+  "confidence": 0.9,
+  "reply": "Let me check your current ETH balance first..."
+}`;
+
+    // Format conversation history
+    const conversationHistory = this.formatConversation(messages);
+
+    // Format current context
+    const formattedContext = this.formatContext(context);
+
+    // Format user message
+    const userMessage = messages[messages.length - 1].content as string;
+
+    return `${systemPrompt}
+
+${conversationHistory}
+
+=== CURRENT WEB3 CONTEXT ===
+${formattedContext}
+
+=== USER INSTRUCTION ===
+${userMessage}
+
+Please respond with a JSON object containing your thinking process and any function calls you want to make.`;
   }
 
   private createPrompt(
@@ -209,6 +430,11 @@ Available Actions:
 - removeLiquidity: Withdraw liquidity from pools
 - connectWallet: Connect wallet to dApps
 - switchNetwork: Change blockchain networks
+- getNFTs: Query NFT holdings
+- getTransactionHistory: Get transaction history
+- getGasPrice: Get current gas prices
+- estimateGas: Estimate gas costs
+- signMessage: Sign messages with wallet
 
 When responding, always structure your answer as JSON with:
 {
@@ -298,6 +524,105 @@ Protocols: ${Object.keys(context.protocols).join(', ')}
 `.trim();
   }
 
+  private parseFunctionCalls(responseText: string, availableTools: FunctionSchema[]): FunctionCall[] {
+    const functionCalls: FunctionCall[] = [];
+    
+    try {
+      const response = JSON.parse(responseText);
+      
+      // Check if response contains function calls
+      if (response.function_calls && Array.isArray(response.function_calls)) {
+        functionCalls.push(...response.function_calls);
+      }
+      
+      // Also check for legacy action format
+      if (response.actions && Array.isArray(response.actions)) {
+        for (const action of response.actions) {
+          const tool = availableTools.find(t => t.name === action.type);
+          if (tool) {
+            functionCalls.push({
+              name: action.type,
+              arguments: action.params || {}
+            });
+          }
+        }
+      }
+    } catch (error) {
+      // Response is not JSON, try to extract function calls from text
+      return this.extractFunctionCallsFromText(responseText, availableTools);
+    }
+    
+    return functionCalls;
+  }
+  
+  private extractFunctionCallsFromText(text: string, availableTools: FunctionSchema[]): FunctionCall[] {
+    const functionCalls: FunctionCall[] = [];
+    
+    // Look for patterns like "I'll call checkBalance with address 0x..."
+    const toolNames = availableTools.map(tool => tool.name);
+    
+    for (const toolName of toolNames) {
+      const pattern = new RegExp(`\\b${toolName}\\b`, 'gi');
+      if (pattern.test(text)) {
+        // Extract parameters based on tool schema
+        const tool = availableTools.find(t => t.name === toolName);
+        if (tool) {
+          const params = this.extractParametersFromText(text, tool);
+          functionCalls.push({
+            name: toolName,
+            arguments: params
+          });
+        }
+      }
+    }
+    
+    return functionCalls;
+  }
+  
+  private extractParametersFromText(text: string, tool: FunctionSchema): Record<string, any> {
+    const params: Record<string, any> = {};
+    
+    // Simple parameter extraction based on parameter names
+    for (const [paramName, paramSchema] of Object.entries(tool.parameters.properties)) {
+      // Look for parameter values in text
+      const valuePatterns = [
+        `${paramName}[:\\s]+([^\\s,]+)`,
+        `${paramName}\\s*=\\s*([^\\s,]+)`,
+        `${paramName}\\s+is\\s+([^\\s,]+)`
+      ];
+      
+      for (const pattern of valuePatterns) {
+        const match = text.match(new RegExp(pattern, 'i'));
+        if (match && match[1]) {
+          let value: any = match[1];
+          
+          // Convert to appropriate type
+          const schemaType = (paramSchema as any).type;
+          if (schemaType === 'number') {
+            value = parseFloat(value);
+          } else if (schemaType === 'boolean') {
+            value = value.toLowerCase() === 'true';
+          }
+          
+          params[paramName] = value;
+          break;
+        }
+      }
+    }
+    
+    return params;
+  }
+  
+  private convertFunctionCallsToActions(functionCalls: FunctionCall[]): LLMAction[] {
+    return functionCalls.map(fc => ({
+      type: fc.name,
+      params: fc.arguments,
+      confidence: 0.8,
+      reasoning: `Function call: ${fc.name}`,
+      functionCall: fc
+    }));
+  }
+  
   private extractActions(llmResponse: string): LLMAction[] {
     try {
       const response = JSON.parse(llmResponse);
@@ -414,6 +739,48 @@ Protocols: ${Object.keys(context.protocols).join(', ')}
     } catch (error) {
       return 'Thinking process not available';
     }
+  }
+  
+  private extractReply(responseText: string): string {
+    try {
+      const parsed = JSON.parse(responseText);
+      return parsed.reply || parsed.response || responseText;
+    } catch (error) {
+      return responseText;
+    }
+  }
+  
+  private formatToolsForPrompt(tools: FunctionSchema[]): string {
+    return tools.map(tool => {
+      const requiredParams = tool.parameters.required || [];
+      const paramDescriptions = Object.entries(tool.parameters.properties)
+        .map(([name, schema]) => {
+          const required = requiredParams.includes(name) ? 'true' : 'false';
+          return `  - ${name}: ${schema.description} ${required}`;
+        })
+        .join('\\n');
+      
+      return `${tool.name}: ${tool.description}\\nParameters:\\n${paramDescriptions}`;
+    }).join('\\n\\n');
+  }
+  
+  private detectFunctionCallingSupport(): boolean {
+    // Detect if the underlying model supports function calling
+    // This is a simplified detection - in production, you'd check model capabilities
+    const functionCallingProviders = [
+      'openai', 'anthropic', 'gemini', 'azure-openai', 'openrouter'
+    ];
+    
+    return functionCallingProviders.includes(this.providerType.toLowerCase());
+  }
+  
+  private detectStreamingSupport(): boolean {
+    // Detect if the underlying model supports streaming
+    const streamingProviders = [
+      'openai', 'anthropic', 'gemini', 'azure-openai', 'openrouter', 'groq'
+    ];
+    
+    return streamingProviders.includes(this.providerType.toLowerCase());
   }
 }
 

@@ -5,6 +5,22 @@
   100% { transform: rotate(360deg); }
 }
 
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .side-panel-app {
   display: flex;
   flex-direction: column;
@@ -96,6 +112,16 @@
         border-color: #1890ff;
         color: white;
       }
+      
+      &.streaming-capable {
+        border-color: #1890ff;
+        color: #1890ff;
+        
+        &:hover {
+          background: #1890ff;
+          color: white;
+        }
+      }
     }
   }
 
@@ -165,6 +191,16 @@
           background: #1890ff;
           border-color: #1890ff;
           color: white;
+        }
+        
+        &.streaming-capable {
+          border-color: #1890ff;
+          color: #1890ff;
+          
+          &:hover {
+            background: #1890ff;
+            color: white;
+          }
         }
       }
     }

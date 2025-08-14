@@ -248,6 +248,48 @@ class AgentService {
           await this.handleFollowUpTask(message, port);
           break;
 
+        case 'streaming_task':
+          await this.handleStreamingTask(message, port);
+          break;
+
+        case 'get_available_tools': {
+          if (this.web3Agent) {
+            const tools = await this.web3Agent.getAvailableTools();
+            port.postMessage({ type: 'available_tools', tools });
+          } else {
+            port.postMessage({
+              type: 'error',
+              error: 'Web3 Agent not available',
+            });
+          }
+          break;
+        }
+
+        case 'get_agent_capabilities': {
+          if (this.web3Agent) {
+            const [functionCalling, streaming, toolInfo] = await Promise.all([
+              this.web3Agent.supportsFunctionCalling(),
+              this.web3Agent.supportsStreaming(),
+              this.web3Agent.getToolRegistryInfo(),
+            ]);
+
+            port.postMessage({
+              type: 'agent_capabilities',
+              capabilities: {
+                functionCalling,
+                streaming,
+                toolInfo,
+              },
+            });
+          } else {
+            port.postMessage({
+              type: 'error',
+              error: 'Web3 Agent not available',
+            });
+          }
+          break;
+        }
+
         case 'cancel_task':
           await this.handleCancelTask(port);
           break;
@@ -421,22 +463,132 @@ class AgentService {
       await this.web3Agent.initialize(sessionId);
     }
 
-    // Process the task with Web3 Agent
-    const response = await this.web3Agent.processUserInstruction(task);
+    // Check if we should use function calling
+    const supportsFunctionCalling = await this.web3Agent.supportsFunctionCalling();
 
-    // Send response back to client
-    port.postMessage({
-      type: 'execution',
-      actor: Actors.SYSTEM,
-      state: 'TASK_OK',
-      timestamp: Date.now(),
-      data: {
-        details: response.message,
-        actions: response.actions,
-        plan: response.plan,
-        simulation: response.simulation,
-      },
-    });
+    if (supportsFunctionCalling) {
+      // Use enhanced function calling capabilities
+      const response = await this.web3Agent.processUserInstructionWithFunctionCalling(
+        task
+      );
+
+      // Send response back to client
+      port.postMessage({
+        type: 'execution',
+        actor: Actors.SYSTEM,
+        state: 'TASK_OK',
+        timestamp: Date.now(),
+        data: {
+          details: response.message,
+          actions: response.actions,
+          plan: response.plan,
+          simulation: response.simulation,
+          functionCalling: true,
+        },
+      });
+    } else {
+      // Fall back to traditional processing
+      const response = await this.web3Agent.processUserInstruction(task);
+
+      // Send response back to client
+      port.postMessage({
+        type: 'execution',
+        actor: Actors.SYSTEM,
+        state: 'TASK_OK',
+        timestamp: Date.now(),
+        data: {
+          details: response.message,
+          actions: response.actions,
+          plan: response.plan,
+          simulation: response.simulation,
+          functionCalling: false,
+        },
+      });
+    }
+  }
+
+  private async handleStreamingTask(
+    message: AgentMessage,
+    port: chrome.runtime.Port
+  ) {
+    const { task, tabId, sessionId } = message;
+
+    if (!task || !tabId) {
+      throw new Error('Missing required parameters for streaming task');
+    }
+
+    if (!this.web3Agent) {
+      throw new Error('Web3 Agent not available');
+    }
+
+    logger.info('AgentService', `Starting streaming task: ${task}`);
+
+    // Initialize Web3 Agent with session ID if available
+    if (!this.web3Agent['state']?.sessionId) {
+      await this.web3Agent.initialize(sessionId);
+    }
+
+    // Check if streaming is supported
+    const supportsStreaming = await this.web3Agent.supportsStreaming();
+
+    if (!supportsStreaming) {
+      // Fall back to non-streaming response
+      return this.handleWeb3Task(task, tabId, port, sessionId);
+    }
+
+    try {
+      // Send initial response indicating streaming is starting
+      port.postMessage({
+        type: 'streaming_start',
+        taskId: message.taskId,
+        timestamp: Date.now(),
+      });
+
+      // Process with streaming support
+      const response = await this.web3Agent.processUserInstructionWithFunctionCalling(
+        task,
+        true, // enable streaming
+        (chunk) => {
+          // Send streaming chunk to client
+          port.postMessage({
+            type: 'streaming_chunk',
+            taskId: message.taskId,
+            chunk,
+            timestamp: Date.now(),
+          });
+        }
+      );
+
+      // Send final response
+      port.postMessage({
+        type: 'streaming_complete',
+        taskId: message.taskId,
+        data: {
+          details: response.message,
+          actions: response.actions,
+          plan: response.plan,
+          simulation: response.simulation,
+          functionCalling: true,
+        },
+        timestamp: Date.now(),
+      });
+
+      logger.info('AgentService', 'Streaming task completed successfully', {
+        task,
+        tabId,
+        success: response.success,
+      });
+    } catch (error) {
+      logger.error('AgentService', 'Streaming task failed', error);
+
+      // Send error response
+      port.postMessage({
+        type: 'streaming_error',
+        taskId: message.taskId,
+        error: error instanceof Error ? error.message : String(error),
+        timestamp: Date.now(),
+      });
+    }
   }
 
   private async handleAutomationTask(

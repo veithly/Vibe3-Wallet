@@ -1,0 +1,153 @@
+// Additional styles for streaming functionality
+// Add these to the end of SidePanelApp.less
+
+// Streaming message styles
+.streaming-message {
+  margin: 12px 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  animation: slideIn 0.3s ease;
+
+  .streaming-content {
+    margin-bottom: 12px;
+  }
+
+  .streaming-text {
+    margin: 0;
+    line-height: 1.6;
+    white-space: pre-wrap;
+  }
+
+  .streaming-cursor {
+    display: inline-block;
+    vertical-align: text-bottom;
+  }
+
+  .inline-spin {
+    display: inline-block;
+    margin-left: 4px;
+  }
+
+  .function-calls-container {
+    margin-top: 16px;
+    padding: 12px;
+    background: white;
+    border-radius: 6px;
+    border: 1px solid #e9ecef;
+  }
+
+  .function-calls-list {
+    margin-top: 8px;
+  }
+
+  .function-call-item {
+    margin: 8px 0;
+    padding: 8px;
+    background: #f8f9fa;
+    border-radius: 4px;
+    border-left: 3px solid #e9ecef;
+    transition: all 0.2s ease;
+
+    &:hover {
+      background: #f0f0f0;
+    }
+  }
+
+  .function-call-header {
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .function-call-details {
+    margin-top: 8px;
+    padding-left: 24px;
+  }
+
+  .function-call-arguments,
+  .function-call-result {
+    margin: 8px 0;
+  }
+
+  .arguments-json,
+  .result-content {
+    background: #f1f3f4;
+    padding: 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: pre-wrap;
+    overflow-x: auto;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  }
+
+  .streaming-indicator {
+    display: flex;
+    align-items: center;
+    margin-top: 12px;
+    padding: 8px;
+    background: #e6f7ff;
+    border-radius: 4px;
+    font-size: 12px;
+    animation: pulse 2s infinite;
+  }
+
+  .streaming-complete {
+    margin-top: 12px;
+    padding: 8px;
+    background: #f6ffed;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+
+  .streaming-message-error {
+    margin: 12px 0;
+  }
+}
+
+// Message list streaming styles
+.message-list {
+  .message-item {
+    &.streaming {
+      .message-content {
+        background: #f8f9fa;
+        border-color: #1890ff;
+        animation: pulse 2s infinite;
+      }
+    }
+
+    .streaming-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      color: #1890ff;
+      margin-top: 4px;
+    }
+  }
+}
+
+// Agent status integration
+.side-panel-app {
+  .content-area {
+    .agent-status {
+      animation: slideIn 0.3s ease;
+    }
+  }
+
+  .header {
+    .header-button {
+      &.streaming-capable {
+        color: #1890ff;
+        border-color: #1890ff;
+        
+        &:hover {
+          background: #1890ff;
+          color: white;
+        }
+      }
+    }
+  }
+}

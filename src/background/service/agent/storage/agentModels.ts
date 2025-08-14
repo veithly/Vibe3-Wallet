@@ -1,4 +1,4 @@
-import { createLogger } from '../../../../utils/logger';
+import { createLogger } from '@/utils/logger';
 import { createStorage } from './storage';
 import { AgentNameEnum } from './types';
 import { llmProviderParameters } from './types';

@@ -13,6 +13,11 @@ import BookmarkList from './components/BookmarkList';
 import Settings from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import IconButton from './components/IconButton';
+import {
+  StreamingMessage,
+  useStreamingMessage,
+} from './components/StreamingMessage';
+import { AgentStatus, useAgentStatus } from './components/AgentStatus';
 import { Message, Actors } from './types/message';
 import { EventType, AgentEvent, ExecutionState } from './types/event';
 import { chatHistoryStore } from '@/background/service/agent/chatHistory';
@@ -67,6 +72,11 @@ export const SidePanelApp = () => {
   const [isReplaying, setIsReplaying] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [hasError, setHasError] = useState<string | null>(null);
+  const [showAgentStatus, setShowAgentStatus] = useState(false);
+  const [agentCapabilities, setAgentCapabilities] = useState<any>(null);
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(
+    null
+  );
   const portRef = useRef<chrome.runtime.Port | null>(null);
   const heartbeatIntervalRef = useRef<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -209,6 +219,99 @@ export const SidePanelApp = () => {
           });
           setInputEnabled(true);
           setShowStopButton(false);
+        } else if (message && message.type === 'streaming_start') {
+          // Start streaming response
+          const messageId = `streaming_${Date.now()}_${Math.random()
+            .toString(36)
+            .substr(2, 9)}`;
+          setStreamingMessageId(messageId);
+
+          // Add initial streaming message
+          appendMessage({
+            actor: Actors.SYSTEM,
+            content: '',
+            timestamp: Date.now(),
+            isStreaming: true,
+            messageId,
+            functionCalls: [],
+          });
+
+          logEvent('streaming_start', { taskId: message.taskId });
+        } else if (message && message.type === 'streaming_chunk') {
+          // Handle streaming chunk
+          if (streamingMessageId && message.chunk) {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.messageId === streamingMessageId
+                  ? {
+                      ...msg,
+                      content:
+                        (msg.content || '') + (message.chunk.content || ''),
+                      functionCalls:
+                        message.chunk.functionCalls || msg.functionCalls || [],
+                    }
+                  : msg
+              )
+            );
+          }
+
+          logEvent('streaming_chunk', {
+            taskId: message.taskId,
+            chunkType: message.chunk?.type,
+          });
+        } else if (message && message.type === 'streaming_complete') {
+          // Complete streaming response
+          if (streamingMessageId && message.data) {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.messageId === streamingMessageId
+                  ? {
+                      ...msg,
+                      content: message.data.details,
+                      isStreaming: false,
+                      functionCalls:
+                        message.data.functionCalls || msg.functionCalls || [],
+                    }
+                  : msg
+              )
+            );
+          }
+          setStreamingMessageId(null);
+          setInputEnabled(true);
+          setShowStopButton(false);
+
+          logEvent('streaming_complete', { taskId: message.taskId });
+        } else if (message && message.type === 'streaming_error') {
+          // Handle streaming error
+          if (streamingMessageId) {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.messageId === streamingMessageId
+                  ? {
+                      ...msg,
+                      content: message.error || 'Streaming error occurred',
+                      isStreaming: false,
+                    }
+                  : msg
+              )
+            );
+          }
+          setStreamingMessageId(null);
+          setInputEnabled(true);
+          setShowStopButton(false);
+
+          logEvent('streaming_error', {
+            taskId: message.taskId,
+            error: message.error,
+          });
+        } else if (message && message.type === 'agent_capabilities') {
+          // Update agent capabilities
+          setAgentCapabilities(message.capabilities);
+          logEvent('agent_capabilities', message.capabilities);
+        } else if (message && message.type === 'available_tools') {
+          // Update available tools
+          logger.info('Available tools updated', `${message.tools?.length || 0} tools available`);
+          logEvent('available_tools', { count: message.tools?.length || 0 });
         } else if (message && message.type === 'speech_to_text_result') {
           if (message.text && setInputTextRef.current) {
             logger.debug(COMPONENT_NAME, 'Speech recognition successful', {
@@ -706,14 +809,22 @@ export const SidePanelApp = () => {
         appendMessage(userMessage, sessionId || undefined);
         logger.debug(COMPONENT_NAME, 'User message appended');
 
+        // Check if we should use streaming based on agent capabilities
+        const useStreaming = agentCapabilities?.streaming || false;
+
         // Prepare and send message
         const messageId = generateMessageId();
         const messagePayload = {
-          type: isFollowUpMode ? 'follow_up_task' : 'new_task',
+          type: useStreaming
+            ? 'streaming_task'
+            : isFollowUpMode
+            ? 'follow_up_task'
+            : 'new_task',
           task: text,
           taskId: sessionId,
           tabId,
           messageId,
+          historySessionId: sessionId || undefined,
         };
         logger.debug(COMPONENT_NAME, 'Sending message payload', {
           type: messagePayload.type,
@@ -1092,6 +1203,29 @@ export const SidePanelApp = () => {
     [getActiveTabId, setupReplayState, sendMessageWithRetry, appendMessage]
   );
 
+  // Request agent capabilities
+  const requestAgentCapabilities = useCallback(() => {
+    if (portRef.current) {
+      portRef.current.postMessage({ type: 'get_agent_capabilities' });
+      portRef.current.postMessage({ type: 'get_available_tools' });
+    }
+  }, [portRef]);
+
+  // Toggle agent status panel
+  const toggleAgentStatus = useCallback(() => {
+    setShowAgentStatus(!showAgentStatus);
+    if (!showAgentStatus) {
+      requestAgentCapabilities();
+    }
+  }, [showAgentStatus, requestAgentCapabilities]);
+
+  // Request capabilities when connection is established
+  useEffect(() => {
+    if (connectionStatus === ConnectionState.CONNECTED && !agentCapabilities) {
+      requestAgentCapabilities();
+    }
+  }, [connectionStatus, agentCapabilities, requestAgentCapabilities]);
+
   // Show loading state while initializing
   if (!isInitialized) {
     return (
@@ -1191,6 +1325,16 @@ export const SidePanelApp = () => {
             />
             <IconButton
               icon="settings"
+              onClick={toggleAgentStatus}
+              tooltip="Agent Status & Capabilities"
+              data-testid="agent-status-button"
+              active={showAgentStatus}
+              className={
+                agentCapabilities?.streaming ? 'streaming-capable' : ''
+              }
+            />
+            <IconButton
+              icon="settings"
               onClick={handleOpenSettings}
               tooltip="Open Settings"
               data-testid="settings-button"
@@ -1199,7 +1343,14 @@ export const SidePanelApp = () => {
           </div>
         </div>
         <div className="content-area">
-          {showSettings ? (
+          {showAgentStatus ? (
+            <ErrorBoundary componentName="AgentStatus">
+              <AgentStatus
+                onRefresh={requestAgentCapabilities}
+                onSettings={handleOpenSettings}
+              />
+            </ErrorBoundary>
+          ) : showSettings ? (
             <ErrorBoundary componentName="Settings">
               <Settings onClose={handleCloseSettings} />
             </ErrorBoundary>

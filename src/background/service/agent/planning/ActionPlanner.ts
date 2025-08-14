@@ -9,6 +9,7 @@ import type { AgentContext } from '../types';
 
 export interface ActionStep {
   id: string;
+  name: string;
   type: string;
   protocol?: string;
   params: Record<string, any>;
@@ -17,7 +18,7 @@ export interface ActionStep {
   estimatedGas?: string;
   estimatedTime?: number;
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
-  status?: 'pending' | 'in_progress' | 'completed' | 'failed';
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
   result?: any;
 }
 
@@ -127,7 +128,9 @@ export class ActionPlanner {
     if (approvalNeeded) {
       actions.push({
         id: 'approve-1',
+        name: 'Approve Token',
         type: 'approveToken',
+        status: 'pending',
         protocol: swapPath.protocol,
         params: {
           tokenAddress: entities.fromToken!,
@@ -151,7 +154,9 @@ export class ActionPlanner {
       // Multi-step swap with bridge
       actions.push({
         id: 'swap-1',
+        name: 'Swap Tokens',
         type: 'swapTokens',
+        status: 'pending',
         protocol: swapPath.protocol,
         params: {
           fromToken: entities.fromToken!,
@@ -173,7 +178,9 @@ export class ActionPlanner {
 
       actions.push({
         id: 'bridge-1',
+        name: 'Bridge Tokens',
         type: 'bridgeTokens',
+        status: 'pending',
         protocol: swapPath.bridgeProtocol!,
         params: {
           tokenAddress: swapPath.bridgeToken!,
@@ -194,7 +201,9 @@ export class ActionPlanner {
 
       actions.push({
         id: 'swap-2',
+        name: 'Swap Tokens',
         type: 'swapTokens',
+        status: 'pending',
         protocol: swapPath.protocol,
         params: {
           fromToken: swapPath.bridgeToken!,
@@ -226,7 +235,9 @@ export class ActionPlanner {
       // Single swap
       actions.push({
         id: 'swap-1',
+        name: 'Swap Tokens',
         type: 'swapTokens',
+        status: 'pending',
         protocol: swapPath.protocol,
         params: {
           fromToken: entities.fromToken!,
@@ -288,7 +299,9 @@ export class ActionPlanner {
     if (approvalNeeded) {
       actions.push({
         id: 'approve-1',
+        name: 'Approve Token',
         type: 'approveToken',
+        status: 'pending',
         protocol: bestOption.protocol,
         params: {
           tokenAddress: entities.tokenAddress!,
@@ -310,6 +323,7 @@ export class ActionPlanner {
 
     actions.push({
       id: 'bridge-1',
+      name: 'Bridge Tokens',
       type: 'bridgeTokens',
       protocol: bestOption.protocol,
       params: {
@@ -327,6 +341,7 @@ export class ActionPlanner {
       estimatedGas: bestOption.estimatedGas,
       estimatedTime: bestOption.estimatedTime,
       riskLevel: 'MEDIUM',
+      status: 'pending',
     });
 
     return {
@@ -368,7 +383,9 @@ export class ActionPlanner {
     if (approvalNeeded) {
       actions.push({
         id: 'approve-1',
+        name: 'Approve Token',
         type: 'approveToken',
+        status: 'pending',
         protocol: bestOption.protocol,
         params: {
           tokenAddress: entities.tokenAddress!,
@@ -387,7 +404,9 @@ export class ActionPlanner {
 
     actions.push({
       id: 'stake-1',
+      name: 'Stake Tokens',
       type: 'stakeTokens',
+      status: 'pending',
       protocol: bestOption.protocol,
       params: {
         tokenAddress: entities.tokenAddress!,
@@ -423,6 +442,7 @@ export class ActionPlanner {
     const actions: ActionStep[] = [
       {
         id: 'approve-1',
+        name: 'Approve Token',
         type: 'approveToken',
         params: {
           tokenAddress: entities.tokenAddress!,
@@ -440,6 +460,7 @@ export class ActionPlanner {
         estimatedGas: '50000',
         estimatedTime: 30,
         riskLevel: 'LOW',
+        status: 'pending',
       },
     ];
 
@@ -460,6 +481,7 @@ export class ActionPlanner {
     const actions: ActionStep[] = [
       {
         id: 'send-1',
+        name: 'Send Transaction',
         type: 'sendTransaction',
         params: {
           to: entities.recipient!,
@@ -473,6 +495,7 @@ export class ActionPlanner {
         estimatedGas: '21000',
         estimatedTime: 30,
         riskLevel: 'LOW',
+        status: 'pending',
       },
     ];
 
@@ -493,6 +516,7 @@ export class ActionPlanner {
     const actions: ActionStep[] = [
       {
         id: 'query-1',
+        name: 'Check Balance',
         type: 'checkBalance',
         params: {
           address: entities.address || (await this.getCurrentAddress()),
@@ -505,6 +529,7 @@ export class ActionPlanner {
         estimatedGas: '0',
         estimatedTime: 10,
         riskLevel: 'LOW',
+        status: 'pending',
       },
     ];
 
@@ -525,6 +550,7 @@ export class ActionPlanner {
     const actions: ActionStep[] = [
       {
         id: 'connect-1',
+        name: 'Connect Wallet',
         type: 'connectWallet',
         params: {
           dappName: entities.dappName!,
@@ -537,6 +563,7 @@ export class ActionPlanner {
         estimatedGas: '0',
         estimatedTime: 15,
         riskLevel: 'LOW',
+        status: 'pending',
       },
     ];
 
@@ -557,6 +584,7 @@ export class ActionPlanner {
     const actions: ActionStep[] = [
       {
         id: 'switch-1',
+        name: 'Switch Network',
         type: 'switchNetwork',
         params: {
           chainId: entities.chainId!,
@@ -567,6 +595,7 @@ export class ActionPlanner {
         estimatedGas: '0',
         estimatedTime: 10,
         riskLevel: 'LOW',
+        status: 'pending',
       },
     ];
 
