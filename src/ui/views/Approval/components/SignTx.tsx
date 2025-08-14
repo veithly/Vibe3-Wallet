@@ -11,7 +11,6 @@ import {
   validateGasPriceRange,
 } from '@/utils/transaction';
 import Safe, { BasicSafeInfo } from '@rabby-wallet/gnosis-sdk';
-import * as Sentry from '@sentry/browser';
 import { Drawer, message, Modal } from 'antd';
 import { maxBy, omit } from 'lodash';
 import {
@@ -39,7 +38,7 @@ import {
 import { addHexPrefix, isHexString } from '@ethereumjs/util';
 import React, { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { matomoRequestEvent } from '@/utils/matomo-request';
-import { useTranslation, Trans } from 'react-i18next';
+import { useTranslation } from 'react-i18next';
 import { useScroll } from 'react-use';
 import { useSize, useDebounceFn, useRequest, useMemoizedFn } from 'ahooks';
 import IconGnosis from '@/ui/assets/walletlogo/safe.svg';
@@ -67,11 +66,7 @@ import {
 import { TokenDetailPopup } from '@/ui/views/Dashboard/components/TokenDetailPopup';
 import { CoboDelegatedDrawer } from './TxComponents/CoboDelegatedDrawer';
 import { BroadcastMode } from './BroadcastMode';
-import {
-  MultiAction,
-  TransactionAction,
-  TxPushType,
-} from '@rabby-wallet/rabby-api/dist/types';
+import { MultiAction, TxPushType } from '@rabby-wallet/rabby-api/dist/types';
 import { SafeNonceSelector } from './TxComponents/SafeNonceSelector';
 import { useEnterPassphraseModal } from '@/ui/hooks/useEnterPassphraseModal';
 import { findChain, isTestnet } from '@/utils/chain';
@@ -159,9 +154,7 @@ export const normalizeTxParams = (tx) => {
       });
     }
   } catch (e) {
-    Sentry.captureException(
-      new Error(`normalizeTxParams failed, ${JSON.stringify(e)}`)
-    );
+    console.error('SignTx.tsx');
   }
   return copy;
 };
@@ -1059,7 +1052,6 @@ const SignTx = ({ params, origin, account: $account }: SignTxProps) => {
         content: e.message || JSON.stringify(e),
         className: 'modal-support-darkmode',
       });
-      Sentry.captureException(e);
     }
   };
 
@@ -1220,7 +1212,6 @@ const SignTx = ({ params, origin, account: $account }: SignTxProps) => {
         title: 'Error',
         content,
       });
-      Sentry.captureException(e);
       return;
     }
 
@@ -1274,7 +1265,6 @@ const SignTx = ({ params, origin, account: $account }: SignTxProps) => {
         title: 'Error',
         content: e.message || JSON.stringify(e),
       });
-      Sentry.captureException(e);
       return;
     }
 
@@ -1907,7 +1897,6 @@ const SignTx = ({ params, origin, account: $account }: SignTxProps) => {
         title: 'Error',
         content: e.message || JSON.stringify(e),
       });
-      Sentry.captureException(e);
     }
   };
 

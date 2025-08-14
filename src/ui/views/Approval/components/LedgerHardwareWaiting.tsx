@@ -4,7 +4,6 @@ import { useLedgerStatus } from '@/ui/component/ConnectStatus/useLedgerStatus';
 import { findChain } from '@/utils/chain';
 import { matomoRequestEvent } from '@/utils/matomo-request';
 import { emitSignComponentAmounted } from '@/utils/signEvent';
-import * as Sentry from '@sentry/browser';
 import { message } from 'antd';
 import { Account } from '@/background/service/preference';
 import { EVENTS, KEYRING_CATEGORY_MAP, WALLETCONNECT_STATUS_MAP } from 'consts';
@@ -202,7 +201,7 @@ const LedgerHardwareWaiting = ({
             }
           }
         } catch (e) {
-          Sentry.captureException(e);
+          console.error('LedgerHardwareWaiting');
           setConnectStatus(WALLETCONNECT_STATUS_MAP.FAILED);
           return;
         }
@@ -221,9 +220,7 @@ const LedgerHardwareWaiting = ({
           approvalId: approval.id,
         });
       } else {
-        Sentry.captureException(
-          new Error('Ledger sign error: ' + JSON.stringify(data))
-        );
+        console.error('Ledger sign error: ');
         setConnectStatus(WALLETCONNECT_STATUS_MAP.FAILED);
         setErrorMessage(data.errorMsg);
       }

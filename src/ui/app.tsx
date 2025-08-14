@@ -5,7 +5,6 @@ import Views from './views';
 import { Message } from '@/utils/message';
 import { getUiType, getUITypeName, openInTab } from '@/ui/utils';
 import eventBus from '@/eventBus';
-import * as Sentry from '@sentry/react';
 import i18n, { addResourceBundle, changeLanguage } from 'src/i18n';
 import { EVENTS } from 'consts';
 import browser from 'webextension-polyfill';
@@ -16,27 +15,6 @@ import store from './store';
 
 import { getSentryEnv, isManifestV3 } from '@/utils/env';
 import { updateChainStore } from '@/utils/chain';
-
-Sentry.init({
-  dsn:
-    'https://f4a992c621c55f48350156a32da4778d@o4507018303438848.ingest.us.sentry.io/4507018389749760',
-  release: process.env.release,
-  environment: getSentryEnv(),
-  ignoreErrors: [
-    'ResizeObserver loop limit exceeded',
-    'ResizeObserver loop completed with undelivered notifications',
-    'Network Error',
-    'Request limit exceeded.',
-    'Non-Error promise rejection captured with keys: code, message',
-    'Non-Error promise rejection captured with keys: message, stack',
-    'Failed to fetch',
-    'Non-Error promise rejection captured with keys: message',
-    /Non-Error promise rejection captured/,
-    /\[From .*\]/, // error from custom rpc
-    /AxiosError/,
-    /WebSocket connection failed/,
-  ],
-});
 
 function initAppMeta() {
   const head = document.querySelector('head');
@@ -209,17 +187,8 @@ const checkSwAlive = () => {
     .catch((e) => {
       if (e.message === 'timeout') {
         console.log('[checkSwAlive] sw is inactive', e);
-        Sentry.captureException(
-          'sw is inactive' +
-            (browser.runtime.lastError ? ':' + browser.runtime.lastError : '')
-        );
       } else {
         console.log('[checkSwAlive] sw is dead');
-        Sentry.captureMessage(
-          'sw is dead:' +
-            e.message +
-            (browser.runtime.lastError ? ':' + browser.runtime.lastError : '')
-        );
       }
     });
 };

@@ -1,5 +1,4 @@
 import cloneDeep from 'lodash/cloneDeep';
-import * as Sentry from '@sentry/browser';
 import eventBus from '@/eventBus';
 import { createPersistStore, isSameAddress } from '@/background/utils';
 import {
@@ -163,7 +162,7 @@ class PreferenceService {
     try {
       defaultLang = await getFirstPreferredLangCode();
     } catch (e) {
-      Sentry.captureException(
+      console.error(
         `i18n getFirstPreferredLangCode error: ${JSON.stringify(e)}`
       );
     }
