@@ -330,6 +330,7 @@ const config = {
       'background': paths.rootResolve('src/background'),
       'consts': paths.rootResolve('src/constant'),
       'background/broadcastToUI': paths.rootResolve('src/background/utils/broadcastToUI.ts'),
+      '@agent': paths.rootResolve('src/background/service/agent'),
     },
     plugins: [new TSConfigPathsPlugin()],
     fallback: {
@@ -361,6 +362,20 @@ const config = {
           name: 'webextension-polyfill',
           chunks: 'all',
           priority: 100,
+        },
+        'agent-libs': {
+          minSize: 0,
+          test: /[\\/]node_modules[\\/](@langchain|langchain)/,
+          name: 'agent-libs',
+          chunks: 'all',
+          priority: 90,
+        },
+        'agent-core': {
+          minSize: 0,
+          test: /[\\/]src[\\/]background[\\/]service[\\/]agent[\\/]/,
+          name: 'agent-core',
+          chunks: 'all',
+          priority: 80,
         },
         ...(IS_FIREFOX && {
           vendors: {

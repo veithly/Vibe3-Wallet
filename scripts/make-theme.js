@@ -82,12 +82,12 @@ ${!SPECIAL_DEFAULT_ALPHA[theme].length ? '' : SPECIAL_DEFAULT_ALPHA[theme].map((
 `;
   fs.writeFileSync(cssvarSrcfile, cssvarSrcContent, 'utf8');
 
-console.log('[rabby] make-theme css vars version success!');
+console.log('[Vibe3] make-theme css vars version success!');
 }
 
 makeVarsInJs: {
   const varsLess = fs.readFileSync(path.resolve(ROOT, './src/ui/style/var.less'), 'utf8');
-  
+
   const palette = lessVarsToJs(varsLess, {
       resolveVariables: true,
       stripPrefix: false
@@ -117,5 +117,5 @@ export function ellipsis(){
 export default LessPalette;
 `);
 
-console.log('[rabby] make-theme js version success!');
+console.log('[Vibe3] make-theme js version success!');
 }

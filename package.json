@@ -43,6 +43,7 @@
     "@langchain/community": "^0.3.50",
     "@langchain/core": "^0.3.68",
     "@langchain/google-genai": "^0.2.16",
+    "@langchain/openai": "^0.0.34",
     "@ledgerhq/devices": "8.4.4",
     "@ledgerhq/hw-app-eth": "6.42.8",
     "@ledgerhq/hw-transport-webhid": "6.30.0",

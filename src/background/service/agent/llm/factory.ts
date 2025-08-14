@@ -1,4 +1,4 @@
-import { createLogger } from '@/utils/logger';
+import { createLogger } from '../../../../utils/logger';
 import type { ProviderConfig, ModelConfig } from '../storage/index';
 import { ProviderTypeEnum } from '../storage/types';
 import { IWeb3LLM, LLMResponse, Web3Context, LLMAction } from './types';
@@ -748,7 +748,7 @@ async function createAzureOpenAIModel(
       azureOpenAIApiKey: apiKey,
       azureOpenAIApiDeploymentName: azureDeploymentNames?.[0],
       azureOpenAIApiVersion: azureApiVersion,
-      azureOpenAIEndpoint: baseUrl,
+      azureOpenAIBasePath: baseUrl,
       ...parameters,
     });
 
