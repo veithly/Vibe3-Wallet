@@ -1,0 +1,51 @@
+{
+  "compilerOptions": {
+    "baseUrl": "./",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "module": "esnext",
+    "target": "ES2020",
+    "moduleResolution": "node",
+    "noImplicitAny": false,
+    "strict": true,
+    "esModuleInterop": true,
+    "useUnknownInCatchVariables": false,
+        "types": ["chrome", "node", "react", "react-dom", "jest"],
+    "jsx": "react",
+    "allowSyntheticDefaultImports": true,
+    "allowJs": true,
+    "paths": {
+      "@/*": ["src/*"],
+      "@/utils": ["src/utils"],
+      "@/utils/*": ["src/utils/*"],
+      "ui/*": ["src/ui/*"],
+      "background/*": ["src/background/*"],
+      "consts": ["src/constant"],
+      "consts/*": ["src/constant/*"],
+      "@/constant": ["src/constant"],
+      "@/constant/*": ["src/constant/*"],
+      "@/background/*": ["src/background/*"],
+      "@/ui/*": ["src/ui/*"],
+      "@/types/*": ["src/types/*"],
+      "@/eventBus": ["src/eventBus"],
+      "@/i18n": ["src/i18n"],
+      "@/migrations/*": ["src/migrations/*"]
+    },
+    "plugins": [
+      {
+        "transform": "typescript-transform-paths",
+        "afterDeclarations": true
+      },
+      {
+        "name": "typescript-styled-plugin",
+        "tags": ["styled", "css"],
+        "validate": true
+      }
+    ],
+    "outDir": "./dist",
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "exclude": ["./node_modules", "./src/background/agent-disabled", "./src/background/browser-disabled"],
+  "include": ["src", "__tests__"]
+}

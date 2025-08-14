@@ -1,0 +1,261 @@
+@import '~@/ui/style/var.less';
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.icon-spin {
+  animation: spin 1s linear infinite;
+}
+
+.icon-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid @color-border;
+  background: @color-white;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0; // Remove font-size to prevent text spacing issues
+  transition: all 0.2s ease-in-out;
+  user-select: none;
+  
+  &:focus {
+    outline: none;
+    border-color: #1890ff;
+    box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
+  }
+  
+  &__content {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  &__icon {
+    color: @color-text;
+    transition: color 0.2s ease-in-out;
+  }
+  
+  &__status {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    
+    &-icon {
+      width: 8px;
+      height: 8px;
+    }
+  }
+  
+  // Size variants
+  &--small {
+    width: 28px;
+    height: 28px;
+    
+    .icon-button__icon {
+      width: 14px;
+      height: 14px;
+    }
+  }
+  
+  &--medium {
+    width: 32px;
+    height: 32px;
+    
+    .icon-button__icon {
+      width: 16px;
+      height: 16px;
+    }
+  }
+  
+  &--large {
+    width: 40px;
+    height: 40px;
+    
+    .icon-button__icon {
+      width: 20px;
+      height: 20px;
+    }
+  }
+  
+  // Variant styles
+  &--primary {
+    background: #1890ff;
+    border-color: #1890ff;
+    
+    .icon-button__icon {
+      color: @color-white;
+    }
+    
+    &:hover:not(.icon-button--disabled) {
+      background: #40a9ff;
+      border-color: #40a9ff;
+    }
+    
+    &:active {
+      background: #096dd9;
+      border-color: #096dd9;
+    }
+  }
+  
+  &--secondary {
+    background: @color-white;
+    border-color: @color-border;
+    
+    .icon-button__icon {
+      color: @color-text;
+    }
+    
+    &:hover:not(.icon-button--disabled) {
+      border-color: #1890ff;
+      
+      .icon-button__icon {
+        color: #1890ff;
+      }
+    }
+    
+    &:active {
+      background: #f0f8ff;
+    }
+  }
+  
+  &--danger {
+    background: @color-white;
+    border-color: @color-border;
+    
+    .icon-button__icon {
+      color: #ff4d4f;
+    }
+    
+    &:hover:not(.icon-button--disabled) {
+      border-color: #ff4d4f;
+      background: #fff2f0;
+    }
+    
+    &:active {
+      background: #ffece8;
+    }
+  }
+  
+  // State styles
+  &--active {
+    background: #e6f7ff;
+    border-color: #1890ff;
+    
+    .icon-button__icon {
+      color: #1890ff;
+    }
+  }
+  
+  &--disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  
+  &--loading {
+    cursor: wait;
+    pointer-events: none;
+  }
+  
+  // Validation status styles
+  &--valid {
+    .icon-button__status {
+      background: #52c41a;
+      
+      .icon-button__status-icon {
+        color: @color-white;
+      }
+    }
+  }
+  
+  &--invalid {
+    .icon-button__status {
+      background: #ff4d4f;
+      
+      .icon-button__status-icon {
+        color: @color-white;
+      }
+    }
+  }
+  
+  &--pending {
+    .icon-button__status {
+      background: #faad14;
+      
+      .icon-button__status-icon {
+        color: @color-white;
+      }
+    }
+  }
+}
+
+// Dark mode styles
+.side-panel-app.dark {
+  .icon-button {
+    background: #1a1a1a;
+    border-color: #333;
+    
+    &__icon {
+      color: #ffffff;
+    }
+    
+    &--secondary {
+      background: #1a1a1a;
+      border-color: #333;
+      
+      .icon-button__icon {
+        color: #ffffff;
+      }
+      
+      &:hover:not(.icon-button--disabled) {
+        border-color: #1890ff;
+        
+        .icon-button__icon {
+          color: #1890ff;
+        }
+      }
+      
+      &:active {
+        background: #0f1419;
+      }
+    }
+    
+    &--danger {
+      background: #1a1a1a;
+      border-color: #333;
+      
+      .icon-button__icon {
+        color: #ff4d4f;
+      }
+      
+      &:hover:not(.icon-button--disabled) {
+        border-color: #ff4d4f;
+        background: #2a1215;
+      }
+      
+      &:active {
+        background: #3d1a00;
+      }
+    }
+    
+    &--active {
+      background: #111b26;
+      border-color: #1890ff;
+      
+      .icon-button__icon {
+        color: #1890ff;
+      }
+    }
+  }
+}

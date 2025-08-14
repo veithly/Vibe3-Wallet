@@ -1,0 +1,14 @@
+{
+  "appName": {
+    "message": "Vibe3 Wallet",
+    "description": "The name of the application"
+  },
+  "appDescription": {
+    "message": "您的 AI 驱动 Web3 智能钱包",
+    "description": "The description of the application"
+  },
+  "page_dashboard_home_panel_agent": {
+    "message": "智能助手",
+    "description": "Agent panel text for dashboard"
+  }
+}
