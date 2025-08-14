@@ -10,7 +10,7 @@
     "strict": true,
     "esModuleInterop": true,
     "useUnknownInCatchVariables": false,
-        "types": ["chrome", "node", "react", "react-dom", "jest"],
+        "types": ["chrome", "node", "react", "react-dom"],
     "jsx": "react",
     "allowSyntheticDefaultImports": true,
     "allowJs": true,
