@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import eventBus from '@/eventBus';
 import migrateData from '@/migrations';
 import { getOriginFromUrl, transformFunctionsToZero } from '@/utils';
@@ -19,7 +20,6 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import { ethErrors } from 'eth-rpc-errors';
 import { groupBy, isNull } from 'lodash';
-import 'reflect-metadata';
 import browser from 'webextension-polyfill';
 import createSubscription from './controller/provider/subscriptionManager';
 import {

@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import cloneDeep from 'lodash/cloneDeep';
 import { preferenceService, keyringService } from '@/background/service';
 import { Account } from '@/background/service/preference';

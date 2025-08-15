@@ -28,6 +28,13 @@ export interface AgentContext {
   eventHandler: (event: ExecutionEvent) => void;
   sendConfirmationRequest?: (confirmation: any) => Promise<any>;
   llm?: any;
+  // Additional properties for Web3 functionality
+  currentChain?: string;
+  currentAddress?: string;
+  riskLevel?: string;
+  balances?: Record<string, string>;
+  gasPrices?: Record<string, string>;
+  protocols?: Record<string, any>;
 }
 
 export interface ActionStep {

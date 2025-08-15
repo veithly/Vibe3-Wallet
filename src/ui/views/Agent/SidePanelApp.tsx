@@ -310,7 +310,10 @@ export const SidePanelApp = () => {
           logEvent('agent_capabilities', message.capabilities);
         } else if (message && message.type === 'available_tools') {
           // Update available tools
-          logger.info('Available tools updated', `${message.tools?.length || 0} tools available`);
+          logger.info(
+            'Available tools updated',
+            `${message.tools?.length || 0} tools available`
+          );
           logEvent('available_tools', { count: message.tools?.length || 0 });
         } else if (message && message.type === 'speech_to_text_result') {
           if (message.text && setInputTextRef.current) {

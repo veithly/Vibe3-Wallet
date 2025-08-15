@@ -267,6 +267,13 @@ const config = {
       patterns: [
         { from: './**', to: './', context: './_raw' },
         {
+          from: require.resolve('webextension-polyfill/dist/browser-polyfill.js'),
+          to: path.resolve(
+            FINAL_DIST,
+            './webextension-polyfill.js'
+          ),
+        },
+        {
           from: paths.rootResolve(
             `src/manifest/${MANIFEST_TYPE}/manifest.json`
           ),
@@ -345,16 +352,15 @@ const config = {
   },
   stats: 'minimal',
   optimization: {
-    splitChunks: {
-      ...(IS_FIREFOX && {
-        chunks: (chunk) =>
-          chunk.name !== 'content-script' && chunk.name !== 'pageProvider',
-        minSize: 10000,
-        maxSize: 4000000,
-        minChunks: 1,
-        maxAsyncRequests: 30,
-        maxInitialRequests: 30,
-      }),
+    // Disable chunk splitting completely in development to save memory
+    splitChunks: IS_FIREFOX ? {
+      chunks: (chunk) =>
+        chunk.name !== 'content-script' && chunk.name !== 'pageProvider',
+      minSize: 10000,
+      maxSize: 1000000,
+      minChunks: 1,
+      maxAsyncRequests: 8,
+      maxInitialRequests: 8,
       cacheGroups: {
         'webextension-polyfill': {
           minSize: 0,
@@ -362,36 +368,10 @@ const config = {
           name: 'webextension-polyfill',
           chunks: 'all',
           priority: 100,
+          enforce: true,
         },
-        'agent-libs': {
-          minSize: 0,
-          test: /[\\/]node_modules[\\/](@langchain|langchain)/,
-          name: 'agent-libs',
-          chunks: 'all',
-          priority: 90,
-        },
-        'agent-core': {
-          minSize: 0,
-          test: /[\\/]src[\\/]background[\\/]service[\\/]agent[\\/]/,
-          name: 'agent-core',
-          chunks: 'all',
-          priority: 80,
-        },
-        ...(IS_FIREFOX && {
-          vendors: {
-            test: /[\\/]node_modules[\\/]/,
-            name: 'vendors',
-            priority: -10,
-            reuseExistingChunk: true,
-          },
-          default: {
-            minChunks: 2,
-            priority: -20,
-            reuseExistingChunk: true,
-          },
-        }),
       },
-    },
+    } : false,
   },
   experiments: {
     asyncWebAssembly: true,

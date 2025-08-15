@@ -5,7 +5,7 @@ import { Provider } from 'react-redux';
 import { SidePanelApp } from './SidePanelApp';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import store from '@/ui/store';
-import '@/ui/style/index.less';
+import '@/ui/style/agent.less';
 import { logger } from './utils/logger';
 import { InitializationManager, TIMING_CONSTANTS } from './utils/timing';
 

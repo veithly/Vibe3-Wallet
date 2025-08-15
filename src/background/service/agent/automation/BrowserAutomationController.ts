@@ -507,11 +507,13 @@ export class BrowserAutomationController {
           throw new Error(`Unsupported task type: ${task.type}`);
       }
     } finally {
-      return {
-        success: true,
-        timing: Date.now() - startTime,
-      };
+      // This ensures timing is always recorded
     }
+
+    return {
+      success: true,
+      timing: Date.now() - startTime,
+    };
   }
 
   /**

@@ -111,8 +111,8 @@ class AgentService {
       if (!currentProvider) {
         logger.warn('AgentService', 'No LLM provider found, using fallback');
         // Use a simple fallback that works
-        const { MockChatModel } = await import('./agent/llm/factory');
-        return new MockChatModel(
+        const { RealChatModel } = await import('./agent/llm/factory');
+        return new RealChatModel(
           'gpt-3.5-turbo',
           'openai-fallback',
           { apiKey: 'fallback-key' } as ProviderConfig,
@@ -137,8 +137,8 @@ class AgentService {
     } catch (error) {
       logger.error('AgentService', 'Failed to initialize LLM', error);
       // Fallback to a basic configuration
-      const { MockChatModel } = await import('./agent/llm/factory');
-      return new MockChatModel(
+      const { RealChatModel } = await import('./agent/llm/factory');
+      return new RealChatModel(
         'gpt-3.5-turbo',
         'openai-fallback',
         { apiKey: 'fallback-key' } as ProviderConfig,

@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { matomoRequestEvent } from '@/utils/matomo-request';
 import { AuthorizationListItem, Common, Hardfork } from '@ethereumjs/common';
 import { FeeMarketEIP1559TxData, TransactionFactory } from '@ethereumjs/tx';

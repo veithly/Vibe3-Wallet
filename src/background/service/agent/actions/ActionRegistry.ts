@@ -14,7 +14,7 @@ export const ActionHandlerSchema = z.object({
   category: z.enum(['web3', 'browser', 'system', 'utility']),
   timeout: z.number().default(30000),
   retryable: z.boolean().default(true),
-  dependencies: z.array(z.string()).default([])
+  dependencies: z.array(z.string()).default([]),
 });
 
 export type ActionHandler = z.infer<typeof ActionHandlerSchema>;
@@ -63,7 +63,7 @@ export class ActionRegistry {
       enableParallel: true,
       maxConcurrency: 5,
       enableMetrics: true,
-      ...config
+      ...config,
     };
 
     this.initializeDefaultActions();
@@ -83,15 +83,15 @@ export class ActionRegistry {
         type: 'object',
         properties: {
           address: { type: 'string' },
-          token: { type: 'string' }
+          token: { type: 'string' },
         },
-        required: ['address']
+        required: ['address'],
       },
       riskLevel: 'low',
       category: 'web3',
       timeout: 10000,
       dependencies: [],
-      retryable: true
+      retryable: true,
     });
 
     this.registerAction('sendTransaction', {
@@ -104,15 +104,15 @@ export class ActionRegistry {
           to: { type: 'string' },
           amount: { type: 'string' },
           token: { type: 'string' },
-          gasLimit: { type: 'string' }
+          gasLimit: { type: 'string' },
         },
-        required: ['to', 'amount', 'token']
+        required: ['to', 'amount', 'token'],
       },
       riskLevel: 'high',
       category: 'web3',
       timeout: 60000,
       dependencies: [],
-      retryable: false
+      retryable: false,
     });
 
     this.registerAction('approveToken', {
@@ -124,15 +124,15 @@ export class ActionRegistry {
         properties: {
           token: { type: 'string' },
           spender: { type: 'string' },
-          amount: { type: 'string' }
+          amount: { type: 'string' },
         },
-        required: ['token', 'spender', 'amount']
+        required: ['token', 'spender', 'amount'],
       },
       riskLevel: 'medium',
       category: 'web3',
       timeout: 45000,
       dependencies: [],
-      retryable: true
+      retryable: true,
     });
 
     this.registerAction('swapTokens', {
@@ -145,15 +145,15 @@ export class ActionRegistry {
           fromToken: { type: 'string' },
           toToken: { type: 'string' },
           amount: { type: 'string' },
-          slippage: { type: 'number', default: 0.5 }
+          slippage: { type: 'number', default: 0.5 },
         },
-        required: ['fromToken', 'toToken', 'amount']
+        required: ['fromToken', 'toToken', 'amount'],
       },
       riskLevel: 'high',
       category: 'web3',
       timeout: 90000,
       dependencies: [],
-      retryable: true
+      retryable: true,
     });
 
     this.registerAction('bridgeTokens', {
@@ -166,15 +166,15 @@ export class ActionRegistry {
           token: { type: 'string' },
           amount: { type: 'string' },
           fromChain: { type: 'number' },
-          toChain: { type: 'number' }
+          toChain: { type: 'number' },
         },
-        required: ['token', 'amount', 'fromChain', 'toChain']
+        required: ['token', 'amount', 'fromChain', 'toChain'],
       },
       riskLevel: 'high',
       category: 'web3',
       timeout: 120000,
       dependencies: [],
-      retryable: true
+      retryable: true,
     });
 
     this.registerAction('stakeTokens', {
@@ -186,15 +186,15 @@ export class ActionRegistry {
         properties: {
           token: { type: 'string' },
           amount: { type: 'string' },
-          protocol: { type: 'string' }
+          protocol: { type: 'string' },
         },
-        required: ['token', 'amount']
+        required: ['token', 'amount'],
       },
       riskLevel: 'medium',
       category: 'web3',
       timeout: 60000,
       dependencies: [],
-      retryable: true
+      retryable: true,
     });
 
     // Browser Automation Actions
@@ -207,15 +207,15 @@ export class ActionRegistry {
         properties: {
           url: { type: 'string', format: 'uri' },
           waitFor: { type: 'string', enum: ['load', 'networkidle'] },
-          timeout: { type: 'number' }
+          timeout: { type: 'number' },
         },
-        required: ['url']
+        required: ['url'],
       },
       riskLevel: 'medium',
       category: 'browser',
       timeout: 30000,
       dependencies: [],
-      retryable: true
+      retryable: true,
     });
 
     this.registerAction('clickElement', {
@@ -227,18 +227,15 @@ export class ActionRegistry {
         properties: {
           selector: { type: 'string' },
           text: { type: 'string' },
-          waitForNavigation: { type: 'boolean' }
+          waitForNavigation: { type: 'boolean' },
         },
-        oneOf: [
-          { required: ['selector'] },
-          { required: ['text'] }
-        ]
+        oneOf: [{ required: ['selector'] }, { required: ['text'] }],
       },
       riskLevel: 'medium',
       category: 'browser',
       timeout: 15000,
       dependencies: [],
-      retryable: true
+      retryable: true,
     });
 
     this.registerAction('fillForm', {
@@ -256,20 +253,20 @@ export class ActionRegistry {
                 selector: { type: 'string' },
                 name: { type: 'string' },
                 value: { type: 'string' },
-                type: { type: 'string' }
+                type: { type: 'string' },
               },
-              required: ['value']
-            }
+              required: ['value'],
+            },
           },
-          submit: { type: 'boolean' }
+          submit: { type: 'boolean' },
         },
-        required: ['fields']
+        required: ['fields'],
       },
       riskLevel: 'medium',
       category: 'browser',
       timeout: 20000,
       dependencies: [],
-      retryable: true
+      retryable: true,
     });
 
     this.registerAction('extractContent', {
@@ -282,15 +279,15 @@ export class ActionRegistry {
           selector: { type: 'string' },
           type: { type: 'string', enum: ['text', 'html', 'attribute'] },
           attribute: { type: 'string' },
-          multiple: { type: 'boolean' }
+          multiple: { type: 'boolean' },
         },
-        required: ['selector']
+        required: ['selector'],
       },
       riskLevel: 'low',
       category: 'browser',
       timeout: 10000,
       dependencies: [],
-      retryable: true
+      retryable: true,
     });
 
     // System Actions
@@ -301,15 +298,15 @@ export class ActionRegistry {
       schema: {
         type: 'object',
         properties: {
-          chainId: { type: 'number' }
+          chainId: { type: 'number' },
         },
-        required: ['chainId']
+        required: ['chainId'],
       },
       riskLevel: 'low',
       category: 'system',
       timeout: 15000,
       dependencies: [],
-      retryable: true
+      retryable: true,
     });
 
     this.registerAction('connectWallet', {
@@ -319,14 +316,14 @@ export class ActionRegistry {
       schema: {
         type: 'object',
         properties: {
-          dappUrl: { type: 'string' }
-        }
+          dappUrl: { type: 'string' },
+        },
       },
       riskLevel: 'medium',
       category: 'system',
       timeout: 30000,
       dependencies: [],
-      retryable: true
+      retryable: true,
     });
 
     // Utility Actions
@@ -339,20 +336,20 @@ export class ActionRegistry {
         properties: {
           condition: { type: 'string' },
           timeout: { type: 'number' },
-          interval: { type: 'number' }
+          interval: { type: 'number' },
         },
-        required: ['timeout']
+        required: ['timeout'],
       },
       riskLevel: 'low',
       category: 'utility',
       timeout: 60000,
       dependencies: [],
-      retryable: true
+      retryable: true,
     });
 
     logger.info('Default actions initialized', {
       count: this.actions.size,
-      categories: Array.from(this.categories.keys())
+      categories: Array.from(this.categories.keys()),
     });
   }
 
@@ -373,7 +370,7 @@ export class ActionRegistry {
     try {
       const validated = ActionHandlerSchema.parse(handler);
       this.actions.set(name, validated);
-      
+
       // Add to category
       const categorySet = this.categories.get(validated.category);
       if (categorySet) {
@@ -389,14 +386,22 @@ export class ActionRegistry {
           successes: 0,
           failures: 0,
           averageDuration: 0,
-          lastExecution: null
+          lastExecution: null,
         });
       }
 
-      logger.info('Action registered', { name, category: handler.category, riskLevel: handler.riskLevel });
+      logger.info('Action registered', {
+        name,
+        category: handler.category,
+        riskLevel: handler.riskLevel,
+      });
     } catch (error) {
       logger.error('Failed to register action', { name, error });
-      throw new Error(`Invalid action handler: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Invalid action handler: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
     }
   }
 
@@ -410,7 +415,7 @@ export class ActionRegistry {
     }
 
     this.actions.delete(name);
-    
+
     // Remove from category
     const categorySet = this.categories.get(handler.category);
     if (categorySet) {
@@ -434,13 +439,17 @@ export class ActionRegistry {
   /**
    * Execute action
    */
-  async executeAction(name: string, params: Record<string, any>, context?: any): Promise<ActionResult> {
+  async executeAction(
+    name: string,
+    params: Record<string, any>,
+    context?: any
+  ): Promise<ActionResult> {
     const handler = this.actions.get(name);
     if (!handler) {
       return {
         success: false,
         error: `Action not found: ${name}`,
-        duration: 0
+        duration: 0,
       };
     }
 
@@ -452,11 +461,11 @@ export class ActionRegistry {
         description: handler.description,
         params,
         status: 'pending',
-        dependencies: []
+        dependencies: [],
       },
       context,
       timestamp: Date.now(),
-      attempt: 1
+      attempt: 1,
     };
 
     return await this.executeWithRetry(handler, executionContext);
@@ -465,26 +474,31 @@ export class ActionRegistry {
   /**
    * Execute action with retry logic
    */
-  private async executeWithRetry(handler: ActionHandler, context: ActionExecutionContext): Promise<ActionResult> {
+  private async executeWithRetry(
+    handler: ActionHandler,
+    context: ActionExecutionContext
+  ): Promise<ActionResult> {
     const startTime = Date.now();
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= this.config.maxRetries; attempt++) {
       try {
         logger.debug(`Executing action: ${handler.name} (attempt ${attempt})`);
-        
+
         // Update attempt
         context.attempt = attempt;
         context.step.status = 'in_progress';
 
         // Execute with timeout
         const result = await this.executeWithTimeout(
-          Promise.resolve(handler.handler(context.step.params, context.context)),
+          Promise.resolve(
+            handler.handler(context.step.params, context.context)
+          ),
           handler.timeout
         );
 
         const duration = Date.now() - startTime;
-        
+
         // Update metrics
         if (this.config.enableMetrics) {
           this.updateMetrics(handler.name, true, duration);
@@ -498,14 +512,14 @@ export class ActionRegistry {
           metadata: {
             action: handler.name,
             attempt,
-            category: handler.category
-          }
+            category: handler.category,
+          },
         });
 
         logger.info('Action executed successfully', {
           action: handler.name,
           duration,
-          attempt
+          attempt,
         });
 
         return {
@@ -515,25 +529,29 @@ export class ActionRegistry {
           metadata: {
             action: handler.name,
             attempt,
-            category: handler.category
-          }
+            category: handler.category,
+          },
         };
-
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        logger.warn(`Action execution failed: ${handler.name} (attempt ${attempt})`, { error: lastError.message });
+        logger.warn(
+          `Action execution failed: ${handler.name} (attempt ${attempt})`,
+          { error: lastError.message }
+        );
 
         if (attempt === this.config.maxRetries || !handler.retryable) {
           break;
         }
 
         // Exponential backoff
-        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.pow(2, attempt) * 1000)
+        );
       }
     }
 
     const duration = Date.now() - startTime;
-    
+
     // Update metrics
     if (this.config.enableMetrics) {
       this.updateMetrics(handler.name, false, duration);
@@ -547,15 +565,15 @@ export class ActionRegistry {
       metadata: {
         action: handler.name,
         attempt: context.attempt,
-        category: handler.category
-      }
+        category: handler.category,
+      },
     });
 
     logger.error('Action execution failed after retries', {
       action: handler.name,
       error: lastError?.message,
       duration,
-      attempts: context.attempt
+      attempts: context.attempt,
     });
 
     return {
@@ -565,17 +583,23 @@ export class ActionRegistry {
       metadata: {
         action: handler.name,
         attempt: context.attempt,
-        category: handler.category
-      }
+        category: handler.category,
+      },
     };
   }
 
   /**
    * Execute with timeout
    */
-  private async executeWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  private async executeWithTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number
+  ): Promise<T> {
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Action execution timeout')), timeoutMs);
+      setTimeout(
+        () => reject(new Error('Action execution timeout')),
+        timeoutMs
+      );
     });
 
     return Promise.race([promise, timeoutPromise]);
@@ -584,7 +608,10 @@ export class ActionRegistry {
   /**
    * Validate action parameters
    */
-  validateParameters(name: string, params: Record<string, any>): { valid: boolean; errors: string[] } {
+  validateParameters(
+    name: string,
+    params: Record<string, any>
+  ): { valid: boolean; errors: string[] } {
     const handler = this.actions.get(name);
     if (!handler) {
       return { valid: false, errors: [`Action not found: ${name}`] };
@@ -603,7 +630,14 @@ export class ActionRegistry {
 
       return { valid: errors.length === 0, errors };
     } catch (error) {
-      return { valid: false, errors: [`Validation error: ${error instanceof Error ? error.message : 'Unknown error'}`] };
+      return {
+        valid: false,
+        errors: [
+          `Validation error: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
+        ],
+      };
     }
   }
 
@@ -633,7 +667,9 @@ export class ActionRegistry {
   /**
    * Get action info
    */
-  getActionInfo(name: string): {
+  getActionInfo(
+    name: string
+  ): {
     name: string;
     description: string;
     category: string;
@@ -654,7 +690,7 @@ export class ActionRegistry {
       riskLevel: handler.riskLevel,
       timeout: handler.timeout,
       retryable: handler.retryable,
-      schema: handler.schema
+      schema: handler.schema,
     };
   }
 
@@ -669,25 +705,32 @@ export class ActionRegistry {
     timeout: number;
     retryable: boolean;
   }> {
-    return Array.from(this.actions.values()).map(handler => ({
+    return Array.from(this.actions.values()).map((handler) => ({
       name: handler.name,
       description: handler.description,
       category: handler.category,
       riskLevel: handler.riskLevel,
       timeout: handler.timeout,
-      retryable: handler.retryable
+      retryable: handler.retryable,
     }));
   }
 
   /**
    * Execute multiple actions
    */
-  async executeActions(actions: Array<{ name: string; params: Record<string, any> }>, context?: any): Promise<ActionResult[]> {
+  async executeActions(
+    actions: Array<{ name: string; params: Record<string, any> }>,
+    context?: any
+  ): Promise<ActionResult[]> {
     if (!this.config.enableParallel || actions.length === 1) {
       // Sequential execution
       const results: ActionResult[] = [];
       for (const action of actions) {
-        const result = await this.executeAction(action.name, action.params, context);
+        const result = await this.executeAction(
+          action.name,
+          action.params,
+          context
+        );
         results.push(result);
       }
       return results;
@@ -696,7 +739,7 @@ export class ActionRegistry {
     // Parallel execution with concurrency limit
     const results: ActionResult[] = [];
     const executing = new Set<Promise<ActionResult>>();
-    
+
     for (const action of actions) {
       if (executing.size >= this.config.maxConcurrency) {
         // Wait for one to complete
@@ -728,7 +771,10 @@ export class ActionRegistry {
     return { balance: '0', token: params.token || 'ETH' };
   }
 
-  private async executeSendTransaction(params: any, context?: any): Promise<any> {
+  private async executeSendTransaction(
+    params: any,
+    context?: any
+  ): Promise<any> {
     logger.info('Sending transaction', params);
     return { txHash: '0x' + Math.random().toString(16).substr(2, 64) };
   }
@@ -740,7 +786,10 @@ export class ActionRegistry {
 
   private async executeSwapTokens(params: any, context?: any): Promise<any> {
     logger.info('Swapping tokens', params);
-    return { txHash: '0x' + Math.random().toString(16).substr(2, 64), outputAmount: '0' };
+    return {
+      txHash: '0x' + Math.random().toString(16).substr(2, 64),
+      outputAmount: '0',
+    };
   }
 
   private async executeBridgeTokens(params: any, context?: any): Promise<any> {
@@ -768,7 +817,10 @@ export class ActionRegistry {
     return { success: true, fieldsFilled: params.fields.length };
   }
 
-  private async executeExtractContent(params: any, context?: any): Promise<any> {
+  private async executeExtractContent(
+    params: any,
+    context?: any
+  ): Promise<any> {
     logger.info('Extracting content', params);
     return { content: 'Sample content', selector: params.selector };
   }
@@ -785,14 +837,18 @@ export class ActionRegistry {
 
   private async executeWaitFor(params: any, context?: any): Promise<any> {
     logger.info('Waiting for condition', params);
-    await new Promise(resolve => setTimeout(resolve, params.timeout));
+    await new Promise((resolve) => setTimeout(resolve, params.timeout));
     return { success: true, waited: params.timeout };
   }
 
   /**
    * Metrics and analytics
    */
-  private updateMetrics(actionName: string, success: boolean, duration: number): void {
+  private updateMetrics(
+    actionName: string,
+    success: boolean,
+    duration: number
+  ): void {
     const metrics = this.metrics.get(actionName);
     if (!metrics) return;
 
@@ -802,15 +858,17 @@ export class ActionRegistry {
     } else {
       metrics.failures++;
     }
-    
+
     // Update average duration
-    metrics.averageDuration = (metrics.averageDuration * (metrics.executions - 1) + duration) / metrics.executions;
+    metrics.averageDuration =
+      (metrics.averageDuration * (metrics.executions - 1) + duration) /
+      metrics.executions;
     metrics.lastExecution = Date.now();
   }
 
   private addToExecutionHistory(result: ActionResult): void {
     this.executionHistory.push(result);
-    
+
     // Keep only last 1000 results
     if (this.executionHistory.length > 1000) {
       this.executionHistory = this.executionHistory.slice(-1000);
@@ -838,11 +896,21 @@ export class ActionRegistry {
     averageDuration: number;
     categories: Record<string, number>;
   } {
-    const totalExecutions = Array.from(this.metrics.values()).reduce((sum, m) => sum + m.executions, 0);
-    const totalSuccesses = Array.from(this.metrics.values()).reduce((sum, m) => sum + m.successes, 0);
-    const averageDuration = totalExecutions > 0 
-      ? Array.from(this.metrics.values()).reduce((sum, m) => sum + m.averageDuration * m.executions, 0) / totalExecutions
-      : 0;
+    const totalExecutions = Array.from(this.metrics.values()).reduce(
+      (sum, m) => sum + m.executions,
+      0
+    );
+    const totalSuccesses = Array.from(this.metrics.values()).reduce(
+      (sum, m) => sum + m.successes,
+      0
+    );
+    const averageDuration =
+      totalExecutions > 0
+        ? Array.from(this.metrics.values()).reduce(
+            (sum, m) => sum + m.averageDuration * m.executions,
+            0
+          ) / totalExecutions
+        : 0;
 
     const categories: Record<string, number> = {};
     for (const [category, actions] of this.categories.entries()) {
@@ -854,14 +922,14 @@ export class ActionRegistry {
       totalExecutions,
       successRate: totalExecutions > 0 ? totalSuccesses / totalExecutions : 0,
       averageDuration,
-      categories
+      categories,
     };
   }
 
   clearHistory(): void {
     this.executionHistory = [];
     this.metrics.clear();
-    
+
     // Reinitialize metrics
     for (const [name, handler] of this.actions.entries()) {
       if (this.config.enableMetrics) {
@@ -870,7 +938,7 @@ export class ActionRegistry {
           successes: 0,
           failures: 0,
           averageDuration: 0,
-          lastExecution: null
+          lastExecution: null,
         });
       }
     }

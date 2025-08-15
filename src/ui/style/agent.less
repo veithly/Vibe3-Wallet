@@ -1,0 +1,57 @@
+@import './var.less';
+@import './antd-overwrite.less';
+
+// Agent-specific styles
+.agent-sidebar {
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Roboto, sans-serif;
+  
+  // Agent-specific component styles
+  .side-panel-app {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  // Agent-specific overrides
+  .ant-modal {
+    z-index: 1050;
+  }
+
+  .ant-btn {
+    border-radius: 6px;
+  }
+
+  // Agent-specific layout styles
+  .agent-container {
+    padding: 16px;
+    background: var(--r-neutral-bg-1, #ffffff);
+  }
+
+  .agent-header {
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--r-neutral-line, #d3d8e0);
+  }
+
+  .agent-content {
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  .agent-footer {
+    padding-top: 12px;
+    border-top: 1px solid var(--r-neutral-line, #d3d8e0);
+  }
+
+  // Agent-specific dark mode support
+  @media (prefers-color-scheme: dark) {
+    .agent-container {
+      background: var(--r-neutral-bg-1-dark, #1a1a1a);
+    }
+    
+    .agent-header,
+    .agent-footer {
+      border-color: var(--r-neutral-line-dark, #404040);
+    }
+  }
+}

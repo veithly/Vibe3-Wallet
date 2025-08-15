@@ -1,43 +1,11 @@
-/**
- * Agent Integration for Rabby Wallet
- *
- * PRODUCTION READINESS STATUS: PRODUCTION READY
- *
- * This file provides integration between Rabby wallet and the nanobrowser AI automation system.
- *
- * CURRENT IMPLEMENTATION:
- * - Real nanobrowser extension integration via Chrome extension messaging
- * - Cross-extension communication with security validation
- * - Fallback to mock executor when nanobrowser is not available
- * - Comprehensive error handling and retry logic
- * - Execution history tracking and analytics
- * - Production-ready interface design
- *
- * INTEGRATION FEATURES:
- * - Automatic nanobrowser extension detection and connection
- * - Secure cross-extension communication protocol
- * - Graceful fallback to mock mode for development
- * - Real-time event synchronization between extensions
- * - Session management and persistence
- *
- * INTEGRATION REQUIREMENTS:
- * - nanobrowser extension must be installed and running (optional)
- * - Chrome extension messaging API for communication
- * - Security validation for cross-extension communication
- * - Fallback capabilities when nanobrowser is unavailable
- *
- * @author Rabby Development Team
- * @version 1.0.0
- */
-
-import { createLogger } from '@/utils/logger';
+import { createLogger } from '../../../utils/logger';
 import { ChatOpenAI } from '@langchain/openai';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 
 const logger = createLogger('agent-integration');
 
-// Import nanobrowser types and classes
+// Agent event types and interfaces
 type AgentEvent = {
   actor: string;
   state: string;
@@ -53,7 +21,7 @@ type AgentEvent = {
 
 type EventCallback = (event: AgentEvent) => Promise<void>;
 
-// Browser context interface for nanobrowser integration
+// Browser context interface
 interface BrowserContext {
   getActiveTab(): Promise<chrome.tabs.Tab>;
   createTab(url: string): Promise<chrome.tabs.Tab>;
@@ -62,7 +30,22 @@ interface BrowserContext {
   cleanup(): Promise<void>;
 }
 
-// Simple browser context implementation
+// DOM operation interfaces
+interface DOMOperationResult {
+  success: boolean;
+  data?: any;
+  error?: string;
+}
+
+interface ElementInfo {
+  tagName: string;
+  attributes: Record<string, string>;
+  text?: string;
+  visible: boolean;
+  bounds?: DOMRect;
+}
+
+// Improved browser context implementation
 class RabbyBrowserContext implements BrowserContext {
   async getActiveTab(): Promise<chrome.tabs.Tab> {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -92,29 +75,995 @@ class RabbyBrowserContext implements BrowserContext {
   }
 }
 
-// This interface defines the bridge between Rabby and nanobrowser agent systems.
-export interface AgentExecutorBridge {
-  execute(task: string, tabId: number): Promise<void>;
-  cancel(): Promise<void>;
-  replay(sessionId: string): Promise<void>;
-  getStatus(): {
-    isRunning: boolean;
-    currentTask?: string;
-    currentStep?: number;
-  };
-  subscribeToEvents(callback: EventCallback): void;
-  unsubscribeFromEvents(): void;
-  addFollowUpTask(task: string): void;
-  cleanup?(): void; // Optional cleanup method for proper resource management
+// DOM Service - implements nanobrowser-style DOM operations
+class DOMService {
+  /**
+   * Execute script in tab with comprehensive error handling
+   */
+  static async executeScript<T = any>(
+    tabId: number,
+    func: (...args: any[]) => T,
+    args: any[] = []
+  ): Promise<DOMOperationResult> {
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: func,
+        args: args,
+      });
+
+      if (results && results[0]) {
+        return {
+          success: true,
+          data: results[0].result,
+        };
+      }
+
+      return {
+        success: false,
+        error: 'No result returned from script execution',
+      };
+    } catch (error) {
+      logger.error('DOMService', 'Script execution failed', {
+        error,
+        tabId,
+        functionName: func.name,
+      });
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /**
+   * Wait for element to exist in DOM
+   */
+  static async waitForElement(
+    tabId: number,
+    selector: string,
+    timeout: number = 10000
+  ): Promise<boolean> {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      const result = await this.executeScript(
+        tabId,
+        (sel: string) => {
+          const element = document.querySelector(sel);
+          return element !== null;
+        },
+        [selector]
+      );
+
+      if (result.success && result.data) {
+        return true;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    return false;
+  }
+
+  /**
+   * Get element information
+   */
+  static async getElementInfo(
+    tabId: number,
+    selector: string
+  ): Promise<ElementInfo | null> {
+    const result = await this.executeScript(
+      tabId,
+      (sel: string) => {
+        const element = document.querySelector(sel);
+        if (!element) return null;
+
+        const bounds = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        return {
+          tagName: element.tagName.toLowerCase(),
+          attributes: Array.from(element.attributes).reduce((attrs, attr) => {
+            attrs[attr.name] = attr.value;
+            return attrs;
+          }, {} as Record<string, string>),
+          text: element.textContent?.trim() || '',
+          visible:
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            style.opacity !== '0' &&
+            bounds.width > 0 &&
+            bounds.height > 0,
+          bounds: {
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+            top: bounds.top,
+            right: bounds.right,
+            bottom: bounds.bottom,
+            left: bounds.left,
+          } as DOMRect,
+        };
+      },
+      [selector]
+    );
+
+    return result.success ? result.data : null;
+  }
+
+  /**
+   * Click element with advanced interaction
+   */
+  static async clickElement(tabId: number, selector: string): Promise<boolean> {
+    const result = await this.executeScript(
+      tabId,
+      (sel: string) => {
+        const element = document.querySelector(sel) as HTMLElement;
+        if (!element) return false;
+
+        // Scroll into view if needed
+        element.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+          inline: 'center',
+        });
+
+        // Wait a bit for scroll to complete
+        setTimeout(() => {
+          // Try multiple click methods for better compatibility
+          try {
+            // Method 1: Native click
+            element.click();
+          } catch (e) {
+            try {
+              // Method 2: Dispatch click event
+              const clickEvent = new MouseEvent('click', {
+                view: window,
+                bubbles: true,
+                cancelable: true,
+              });
+              element.dispatchEvent(clickEvent);
+            } catch (e2) {
+              // Method 3: Focus and trigger
+              if (element.focus) {
+                element.focus();
+              }
+              element.click();
+            }
+          }
+        }, 100);
+
+        return true;
+      },
+      [selector]
+    );
+
+    return result.success && result.data;
+  }
+
+  /**
+   * Fill input with text
+   */
+  static async fillInput(
+    tabId: number,
+    selector: string,
+    text: string
+  ): Promise<boolean> {
+    const result = await this.executeScript(
+      tabId,
+      (sel: string, txt: string) => {
+        const element = document.querySelector(sel) as
+          | HTMLInputElement
+          | HTMLTextAreaElement;
+        if (!element) return false;
+
+        // Clear existing content
+        element.value = '';
+        element.focus();
+
+        // Set new value
+        element.value = txt;
+
+        // Dispatch input events for better compatibility
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+
+        // For React and other frameworks
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          'value'
+        )?.set;
+
+        if (nativeInputValueSetter) {
+          nativeInputValueSetter.call(element, txt);
+          element.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        return true;
+      },
+      [selector, text]
+    );
+
+    return result.success && result.data;
+  }
+
+  /**
+   * Get all clickable elements (similar to nanobrowser's getClickableElements)
+   */
+  static async getClickableElements(tabId: number): Promise<ElementInfo[]> {
+    const result = await this.executeScript(
+      tabId,
+      () => {
+        const clickableSelectors = [
+          'button',
+          'a[href]',
+          'input[type="button"]',
+          'input[type="submit"]',
+          'input[type="reset"]',
+          '[onclick]',
+          '[role="button"]',
+          '[tabindex]',
+          'select',
+          'input[type="checkbox"]',
+          'input[type="radio"]',
+          'input[type="text"]',
+          'input[type="email"]',
+          'input[type="password"]',
+          'textarea',
+        ];
+
+        const elements: ElementInfo[] = [];
+
+        clickableSelectors.forEach((selectorGroup) => {
+          const foundElements = document.querySelectorAll(selectorGroup);
+          foundElements.forEach((element, index) => {
+            const bounds = element.getBoundingClientRect();
+            const style = window.getComputedStyle(element);
+
+            const isVisible =
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              style.opacity !== '0' &&
+              bounds.width > 0 &&
+              bounds.height > 0;
+
+            if (isVisible) {
+              elements.push({
+                tagName: element.tagName.toLowerCase(),
+                attributes: Array.from(element.attributes).reduce(
+                  (attrs, attr) => {
+                    attrs[attr.name] = attr.value;
+                    return attrs;
+                  },
+                  {} as Record<string, string>
+                ),
+                text: element.textContent?.trim() || '',
+                visible: isVisible,
+                bounds: bounds as DOMRect,
+              });
+            }
+          });
+        });
+
+        return elements;
+      },
+      []
+    );
+
+    return result.success ? result.data || [] : [];
+  }
+
+  /**
+   * Scroll page or element
+   */
+  static async scroll(
+    tabId: number,
+    direction: 'up' | 'down' | 'top' | 'bottom',
+    amount?: number
+  ): Promise<boolean> {
+    const result = await this.executeScript(
+      tabId,
+      (dir: string, amt?: number) => {
+        switch (dir) {
+          case 'top':
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            break;
+          case 'bottom':
+            window.scrollTo({
+              top: document.body.scrollHeight,
+              behavior: 'smooth',
+            });
+            break;
+          case 'up':
+            window.scrollBy({
+              top: -(amt || window.innerHeight),
+              behavior: 'smooth',
+            });
+            break;
+          case 'down':
+            window.scrollBy({
+              top: amt || window.innerHeight,
+              behavior: 'smooth',
+            });
+            break;
+          default:
+            return false;
+        }
+        return true;
+      },
+      [direction, amount]
+    );
+
+    return result.success && result.data;
+  }
+
+  /**
+   * Get page information
+   */
+  static async getPageInfo(tabId: number): Promise<any> {
+    const result = await this.executeScript(
+      tabId,
+      () => {
+        return {
+          title: document.title,
+          url: window.location.href,
+          scrollY: window.scrollY,
+          scrollHeight: document.body.scrollHeight,
+          viewportHeight: window.innerHeight,
+          forms: document.forms.length,
+          inputs: document.querySelectorAll('input').length,
+          buttons: document.querySelectorAll('button').length,
+          links: document.querySelectorAll('a').length,
+        };
+      },
+      []
+    );
+
+    return result.success ? result.data : null;
+  }
 }
 
-/**
- * Enhanced mock implementation of nanobrowser executor
- *
- * TODO: Replace with actual nanobrowser integration for production
- * This implementation provides realistic simulation for development and testing
- */
-class MockAgentExecutor {
+// Browser Actions - implements specific browser operations
+class BrowserActions {
+  constructor(private tabId: number) {}
+
+  async addTodoItem(
+    todoText: string
+  ): Promise<{ success: boolean; message?: string }> {
+    try {
+      // Smart selector strategy for todo apps
+      const todoSelectors = [
+        'input[placeholder*="todo" i]',
+        'input[placeholder*="task" i]',
+        'input[placeholder*="add" i]',
+        '.todo-input',
+        '.new-todo',
+        'input[type="text"]:not([readonly])',
+        '.task-input',
+        '#new-todo-input',
+        '#todo-input',
+        '[data-testid*="todo" i] input',
+        '[data-testid*="task" i] input',
+      ];
+
+      let inputFound = false;
+
+      for (const selector of todoSelectors) {
+        if (await DOMService.waitForElement(this.tabId, selector, 2000)) {
+          logger.info('AgentExecutor', `Found todo input: ${selector}`);
+
+          // Focus and fill input
+          await DOMService.clickElement(this.tabId, selector);
+          await new Promise((resolve) => setTimeout(resolve, 300));
+
+          const filled = await DOMService.fillInput(
+            this.tabId,
+            selector,
+            todoText
+          );
+
+          if (filled) {
+            // Try to submit by pressing Enter
+            await DOMService.executeScript(
+              this.tabId,
+              (sel: string) => {
+                const input = document.querySelector(sel) as HTMLInputElement;
+                if (input) {
+                  const enterEvent = new KeyboardEvent('keydown', {
+                    key: 'Enter',
+                    code: 'Enter',
+                    bubbles: true,
+                  });
+                  input.dispatchEvent(enterEvent);
+                }
+              },
+              [selector]
+            );
+
+            // Also try to find and click submit buttons
+            const submitSelectors = [
+              'button[type="submit"]',
+              '.add-button',
+              '.add-todo',
+              'button:contains("Add")',
+              'button:contains("+")',
+              '[data-action="add"]',
+              'form button',
+            ];
+
+            for (const btnSelector of submitSelectors) {
+              if (
+                await DOMService.waitForElement(this.tabId, btnSelector, 1000)
+              ) {
+                await DOMService.clickElement(this.tabId, btnSelector);
+                break;
+              }
+            }
+
+            inputFound = true;
+            break;
+          }
+        }
+      }
+
+      if (!inputFound) {
+        return {
+          success: false,
+          message:
+            'Could not find todo input field. Please make sure you are on a todo application page.',
+        };
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      return {
+        success: true,
+        message: `Successfully added todo: "${todoText}"`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Failed to add todo: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+
+  async completeTodoItem(
+    todoText?: string
+  ): Promise<{ success: boolean; message?: string }> {
+    try {
+      const result = await DOMService.executeScript(
+        this.tabId,
+        (searchText?: string) => {
+          // Find uncompleted todo items
+          const checkboxes = Array.from(
+            document.querySelectorAll('input[type="checkbox"]:not(:checked)')
+          );
+
+          if (checkboxes.length === 0) {
+            return { found: false, message: 'No uncompleted todo items found' };
+          }
+
+          // If searchText provided, try to find specific todo
+          if (searchText) {
+            for (const checkbox of checkboxes) {
+              const parent = checkbox.closest(
+                'li, .todo-item, .task-item, [data-todo], [data-task]'
+              );
+              if (
+                parent &&
+                parent.textContent
+                  ?.toLowerCase()
+                  .includes(searchText.toLowerCase())
+              ) {
+                (checkbox as HTMLInputElement).click();
+                return {
+                  found: true,
+                  message: `Completed todo: "${searchText}"`,
+                };
+              }
+            }
+            return {
+              found: false,
+              message: `Todo item "${searchText}" not found`,
+            };
+          }
+
+          // Complete first uncompleted item
+          (checkboxes[0] as HTMLInputElement).click();
+          return {
+            found: true,
+            message: 'Completed first uncompleted todo item',
+          };
+        },
+        [todoText]
+      );
+
+      if (result.success && result.data?.found) {
+        return { success: true, message: result.data.message };
+      }
+
+      return {
+        success: false,
+        message: result.data?.message || 'Could not complete todo item',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Failed to complete todo: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+
+  async deleteTodoItem(
+    todoText?: string
+  ): Promise<{ success: boolean; message?: string }> {
+    try {
+      const result = await DOMService.executeScript(
+        this.tabId,
+        (searchText?: string) => {
+          const todoItems = Array.from(
+            document.querySelectorAll(
+              'li, .todo-item, .task-item, [data-todo], [data-task]'
+            )
+          );
+
+          if (todoItems.length === 0) {
+            return { found: false, message: 'No todo items found' };
+          }
+
+          let targetItem: Element | null = null;
+
+          if (searchText) {
+            // Find specific todo item
+            targetItem =
+              todoItems.find((item) =>
+                item.textContent
+                  ?.toLowerCase()
+                  .includes(searchText.toLowerCase())
+              ) || null;
+          } else {
+            // Use first item
+            targetItem = todoItems[0] || null;
+          }
+
+          if (!targetItem) {
+            return { found: false, message: 'Todo item not found' };
+          }
+
+          // Try to find delete button
+          const deleteBtn = targetItem.querySelector(
+            '.delete, .remove, .trash, button[title*="delete" i], button[title*="remove" i], [data-action="delete"]'
+          );
+
+          if (deleteBtn) {
+            (deleteBtn as HTMLElement).click();
+            return { found: true, message: 'Deleted todo item' };
+          }
+
+          // If no delete button, try removing the item directly
+          (targetItem as HTMLElement).remove();
+          return { found: true, message: 'Removed todo item' };
+        },
+        [todoText]
+      );
+
+      if (result.success && result.data?.found) {
+        return { success: true, message: result.data.message };
+      }
+
+      return {
+        success: false,
+        message: result.data?.message || 'Could not delete todo item',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Failed to delete todo: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+
+  async listTodoItems(): Promise<{ success: boolean; message?: string }> {
+    try {
+      const result = await DOMService.executeScript(
+        this.tabId,
+        () => {
+          const todoItems = Array.from(
+            document.querySelectorAll(
+              'li, .todo-item, .task-item, [data-todo], [data-task]'
+            )
+          );
+
+          if (todoItems.length === 0) {
+            return { items: [], message: 'No todo items found on this page' };
+          }
+
+          const items = todoItems
+            .map((item, index) => {
+              const checkbox = item.querySelector(
+                'input[type="checkbox"]'
+              ) as HTMLInputElement;
+              const isCompleted = checkbox ? checkbox.checked : false;
+              const text = item.textContent?.trim() || '';
+
+              if (text.length === 0) return null;
+
+              return {
+                index: index + 1,
+                text: text,
+                completed: isCompleted,
+              };
+            })
+            .filter((item) => item !== null);
+
+          return { items, message: `Found ${items.length} todo items` };
+        },
+        []
+      );
+
+      if (result.success && result.data) {
+        const todos = result.data.items;
+        if (todos.length > 0) {
+          const todoList = todos
+            .map(
+              (todo: any) =>
+                `${todo.index}. ${todo.completed ? '✓' : '○'} ${todo.text}`
+            )
+            .join('\n');
+
+          return {
+            success: true,
+            message: `Todo Items:\n${todoList}`,
+          };
+        }
+      }
+
+      return {
+        success: true,
+        message: result.data?.message || 'No todo items found on this page',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Failed to list todos: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+}
+
+// Task execution strategies
+class TaskExecutor {
+  constructor(private tabId: number, private actions: BrowserActions) {}
+
+  async executeTask(
+    task: string
+  ): Promise<{ success: boolean; message?: string }> {
+    const lowercaseTask = task.toLowerCase();
+
+    try {
+      // Todo-related tasks
+      if (lowercaseTask.includes('todo') || lowercaseTask.includes('task')) {
+        return await this.executeTodoTask(task);
+      }
+
+      // General web automation tasks
+      if (lowercaseTask.includes('click')) {
+        return await this.executeClickTask(task);
+      }
+
+      if (
+        lowercaseTask.includes('fill') ||
+        lowercaseTask.includes('type') ||
+        lowercaseTask.includes('input')
+      ) {
+        return await this.executeFillTask(task);
+      }
+
+      if (lowercaseTask.includes('scroll')) {
+        return await this.executeScrollTask(task);
+      }
+
+      if (
+        lowercaseTask.includes('navigate') ||
+        lowercaseTask.includes('go to')
+      ) {
+        return await this.executeNavigateTask(task);
+      }
+
+      // Default: analyze page and provide suggestions
+      return await this.analyzePageAndSuggest(task);
+    } catch (error) {
+      logger.error('TaskExecutor', 'Task execution error', { error, task });
+      return {
+        success: false,
+        message: `Task execution failed: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+
+  private async executeTodoTask(
+    task: string
+  ): Promise<{ success: boolean; message?: string }> {
+    const lowercaseTask = task.toLowerCase();
+
+    // Extract todo text from task
+    const todoMatch = task.match(
+      /(?:add|create|new)\s+(?:todo|task)(?:\s+["'](.+?)["']|\s+(.+?)(?:\s|$))/i
+    );
+    const todoText = todoMatch
+      ? (todoMatch[1] || todoMatch[2] || '').trim()
+      : '';
+
+    if (
+      lowercaseTask.includes('add') ||
+      lowercaseTask.includes('create') ||
+      lowercaseTask.includes('new')
+    ) {
+      return await this.actions.addTodoItem(todoText || 'New Task');
+    }
+
+    if (
+      lowercaseTask.includes('complete') ||
+      lowercaseTask.includes('finish') ||
+      lowercaseTask.includes('done')
+    ) {
+      return await this.actions.completeTodoItem(todoText);
+    }
+
+    if (lowercaseTask.includes('delete') || lowercaseTask.includes('remove')) {
+      return await this.actions.deleteTodoItem(todoText);
+    }
+
+    if (
+      lowercaseTask.includes('list') ||
+      lowercaseTask.includes('show') ||
+      lowercaseTask.includes('view')
+    ) {
+      return await this.actions.listTodoItems();
+    }
+
+    // Default: try to add the task as a new todo
+    return await this.actions.addTodoItem(task);
+  }
+
+  private async executeClickTask(
+    task: string
+  ): Promise<{ success: boolean; message?: string }> {
+    // Extract selector from task
+    const selectorMatch = task.match(
+      /click\s+(?:on\s+)?(?:["'](.+?)["']|(\S+))/i
+    );
+    const selector = selectorMatch
+      ? selectorMatch[1] || selectorMatch[2]
+      : null;
+
+    if (!selector) {
+      return {
+        success: false,
+        message:
+          'Could not extract selector from click task. Please specify what to click.',
+      };
+    }
+
+    if (await DOMService.waitForElement(this.tabId, selector, 5000)) {
+      const clicked = await DOMService.clickElement(this.tabId, selector);
+      if (clicked) {
+        return { success: true, message: `Successfully clicked: ${selector}` };
+      }
+    }
+
+    return {
+      success: false,
+      message: `Could not find or click element: ${selector}`,
+    };
+  }
+
+  private async executeFillTask(
+    task: string
+  ): Promise<{ success: boolean; message?: string }> {
+    // Extract selector and text from task
+    const fillMatch = task.match(
+      /(?:fill|type|input)\s+(?:["'](.+?)["']|(\S+))\s+(?:with\s+)?(?:["'](.+?)["']|(.+?)(?:\s|$))/i
+    );
+    const selector = fillMatch ? fillMatch[1] || fillMatch[2] : null;
+    const text = fillMatch ? (fillMatch[3] || fillMatch[4] || '').trim() : '';
+
+    if (!selector || !text) {
+      return {
+        success: false,
+        message:
+          'Could not extract selector and text from fill task. Please specify what to fill and with what text.',
+      };
+    }
+
+    if (await DOMService.waitForElement(this.tabId, selector, 5000)) {
+      const filled = await DOMService.fillInput(this.tabId, selector, text);
+      if (filled) {
+        return {
+          success: true,
+          message: `Successfully filled: ${selector} with "${text}"`,
+        };
+      }
+    }
+
+    return {
+      success: false,
+      message: `Could not find or fill element: ${selector}`,
+    };
+  }
+
+  private async executeScrollTask(
+    task: string
+  ): Promise<{ success: boolean; message?: string }> {
+    const lowercaseTask = task.toLowerCase();
+
+    if (lowercaseTask.includes('scroll to top')) {
+      const scrolled = await DOMService.scroll(this.tabId, 'top');
+      return {
+        success: scrolled,
+        message: scrolled
+          ? 'Scrolled to top of page'
+          : 'Failed to scroll to top',
+      };
+    }
+
+    if (lowercaseTask.includes('scroll to bottom')) {
+      const scrolled = await DOMService.scroll(this.tabId, 'bottom');
+      return {
+        success: scrolled,
+        message: scrolled
+          ? 'Scrolled to bottom of page'
+          : 'Failed to scroll to bottom',
+      };
+    }
+
+    if (lowercaseTask.includes('scroll up')) {
+      const scrolled = await DOMService.scroll(this.tabId, 'up');
+      return {
+        success: scrolled,
+        message: scrolled ? 'Scrolled up' : 'Failed to scroll up',
+      };
+    }
+
+    if (lowercaseTask.includes('scroll down')) {
+      const scrolled = await DOMService.scroll(this.tabId, 'down');
+      return {
+        success: scrolled,
+        message: scrolled ? 'Scrolled down' : 'Failed to scroll down',
+      };
+    }
+
+    return {
+      success: false,
+      message:
+        'Could not understand scroll task. Try "scroll to top", "scroll to bottom", "scroll up", or "scroll down"',
+    };
+  }
+
+  private async executeNavigateTask(
+    task: string
+  ): Promise<{ success: boolean; message?: string }> {
+    // Extract URL from task
+    const urlMatch = task.match(
+      /(?:navigate|go)\s+(?:to\s+)?(?:["'](.+?)["']|(\S+))/i
+    );
+    const url = urlMatch ? urlMatch[1] || urlMatch[2] : null;
+
+    if (!url) {
+      return {
+        success: false,
+        message:
+          'Could not extract URL from navigation task. Please specify where to navigate.',
+      };
+    }
+
+    // Ensure URL has protocol
+    const fullUrl = url.startsWith('http') ? url : `https://${url}`;
+
+    try {
+      await chrome.tabs.update(this.tabId, { url: fullUrl });
+      // Wait for page to load
+      await this.waitForPageLoad();
+      return {
+        success: true,
+        message: `Successfully navigated to: ${fullUrl}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Navigation failed: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+
+  private async waitForPageLoad(timeout: number = 10000): Promise<void> {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      try {
+        const tab = await chrome.tabs.get(this.tabId);
+        if (tab.status === 'complete') {
+          return;
+        }
+      } catch (error) {
+        throw new Error(
+          `Tab ${this.tabId} became inaccessible during navigation`
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    throw new Error(`Page did not finish loading within ${timeout}ms`);
+  }
+
+  private async analyzePageAndSuggest(
+    task: string
+  ): Promise<{ success: boolean; message?: string }> {
+    try {
+      const pageInfo = await DOMService.getPageInfo(this.tabId);
+
+      if (!pageInfo) {
+        return { success: false, message: 'Could not analyze page' };
+      }
+
+      let suggestions = `Page Analysis for task: "${task}"\n\n`;
+      suggestions += `Title: ${pageInfo.title}\n`;
+      suggestions += `URL: ${pageInfo.url}\n`;
+      suggestions += `Elements found: ${pageInfo.forms} forms, ${pageInfo.inputs} inputs, ${pageInfo.buttons} buttons, ${pageInfo.links} links\n\n`;
+
+      // Check if it looks like a todo app
+      const clickableElements = await DOMService.getClickableElements(
+        this.tabId
+      );
+      const hasTodoInputs = clickableElements.some(
+        (el) =>
+          el.attributes.placeholder?.toLowerCase().includes('todo') ||
+          el.attributes.class?.toLowerCase().includes('todo')
+      );
+
+      if (hasTodoInputs) {
+        suggestions += 'This appears to be a todo application. You can try:\n';
+        suggestions += '- "add todo [task name]" to create a new todo\n';
+        suggestions += '- "complete todo [task name]" to mark a todo as done\n';
+        suggestions += '- "delete todo [task name]" to remove a todo\n';
+        suggestions += '- "list todos" to see all todos\n\n';
+      }
+
+      suggestions += 'General commands you can try:\n';
+      suggestions += '- "click [selector]" to click an element\n';
+      suggestions += '- "fill [selector] with [text]" to fill an input\n';
+      suggestions += '- "scroll to [top|bottom]" to scroll\n';
+      suggestions += '- "navigate to [url]" to go to another page';
+
+      return { success: true, message: suggestions };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Page analysis failed: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+}
+
+// Main AgentExecutor class
+class AgentExecutor {
   private eventSubscribers: EventCallback[] = [];
   private isRunning = false;
   private currentTask: string | null = null;
@@ -130,12 +1079,7 @@ class MockAgentExecutor {
   }> = [];
 
   constructor() {
-    logger.info(
-      'MockAgentExecutor',
-      'Initialized enhanced mock nanobrowser executor (Development Mode)'
-    );
-
-    // Load execution history from storage if available
+    logger.info('AgentExecutor', 'Initialized browser automation executor');
     this.loadExecutionHistory();
   }
 
@@ -151,7 +1095,7 @@ class MockAgentExecutor {
     this.currentStep = 0;
     this.cancelled = false;
 
-    logger.info('MockAgentExecutor', `Executing task: ${options.task}`, {
+    logger.info('AgentExecutor', `Executing task: ${options.task}`, {
       taskId: options.taskId,
       tabId: options.tabId,
     });
@@ -159,58 +1103,29 @@ class MockAgentExecutor {
     try {
       await this.emitEvent('system', 'task.start', 'Task started');
 
-      // Enhanced task analysis with realistic web automation steps
-      const steps = this.getTaskSteps(options.task);
+      // Initialize browser actions and task executor
+      const actions = new BrowserActions(options.tabId);
+      const executor = new TaskExecutor(options.tabId, actions);
 
-      // Simulate realistic processing with variable timing
-      for (let i = 0; i < steps.length; i++) {
-        if (this.cancelled) {
-          await this.recordExecution('cancelled');
-          await this.emitEvent(
-            'system',
-            'task.cancel',
-            'Task cancelled by user'
-          );
-          return;
-        }
+      // Execute the task
+      const taskResult = await executor.executeTask(options.task);
 
-        this.currentStep = i + 1;
-        await this.emitEvent('navigator', 'step.start', steps[i]);
-
-        // Simulate realistic processing time based on step complexity
-        const processingTime = this.getStepProcessingTime(steps[i]);
-        await new Promise((resolve) => setTimeout(resolve, processingTime));
-
-        if (this.cancelled) {
-          await this.recordExecution('cancelled');
-          await this.emitEvent(
-            'system',
-            'task.cancel',
-            'Task cancelled by user'
-          );
-          return;
-        }
-
-        // Simulate occasional step failures for realistic testing
-        if (this.shouldSimulateStepFailure(steps[i])) {
-          await this.emitEvent(
-            'navigator',
-            'step.fail',
-            `${steps[i]} encountered an issue`
-          );
-          await this.emitEvent(
-            'navigator',
-            'step.retry',
-            `Retrying ${steps[i]}...`
-          );
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
-
-        await this.emitEvent('navigator', 'step.ok', `${steps[i]} completed`);
+      if (taskResult.success) {
+        await this.recordExecution('completed');
+        await this.emitEvent(
+          'system',
+          'task.ok',
+          taskResult.message || 'Task completed successfully'
+        );
+      } else {
+        await this.recordExecution('failed');
+        await this.emitEvent(
+          'system',
+          'task.fail',
+          taskResult.message || 'Task failed'
+        );
+        throw new Error(taskResult.message || 'Task execution failed');
       }
-
-      await this.recordExecution('completed');
-      await this.emitEvent('system', 'task.ok', 'Task completed successfully');
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error';
@@ -228,120 +1143,13 @@ class MockAgentExecutor {
 
   async cancel(): Promise<void> {
     this.cancelled = true;
-    logger.info('MockAgentExecutor', 'Cancel requested');
-  }
-
-  private async createReplaySession(sessionId: string): Promise<void> {
-    logger.info(
-      'MockAgentExecutor',
-      `Creating new replay session: ${sessionId}`
-    );
-
-    // Create a synthetic session record for replay
-    const syntheticRecord = {
-      taskId: sessionId,
-      status: 'completed' as const,
-      startTime: Date.now(),
-      endTime: Date.now(),
-      duration: 1000,
-      steps: 7,
-      error: null,
-    };
-
-    // Add to history for future replays
-    this.executionHistory.push({
-      taskId: syntheticRecord.taskId,
-      task: `Synthetic session ${sessionId}`,
-      timestamp: syntheticRecord.startTime,
-      status: syntheticRecord.status,
-    });
-
-    this.isRunning = true;
-    this.currentTask = `Replay session ${sessionId}`;
-    this.taskId = `replay-${sessionId}`;
-    this.cancelled = false;
-
-    try {
-      await this.emitEvent('system', 'task.start', 'Synthetic replay started');
-
-      // Basic replay simulation
-      const replaySteps = [
-        'Creating synthetic session...',
-        'Simulating replay execution...',
-        'Generating replay events...',
-        'Validating synthetic data...',
-        'Finalizing replay session...',
-      ];
-
-      for (let i = 0; i < replaySteps.length; i++) {
-        if (this.cancelled) {
-          await this.recordExecution('cancelled');
-          await this.emitEvent(
-            'system',
-            'task.cancel',
-            'Synthetic replay cancelled'
-          );
-          return;
-        }
-
-        this.currentStep = i + 1;
-        await this.emitEvent('navigator', 'step.start', replaySteps[i]);
-
-        const replayTime = 400 + Math.random() * 600;
-        await new Promise((resolve) => setTimeout(resolve, replayTime));
-
-        await this.emitEvent(
-          'navigator',
-          'step.ok',
-          `${replaySteps[i]} completed`
-        );
-      }
-
-      await this.recordExecution('completed');
-      await this.emitEvent('system', 'task.ok', 'Synthetic replay completed');
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown error';
-      await this.recordExecution('failed');
-      await this.emitEvent(
-        'system',
-        'task.fail',
-        `Synthetic replay failed: ${errorMessage}`
-      );
-      throw error;
-    } finally {
-      this.cleanup();
-    }
+    logger.info('AgentExecutor', 'Cancel requested');
   }
 
   async replay(sessionId: string): Promise<void> {
-    logger.info('MockAgentExecutor', `Replaying session: ${sessionId}`);
+    logger.info('AgentExecutor', `Replaying session: ${sessionId}`);
 
-    // Check if session exists in history with more flexible matching
-    const sessionRecord = this.executionHistory.find(
-      (record) =>
-        record.taskId.includes(sessionId) ||
-        record.taskId === sessionId ||
-        sessionId.includes(record.taskId)
-    );
-
-    if (!sessionRecord) {
-      logger.warn(
-        'MockAgentExecutor',
-        `Session ${sessionId} not found in history, creating new session replay`
-      );
-      // Instead of throwing error, create a new replay session
-      return this.createReplaySession(sessionId);
-    }
-
-    if (sessionRecord.status !== 'completed') {
-      logger.warn(
-        'MockAgentExecutor',
-        `Session ${sessionId} was not completed, attempting replay anyway`
-      );
-      // Continue with replay even if not completed
-    }
-
+    // Simplified replay implementation
     this.isRunning = true;
     this.currentTask = `Replay session ${sessionId}`;
     this.taskId = `replay-${sessionId}`;
@@ -350,15 +1158,11 @@ class MockAgentExecutor {
     try {
       await this.emitEvent('system', 'task.start', 'Replay started');
 
-      // Enhanced replay simulation with more realistic steps
+      // Simple replay simulation
       const replaySteps = [
         'Loading session metadata...',
         'Validating execution context...',
-        'Restoring browser state...',
-        'Loading recorded actions...',
-        'Executing recorded steps...',
-        'Verifying replay consistency...',
-        'Validating final state...',
+        'Replaying actions...',
       ];
 
       for (let i = 0; i < replaySteps.length; i++) {
@@ -374,22 +1178,7 @@ class MockAgentExecutor {
 
         this.currentStep = i + 1;
         await this.emitEvent('navigator', 'step.start', replaySteps[i]);
-
-        // Simulate more realistic timing for replay operations
-        const replayTime = 600 + Math.random() * 800;
-        await new Promise((resolve) => setTimeout(resolve, replayTime));
-
-        // Simulate potential replay issues
-        if (i === 4 && Math.random() < 0.1) {
-          // 10% chance of replay inconsistency
-          await this.emitEvent(
-            'navigator',
-            'step.warning',
-            'State inconsistency detected, attempting correction...'
-          );
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-        }
-
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         await this.emitEvent(
           'navigator',
           'step.ok',
@@ -435,19 +1224,17 @@ class MockAgentExecutor {
   }
 
   addFollowUpTask(task: string): void {
-    logger.info('MockAgentExecutor', `Adding follow-up task: ${task}`);
+    logger.info('AgentExecutor', `Adding follow-up task: ${task}`);
 
-    // Enhanced mock implementation with task queue simulation
     if (this.isRunning) {
       logger.warn(
-        'MockAgentExecutor',
+        'AgentExecutor',
         'Cannot add follow-up task while another task is running'
       );
       return;
     }
 
     // In a real implementation, this would add the task to a queue
-    // For now, simulate immediate execution of follow-up task
     setTimeout(async () => {
       if (!this.isRunning && this.tabId) {
         const followUpTaskId = `followup-${Date.now()}-${Math.random()
@@ -458,9 +1245,6 @@ class MockAgentExecutor {
     }, 1000);
   }
 
-  /**
-   * Enhanced cleanup method with proper resource management
-   */
   public cleanup(): void {
     this.isRunning = false;
     this.currentTask = null;
@@ -469,103 +1253,9 @@ class MockAgentExecutor {
     this.tabId = null;
     this.cancelled = false;
 
-    logger.info('MockAgentExecutor', 'Cleaned up executor state');
+    logger.info('AgentExecutor', 'Cleaned up executor state');
   }
 
-  /**
-   * Get task-specific execution steps based on task content
-   */
-  private getTaskSteps(task: string): string[] {
-    const lowercaseTask = task.toLowerCase();
-
-    if (lowercaseTask.includes('swap') || lowercaseTask.includes('trade')) {
-      return [
-        'Analyzing DeFi protocols...',
-        'Finding optimal swap routes...',
-        'Checking token allowances...',
-        'Calculating gas estimates...',
-        'Executing swap transaction...',
-        'Confirming transaction...',
-      ];
-    }
-
-    if (lowercaseTask.includes('send') || lowercaseTask.includes('transfer')) {
-      return [
-        'Validating recipient address...',
-        'Checking account balance...',
-        'Preparing transaction...',
-        'Estimating gas fees...',
-        'Executing transfer...',
-        'Confirming transaction...',
-      ];
-    }
-
-    if (
-      lowercaseTask.includes('connect') ||
-      lowercaseTask.includes('approve')
-    ) {
-      return [
-        'Analyzing dApp connection request...',
-        'Checking security reputation...',
-        'Preparing connection approval...',
-        'Establishing secure connection...',
-        'Finalizing permissions...',
-      ];
-    }
-
-    // Default generic steps
-    return [
-      'Analyzing page content...',
-      'Identifying interactive elements...',
-      'Planning execution strategy...',
-      'Executing actions...',
-      'Validating results...',
-    ];
-  }
-
-  /**
-   * Get realistic processing time based on step complexity
-   */
-  private getStepProcessingTime(step: string): number {
-    const baseTime = 800;
-    const randomVariation = Math.random() * 1200;
-
-    // Add extra time for complex operations
-    if (
-      step.includes('transaction') ||
-      step.includes('swap') ||
-      step.includes('gas')
-    ) {
-      return baseTime + randomVariation + 1000;
-    }
-
-    if (step.includes('analyzing') || step.includes('calculating')) {
-      return baseTime + randomVariation + 500;
-    }
-
-    return baseTime + randomVariation;
-  }
-
-  /**
-   * Simulate realistic step failures for testing
-   */
-  private shouldSimulateStepFailure(step: string): boolean {
-    // 5% chance of temporary failure for network-related steps
-    if (
-      step.includes('gas') ||
-      step.includes('transaction') ||
-      step.includes('network')
-    ) {
-      return Math.random() < 0.05;
-    }
-
-    // 2% chance of temporary failure for other steps
-    return Math.random() < 0.02;
-  }
-
-  /**
-   * Record execution history for development insights
-   */
   private async recordExecution(
     status: 'completed' | 'failed' | 'cancelled'
   ): Promise<void> {
@@ -588,42 +1278,28 @@ class MockAgentExecutor {
     // Save to chrome storage for persistence
     try {
       await chrome.storage.local.set({
-        mockExecutorHistory: this.executionHistory,
+        agentExecutorHistory: this.executionHistory,
       });
     } catch (error) {
-      logger.warn(
-        'MockAgentExecutor',
-        'Failed to save execution history',
-        error
-      );
+      logger.warn('AgentExecutor', 'Failed to save execution history', error);
     }
   }
 
-  /**
-   * Load execution history from storage
-   */
   private async loadExecutionHistory(): Promise<void> {
     try {
-      const result = await chrome.storage.local.get('mockExecutorHistory');
-      if (result.mockExecutorHistory) {
-        this.executionHistory = result.mockExecutorHistory;
+      const result = await chrome.storage.local.get('agentExecutorHistory');
+      if (result.agentExecutorHistory) {
+        this.executionHistory = result.agentExecutorHistory;
         logger.info(
-          'MockAgentExecutor',
+          'AgentExecutor',
           `Loaded ${this.executionHistory.length} historical executions`
         );
       }
     } catch (error) {
-      logger.warn(
-        'MockAgentExecutor',
-        'Failed to load execution history',
-        error
-      );
+      logger.warn('AgentExecutor', 'Failed to load execution history', error);
     }
   }
 
-  /**
-   * Get execution statistics for development insights
-   */
   getExecutionStats(): {
     total: number;
     completed: number;
@@ -664,404 +1340,46 @@ class MockAgentExecutor {
       try {
         await callback(event);
       } catch (error) {
-        logger.error('MockAgentExecutor', 'Error in event callback', {
-          error,
-        });
+        logger.error('AgentExecutor', 'Error in event callback', { error });
       }
     }
   }
 }
 
-/**
- * Production-ready bridge for nanobrowser integration
- *
- * Current Implementation: Real nanobrowser extension integration with fallback
- * Features: Automatic detection, secure communication, graceful fallback
- */
-class AgentIntegrationBridge implements AgentExecutorBridge {
-  private executor: MockAgentExecutor;
+// Bridge interface
+export interface AgentExecutorBridge {
+  execute(task: string, tabId: number): Promise<void>;
+  cancel(): Promise<void>;
+  replay(sessionId: string): Promise<void>;
+  getStatus(): {
+    isRunning: boolean;
+    currentTask?: string;
+    currentStep?: number;
+  };
+  subscribeToEvents(callback: EventCallback): void;
+  unsubscribeFromEvents(): void;
+  addFollowUpTask(task: string): void;
+  cleanup?(): void;
+}
+
+// Native browser automation controller - replaces AgentIntegrationBridge
+class AgentController implements AgentExecutorBridge {
+  private executor: AgentExecutor;
   private browserContext: BrowserContext;
-  private nanobrowserPort: chrome.runtime.Port | null = null;
-  private isNanobrowserAvailable: boolean = false;
-  private connectionAttempts: number = 0;
-  private maxConnectionAttempts: number = 3;
-  private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
-  private nanobrowserExtensionId: string = 'imbddededgmcgfhfpcjmijokokekbkal'; // Default nanobrowser extension ID
 
   constructor() {
-    this.executor = new MockAgentExecutor();
+    this.executor = new AgentExecutor();
     this.browserContext = new RabbyBrowserContext();
 
-    // Initialize nanobrowser connection
-    this.initializeNanobrowserConnection();
-    this.startHealthCheck();
-
     logger.info(
-      'AgentIntegrationBridge',
-      'Initialized nanobrowser agent executor bridge (Production Ready)'
-    );
-  }
-
-  /**
-   * Initialize connection to nanobrowser extension with security validation
-   */
-  private async initializeNanobrowserConnection(): Promise<void> {
-    try {
-      // Security validation before connection
-      await this.validateExtensionSecurity();
-
-      // Try to connect to nanobrowser extension
-      this.nanobrowserPort = chrome.runtime.connect(
-        this.nanobrowserExtensionId,
-        {
-          name: 'rabby-nanobrowser-connection',
-        }
-      );
-
-      this.nanobrowserPort.onMessage.addListener((message) => {
-        this.handleNanobrowserMessage(message);
-      });
-
-      this.nanobrowserPort.onDisconnect.addListener(() => {
-        logger.warn(
-          'AgentIntegrationBridge',
-          'Nanobrowser extension disconnected'
-        );
-        this.isNanobrowserAvailable = false;
-        this.nanobrowserPort = null;
-      });
-
-      // Send secure handshake with authentication
-      const handshake = await this.createSecureHandshake();
-      this.nanobrowserPort.postMessage(handshake);
-
-      // Wait for handshake response with security validation
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Nanobrowser handshake timeout'));
-        }, 5000);
-
-        const messageHandler = (message: any) => {
-          if (message.type === 'handshake_ack') {
-            clearTimeout(timeout);
-            this.nanobrowserPort?.onMessage.removeListener(messageHandler);
-
-            // Validate handshake response
-            if (this.validateHandshakeResponse(message)) {
-              resolve(message);
-            } else {
-              reject(new Error('Invalid handshake response from nanobrowser'));
-            }
-          } else if (message.type === 'handshake_error') {
-            clearTimeout(timeout);
-            this.nanobrowserPort?.onMessage.removeListener(messageHandler);
-            reject(
-              new Error(message.error || 'Handshake rejected by nanobrowser')
-            );
-          }
-        };
-
-        this.nanobrowserPort?.onMessage.addListener(messageHandler);
-      });
-
-      this.isNanobrowserAvailable = true;
-      logger.info(
-        'AgentIntegrationBridge',
-        'Successfully connected to nanobrowser extension with security validation'
-      );
-    } catch (error) {
-      logger.warn(
-        'AgentIntegrationBridge',
-        'Failed to connect to nanobrowser extension, using fallback mode',
-        error
-      );
-      this.isNanobrowserAvailable = false;
-      this.nanobrowserPort = null;
-    }
-  }
-
-  /**
-   * Validate extension security before connection
-   */
-  private async validateExtensionSecurity(): Promise<void> {
-    try {
-      // Check if extension exists and is accessible
-      const extensionInfo = await chrome.management.get(
-        this.nanobrowserExtensionId
-      );
-
-      if (!extensionInfo) {
-        throw new Error('Nanobrowser extension not found');
-      }
-
-      // Security checks
-      const securityChecks = {
-        isEnabled: extensionInfo.enabled,
-        isAllowedInIncognito:
-          (extensionInfo as any).allowedInIncognito || false,
-        hasPermissions:
-          extensionInfo.permissions?.includes('activeTab') || false,
-        hostPermissions: extensionInfo.hostPermissions || [],
-        installType: extensionInfo.installType,
-      };
-
-      // Log security validation results
-      logger.debug('AgentIntegrationBridge', 'Extension security validation', {
-        extensionId: this.nanobrowserExtensionId,
-        ...securityChecks,
-      });
-
-      // Additional security validations can be added here
-      if (!securityChecks.isEnabled) {
-        throw new Error('Nanobrowser extension is disabled');
-      }
-
-      // Validate extension origin (optional - for production)
-      // This would involve checking the extension's manifest and origin
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.includes('Extension not found')
-      ) {
-        // Extension not installed is expected in many cases
-        logger.debug(
-          'AgentIntegrationBridge',
-          'Nanobrowser extension not installed'
-        );
-        return;
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Create secure handshake message with authentication
-   */
-  private async createSecureHandshake(): Promise<any> {
-    const timestamp = Date.now();
-    const nonce = this.generateNonce();
-
-    // Create authentication token (simplified for now)
-    const authToken = await this.createAuthToken(timestamp, nonce);
-
-    return {
-      type: 'handshake',
-      source: 'rabby-wallet',
-      version: '1.0.0',
-      timestamp,
-      nonce,
-      authToken,
-      capabilities: [
-        'task_execution',
-        'session_management',
-        'event_subscription',
-        'follow_up_tasks',
-      ],
-      securityLevel: 'standard',
-    };
-  }
-
-  /**
-   * Validate handshake response from nanobrowser
-   */
-  private validateHandshakeResponse(response: any): boolean {
-    try {
-      // Check required fields
-      const requiredFields = [
-        'type',
-        'source',
-        'version',
-        'timestamp',
-        'status',
-      ];
-      for (const field of requiredFields) {
-        if (!response[field]) {
-          logger.warn(
-            'AgentIntegrationBridge',
-            'Missing required field in handshake response',
-            { field, response }
-          );
-          return false;
-        }
-      }
-
-      // Validate response type
-      if (response.type !== 'handshake_ack') {
-        return false;
-      }
-
-      // Validate source
-      if (response.source !== 'nanobrowser') {
-        return false;
-      }
-
-      // Validate timestamp (prevent replay attacks)
-      const now = Date.now();
-      const responseTime = response.timestamp;
-      if (Math.abs(now - responseTime) > 30000) {
-        // 30 second tolerance
-        logger.warn(
-          'AgentIntegrationBridge',
-          'Handshake response timestamp out of range',
-          {
-            responseTime,
-            currentTime: now,
-            difference: Math.abs(now - responseTime),
-          }
-        );
-        return false;
-      }
-
-      // Validate status
-      if (response.status !== 'accepted') {
-        logger.warn('AgentIntegrationBridge', 'Handshake not accepted', {
-          status: response.status,
-        });
-        return false;
-      }
-
-      // Validate capabilities (optional)
-      if (response.capabilities && Array.isArray(response.capabilities)) {
-        const requiredCapabilities = ['task_execution', 'event_subscription'];
-        const hasRequiredCapabilities = requiredCapabilities.every((cap) =>
-          response.capabilities.includes(cap)
-        );
-
-        if (!hasRequiredCapabilities) {
-          logger.warn(
-            'AgentIntegrationBridge',
-            'Missing required capabilities in handshake response',
-            {
-              required: requiredCapabilities,
-              provided: response.capabilities,
-            }
-          );
-          return false;
-        }
-      }
-
-      return true;
-    } catch (error) {
-      logger.error(
-        'AgentIntegrationBridge',
-        'Error validating handshake response',
-        error
-      );
-      return false;
-    }
-  }
-
-  /**
-   * Generate cryptographic nonce for security
-   */
-  private generateNonce(): string {
-    const array = new Uint8Array(16);
-    crypto.getRandomValues(array);
-    return Array.from(array, (byte) => byte.toString(16).padStart(2, '0')).join(
-      ''
-    );
-  }
-
-  /**
-   * Create authentication token (simplified implementation)
-   */
-  private async createAuthToken(
-    timestamp: number,
-    nonce: string
-  ): Promise<string> {
-    try {
-      // In production, this would use proper cryptographic signing
-      // For now, we'll use a simple hash-based approach
-      const data = `${timestamp}:${nonce}:rabby-wallet`;
-      const encoder = new TextEncoder();
-      const dataBuffer = encoder.encode(data);
-
-      const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-    } catch (error) {
-      logger.error(
-        'AgentIntegrationBridge',
-        'Failed to create auth token',
-        error
-      );
-      // Fallback to simple token
-      return `${timestamp}:${nonce}:rabby-wallet`;
-    }
-  }
-
-  /**
-   * Handle messages from nanobrowser extension
-   */
-  private handleNanobrowserMessage(message: any): void {
-    try {
-      switch (message.type) {
-        case 'handshake_ack':
-          logger.info(
-            'AgentIntegrationBridge',
-            'Nanobrowser handshake successful'
-          );
-          break;
-        case 'execution_event':
-          // Forward execution events to subscribers
-          this.forwardNanobrowserEvent(message.event);
-          break;
-        case 'error':
-          logger.error(
-            'AgentIntegrationBridge',
-            'Nanobrowser error',
-            message.error
-          );
-          break;
-        default:
-          logger.debug(
-            'AgentIntegrationBridge',
-            'Unhandled nanobrowser message',
-            message
-          );
-      }
-    } catch (error) {
-      logger.error(
-        'AgentIntegrationBridge',
-        'Error handling nanobrowser message',
-        error
-      );
-    }
-  }
-
-  /**
-   * Forward nanobrowser events to event subscribers
-   */
-  private forwardNanobrowserEvent(event: any): void {
-    // Transform nanobrowser event format to our format and forward to subscribers
-    const transformedEvent = {
-      actor: event.actor || 'system',
-      state: event.state || 'unknown',
-      data: {
-        taskId: event.taskId || 'unknown',
-        step: event.step || 0,
-        maxSteps: event.maxSteps || 5,
-        details: event.details || '',
-      },
-      timestamp: event.timestamp || Date.now(),
-      type: 'execution',
-    };
-
-    // Forward to all event subscribers (this would need to be implemented)
-    logger.debug(
-      'AgentIntegrationBridge',
-      'Forwarding nanobrowser event',
-      transformedEvent
+      'AgentController',
+      'Initialized native browser automation controller'
     );
   }
 
   async execute(task: string, tabId: number): Promise<void> {
-    logger.info('AgentIntegrationBridge', `Executing task: ${task}`, {
-      tabId,
-      nanobrowserAvailable: this.isNanobrowserAvailable,
-    });
+    logger.info('AgentController', `Executing task: ${task}`, { tabId });
 
-    // Validate input parameters
     if (!task || task.trim().length === 0) {
       throw new Error('Task description cannot be empty');
     }
@@ -1071,175 +1389,58 @@ class AgentIntegrationBridge implements AgentExecutorBridge {
     }
 
     try {
-      // Verify tab exists and is accessible
       const tab = await chrome.tabs.get(tabId);
       if (!tab || !tab.url) {
         throw new Error(`Tab ${tabId} is not accessible or does not exist`);
       }
 
-      // Check for restricted URLs
       if (this.isRestrictedUrl(tab.url)) {
         throw new Error(`Cannot execute tasks on restricted URL: ${tab.url}`);
       }
 
-      // Generate a unique task ID
       const taskId = `task-${Date.now()}-${Math.random()
         .toString(36)
-        .substr(2, 9)}-${this.connectionAttempts}`;
+        .substr(2, 9)}`;
 
-      // Use nanobrowser if available, otherwise fall back to mock
-      if (this.isNanobrowserAvailable && this.nanobrowserPort) {
-        await this.executeWithNanobrowser(task, taskId, tabId);
-      } else {
-        await this.executeWithMock(task, taskId, tabId);
-      }
+      // Switch to tab and execute task
+      await this.browserContext.switchToTab(tabId);
+      await this.waitForTabReady(tabId);
+      await this.executor.execute({ task, taskId, tabId });
 
-      logger.info('AgentIntegrationBridge', 'Task execution completed', {
-        taskId,
-        method: this.isNanobrowserAvailable ? 'nanobrowser' : 'mock',
-      });
+      logger.info('AgentController', 'Task execution completed', { taskId });
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
-      logger.error('AgentIntegrationBridge', 'Task execution failed', {
+      logger.error('AgentController', 'Task execution failed', {
         error: errorMessage,
         tabId,
-        method: this.isNanobrowserAvailable ? 'nanobrowser' : 'mock',
       });
       throw error;
     }
   }
 
-  /**
-   * Execute task using real nanobrowser extension
-   */
-  private async executeWithNanobrowser(
-    task: string,
-    taskId: string,
-    tabId: number
-  ): Promise<void> {
-    if (!this.nanobrowserPort) {
-      throw new Error('Nanobrowser connection not available');
-    }
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Nanobrowser execution timeout'));
-      }, 300000); // 5 minute timeout
-
-      const messageHandler = (message: any) => {
-        try {
-          switch (message.type) {
-            case 'execution_complete':
-              clearTimeout(timeout);
-              this.nanobrowserPort?.onMessage.removeListener(messageHandler);
-              resolve();
-              break;
-            case 'execution_error':
-              clearTimeout(timeout);
-              this.nanobrowserPort?.onMessage.removeListener(messageHandler);
-              reject(
-                new Error(message.error || 'Nanobrowser execution failed')
-              );
-              break;
-            case 'execution_event':
-              // Forward progress events
-              this.forwardNanobrowserEvent(message.event);
-              break;
-          }
-        } catch (error) {
-          logger.error(
-            'AgentIntegrationBridge',
-            'Error handling nanobrowser execution message',
-            error
-          );
-        }
-      };
-
-      this.nanobrowserPort?.onMessage.addListener(messageHandler);
-
-      // Send execution request to nanobrowser
-      this.nanobrowserPort?.postMessage({
-        type: 'new_task',
-        task,
-        taskId,
-        tabId,
-        source: 'rabby-wallet',
-        timestamp: Date.now(),
-      });
-    });
-  }
-
-  /**
-   * Execute task using mock executor (fallback)
-   */
-  private async executeWithMock(
-    task: string,
-    taskId: string,
-    tabId: number
-  ): Promise<void> {
-    // Switch to the target tab
-    await this.browserContext.switchToTab(tabId);
-
-    // Wait for tab to be ready
-    await this.waitForTabReady(tabId);
-
-    // Execute with mock executor
-    await this.executor.execute({ task, taskId, tabId });
-  }
-
   async cancel(): Promise<void> {
-    logger.info('AgentIntegrationBridge', 'Canceling current task', {
-      method: this.isNanobrowserAvailable ? 'nanobrowser' : 'mock',
-    });
+    logger.info('AgentController', 'Canceling current task');
 
     try {
-      if (this.isNanobrowserAvailable && this.nanobrowserPort) {
-        // Send cancel request to nanobrowser
-        this.nanobrowserPort.postMessage({
-          type: 'cancel_task',
-          source: 'rabby-wallet',
-          timestamp: Date.now(),
-        });
-      }
-
-      // Always cancel mock executor as fallback
       await this.executor.cancel();
-      logger.info('AgentIntegrationBridge', 'Task cancelled successfully');
+      logger.info('AgentController', 'Task cancelled successfully');
     } catch (error) {
-      logger.error('AgentIntegrationBridge', 'Failed to cancel task', {
-        error,
-      });
+      logger.error('AgentController', 'Failed to cancel task', { error });
       throw error;
     }
   }
 
   async replay(sessionId: string): Promise<void> {
-    logger.info('AgentIntegrationBridge', `Replaying session: ${sessionId}`, {
-      method: this.isNanobrowserAvailable ? 'nanobrowser' : 'mock',
-    });
+    logger.info('AgentController', `Replaying session: ${sessionId}`);
 
     try {
-      if (this.isNanobrowserAvailable && this.nanobrowserPort) {
-        // Send replay request to nanobrowser
-        this.nanobrowserPort.postMessage({
-          type: 'replay',
-          sessionId,
-          source: 'rabby-wallet',
-          timestamp: Date.now(),
-        });
-
-        // Wait for replay completion (simplified - in production would need proper async handling)
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-      }
-
-      // Fall back to mock replay
       await this.executor.replay(sessionId);
-      logger.info('AgentIntegrationBridge', 'Session replay completed', {
+      logger.info('AgentController', 'Session replay completed', {
         sessionId,
       });
     } catch (error) {
-      logger.error('AgentIntegrationBridge', 'Session replay failed', {
+      logger.error('AgentController', 'Session replay failed', {
         error,
         sessionId,
       });
@@ -1248,94 +1449,33 @@ class AgentIntegrationBridge implements AgentExecutorBridge {
   }
 
   getStatus() {
-    const baseStatus = this.executor.getStatus();
-    return {
-      ...baseStatus,
-      nanobrowserAvailable: this.isNanobrowserAvailable,
-      method: this.isNanobrowserAvailable ? 'nanobrowser' : 'mock',
-    };
+    return this.executor.getStatus();
   }
 
   subscribeToEvents(callback: EventCallback): void {
     this.executor.subscribeToEvents(callback);
-    logger.info('AgentIntegrationBridge', 'Event subscription added');
+    logger.info('AgentController', 'Event subscription added');
   }
 
   unsubscribeFromEvents(): void {
     this.executor.unsubscribeFromEvents();
-    logger.info('AgentIntegrationBridge', 'Event subscriptions cleared');
+    logger.info('AgentController', 'Event subscriptions cleared');
   }
 
   addFollowUpTask(task: string): void {
     if (!task || task.trim().length === 0) {
-      logger.warn('AgentIntegrationBridge', 'Cannot add empty follow-up task');
+      logger.warn('AgentController', 'Cannot add empty follow-up task');
       return;
     }
 
-    if (this.isNanobrowserAvailable && this.nanobrowserPort) {
-      // Send follow-up task to nanobrowser
-      this.nanobrowserPort.postMessage({
-        type: 'follow_up_task',
-        task,
-        source: 'rabby-wallet',
-        timestamp: Date.now(),
-      });
-    }
-
     this.executor.addFollowUpTask(task);
-    logger.info('AgentIntegrationBridge', 'Follow-up task queued', {
-      task,
-      method: this.isNanobrowserAvailable ? 'nanobrowser' : 'mock',
-    });
+    logger.info('AgentController', 'Follow-up task queued', { task });
   }
 
-  /**
-   * Check if nanobrowser extension is available and connected
-   */
-  isNanobrowserConnected(): boolean {
-    return this.isNanobrowserAvailable && this.nanobrowserPort !== null;
+  getExecutionStats() {
+    return this.executor.getExecutionStats();
   }
 
-  /**
-   * Get nanobrowser connection status
-   */
-  getNanobrowserStatus(): {
-    connected: boolean;
-    extensionId: string;
-    lastConnectionAttempt?: number;
-  } {
-    return {
-      connected: this.isNanobrowserAvailable,
-      extensionId: this.nanobrowserExtensionId,
-      lastConnectionAttempt:
-        this.connectionAttempts > 0 ? Date.now() : undefined,
-    };
-  }
-
-  /**
-   * Attempt to reconnect to nanobrowser extension
-   */
-  async reconnectNanobrowser(): Promise<boolean> {
-    try {
-      logger.info(
-        'AgentIntegrationBridge',
-        'Attempting to reconnect to nanobrowser'
-      );
-      await this.initializeNanobrowserConnection();
-      return this.isNanobrowserAvailable;
-    } catch (error) {
-      logger.error(
-        'AgentIntegrationBridge',
-        'Failed to reconnect to nanobrowser',
-        error
-      );
-      return false;
-    }
-  }
-
-  /**
-   * Check if URL is restricted for automation
-   */
   private isRestrictedUrl(url: string): boolean {
     const restrictedPatterns = [
       /^chrome:\/\//,
@@ -1348,9 +1488,6 @@ class AgentIntegrationBridge implements AgentExecutorBridge {
     return restrictedPatterns.some((pattern) => pattern.test(url));
   }
 
-  /**
-   * Wait for tab to be in ready state
-   */
   private async waitForTabReady(
     tabId: number,
     timeout: number = 5000
@@ -1373,89 +1510,33 @@ class AgentIntegrationBridge implements AgentExecutorBridge {
     throw new Error(`Tab ${tabId} did not become ready within ${timeout}ms`);
   }
 
-  /**
-   * Start periodic health check for the bridge
-   */
-  private startHealthCheck(): void {
-    this.healthCheckInterval = setInterval(() => {
-      try {
-        const stats = this.executor.getExecutionStats();
-        logger.debug('AgentIntegrationBridge', 'Health check completed', {
-          executionStats: stats,
-          connectionAttempts: this.connectionAttempts,
-        });
-      } catch (error) {
-        logger.warn('AgentIntegrationBridge', 'Health check failed', { error });
-      }
-    }, 60000); // Every minute
-  }
-
-  /**
-   * Cleanup method for proper resource management
-   */
   cleanup(): void {
-    logger.info('AgentIntegrationBridge', 'Starting cleanup process...');
+    logger.info('AgentController', 'Starting cleanup process...');
 
-    // Clear health check interval
-    if (this.healthCheckInterval) {
-      clearInterval(this.healthCheckInterval);
-      this.healthCheckInterval = null;
-    }
-
-    // Cleanup nanobrowser connection
-    if (this.nanobrowserPort) {
-      try {
-        // Send cleanup notification
-        this.nanobrowserPort.postMessage({
-          type: 'cleanup',
-          source: 'rabby-wallet',
-          timestamp: Date.now(),
-        });
-
-        // Disconnect port
-        this.nanobrowserPort.disconnect();
-        this.nanobrowserPort = null;
-        this.isNanobrowserAvailable = false;
-        logger.info(
-          'AgentIntegrationBridge',
-          'Nanobrowser connection cleaned up'
-        );
-      } catch (error) {
-        logger.warn(
-          'AgentIntegrationBridge',
-          'Error during nanobrowser cleanup',
-          error
-        );
-      }
-    }
-
-    // Cleanup mock executor
     try {
       this.executor.cleanup?.();
-      logger.info('AgentIntegrationBridge', 'Mock executor cleaned up');
+      logger.info('AgentController', 'AgentExecutor cleaned up');
     } catch (error) {
-      logger.warn(
-        'AgentIntegrationBridge',
-        'Error during mock executor cleanup',
-        error
-      );
+      logger.warn('AgentController', 'Error during executor cleanup', error);
     }
 
-    // Cleanup browser context
     try {
       this.browserContext.cleanup();
-      logger.info('AgentIntegrationBridge', 'Browser context cleaned up');
+      logger.info('AgentController', 'Browser context cleaned up');
     } catch (error) {
       logger.warn(
-        'AgentIntegrationBridge',
+        'AgentController',
         'Error during browser context cleanup',
         error
       );
     }
 
-    logger.info('AgentIntegrationBridge', 'Bridge cleanup completed');
+    logger.info('AgentController', 'Cleanup completed');
   }
 }
 
-// Singleton instance of the bridge
-export const agentIntegrationBridge = new AgentIntegrationBridge();
+// Export the singleton instance
+export const agentController = new AgentController();
+
+// For backward compatibility, also export as agentIntegrationBridge
+export const agentIntegrationBridge = agentController;

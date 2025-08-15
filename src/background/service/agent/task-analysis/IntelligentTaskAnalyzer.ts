@@ -7,7 +7,14 @@ const logger = createLogger('IntelligentTaskAnalyzer');
 
 // Task analysis schemas
 export const TaskAnalysisSchema = z.object({
-  taskType: z.enum(['navigation', 'form_filling', 'content_extraction', 'web3_operation', 'interaction', 'automation']),
+  taskType: z.enum([
+    'navigation',
+    'form_filling',
+    'content_extraction',
+    'web3_operation',
+    'interaction',
+    'automation',
+  ]),
   confidence: z.number().min(0).max(1),
   reasoning: z.string(),
   requiresBrowserAutomation: z.boolean(),
@@ -16,19 +23,23 @@ export const TaskAnalysisSchema = z.object({
   estimatedSteps: z.number().min(1).max(20),
   browserActions: z.array(z.string()).optional(),
   web3Actions: z.array(z.string()).optional(),
-  entities: z.array(z.object({
-    type: z.string(),
-    value: z.string(),
-    confidence: z.number()
-  })).optional(),
+  entities: z
+    .array(
+      z.object({
+        type: z.string(),
+        value: z.string(),
+        confidence: z.number(),
+      })
+    )
+    .optional(),
   timestamp: z.number().optional(),
-  analysis: z.string().optional()
+  analysis: z.string().optional(),
 });
 
 export type TaskAnalysis = z.infer<typeof TaskAnalysisSchema>;
 
 // Task type definitions
-export type AutomationTaskType = 
+export type AutomationTaskType =
   | 'navigation'
   | 'form_filling'
   | 'content_extraction'
@@ -61,7 +72,9 @@ export class IntelligentTaskAnalyzer {
       const cacheKey = this.generateCacheKey(instruction, context);
       const cached = this.getFromCache(cacheKey);
       if (cached) {
-        logger.debug('Using cached task analysis', { taskType: cached.taskType });
+        logger.debug('Using cached task analysis', {
+          taskType: cached.taskType,
+        });
         return cached;
       }
 
@@ -72,26 +85,29 @@ export class IntelligentTaskAnalyzer {
 
       // Get LLM analysis
       const response = await this.llm.generateResponse(
-        [new SystemMessage(analysisPrompt.systemPrompt), new HumanMessage(analysisPrompt.userPrompt)],
+        [
+          new SystemMessage(analysisPrompt.systemPrompt),
+          new HumanMessage(analysisPrompt.userPrompt),
+        ],
         context
       );
 
       // Parse and validate response
       const analysis = this.parseAnalysisResponse(response.response);
-      
+
       // Cache the result
       this.setToCache(cacheKey, analysis);
 
       logger.info('Task analysis completed', {
         taskType: analysis.taskType,
         confidence: analysis.confidence,
-        complexity: analysis.complexity
+        complexity: analysis.complexity,
       });
 
       return analysis;
     } catch (error) {
       logger.error('Task analysis failed', error);
-      
+
       // Fallback to simple analysis
       return this.getFallbackAnalysis(instruction);
     }
@@ -100,7 +116,10 @@ export class IntelligentTaskAnalyzer {
   /**
    * Create structured prompt for task analysis
    */
-  private createAnalysisPrompt(instruction: string, context: Web3Context): {
+  private createAnalysisPrompt(
+    instruction: string,
+    context: Web3Context
+  ): {
     systemPrompt: string;
     userPrompt: string;
   } {
@@ -202,14 +221,18 @@ Provide your analysis in the required JSON format.`;
       }
 
       const parsed = JSON.parse(jsonMatch[0]);
-      
+
       // Validate with Zod schema
       const validated = TaskAnalysisSchema.parse(parsed);
-      
+
       return validated;
     } catch (error) {
       logger.error('Failed to parse analysis response', { response, error });
-      throw new Error(`Invalid analysis response: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Invalid analysis response: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
     }
   }
 
@@ -218,11 +241,17 @@ Provide your analysis in the required JSON format.`;
    */
   private getFallbackAnalysis(instruction: string): TaskAnalysis {
     const lowerInstruction = instruction.toLowerCase();
-    
+
     // Simple keyword-based fallback
-    const hasWeb3Keywords = /(swap|transfer|balance|approve|stake|bridge|token|eth|usdc|usdt|wallet|connect)/i.test(instruction);
-    const hasBrowserKeywords = /(open|navigate|click|fill|form|page|website|url)/i.test(instruction);
-    const hasQueryKeywords = /(what|how|check|show|tell|price|value)/i.test(instruction);
+    const hasWeb3Keywords = /(swap|transfer|balance|approve|stake|bridge|token|eth|usdc|usdt|wallet|connect)/i.test(
+      instruction
+    );
+    const hasBrowserKeywords = /(open|navigate|click|fill|form|page|website|url)/i.test(
+      instruction
+    );
+    const hasQueryKeywords = /(what|how|check|show|tell|price|value)/i.test(
+      instruction
+    );
 
     let taskType: AutomationTaskType = 'interaction';
     let complexity: 'low' | 'medium' | 'high' = 'low';
@@ -256,7 +285,7 @@ Provide your analysis in the required JSON format.`;
       estimatedSteps,
       browserActions: hasBrowserKeywords ? ['navigate'] : undefined,
       web3Actions: hasWeb3Keywords ? ['query'] : undefined,
-      entities: []
+      entities: [],
     };
   }
 
@@ -264,7 +293,9 @@ Provide your analysis in the required JSON format.`;
    * Generate cache key
    */
   private generateCacheKey(instruction: string, context: Web3Context): string {
-    return `${instruction}_${context.currentChain}_${context.currentAddress || 'disconnected'}`;
+    return `${instruction}_${context.currentChain}_${
+      context.currentAddress || 'disconnected'
+    }`;
   }
 
   /**
@@ -284,7 +315,7 @@ Provide your analysis in the required JSON format.`;
   private setToCache(key: string, analysis: TaskAnalysis): void {
     this.analysisCache.set(key, {
       analysis,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     });
   }
 
@@ -303,29 +334,41 @@ Provide your analysis in the required JSON format.`;
     // Basic stats - could be enhanced with hit tracking
     return {
       size: this.analysisCache.size,
-      hitRate: 0 // Would need hit tracking implementation
+      hitRate: 0, // Would need hit tracking implementation
     };
   }
 
   /**
    * Check if task requires browser automation
    */
-  requiresBrowserAutomation(instruction: string, context: Web3Context): Promise<boolean> {
-    return this.analyzeTask(instruction, context).then(analysis => analysis.requiresBrowserAutomation);
+  requiresBrowserAutomation(
+    instruction: string,
+    context: Web3Context
+  ): Promise<boolean> {
+    return this.analyzeTask(instruction, context).then(
+      (analysis) => analysis.requiresBrowserAutomation
+    );
   }
 
   /**
    * Check if task requires Web3 operations
    */
   requiresWeb3(instruction: string, context: Web3Context): Promise<boolean> {
-    return this.analyzeTask(instruction, context).then(analysis => analysis.requiresWeb3);
+    return this.analyzeTask(instruction, context).then(
+      (analysis) => analysis.requiresWeb3
+    );
   }
 
   /**
    * Get task complexity
    */
-  getTaskComplexity(instruction: string, context: Web3Context): Promise<'low' | 'medium' | 'high'> {
-    return this.analyzeTask(instruction, context).then(analysis => analysis.complexity);
+  getTaskComplexity(
+    instruction: string,
+    context: Web3Context
+  ): Promise<'low' | 'medium' | 'high'> {
+    return this.analyzeTask(instruction, context).then(
+      (analysis) => analysis.complexity
+    );
   }
 }
 

@@ -60,18 +60,20 @@ export class ParallelExecutor {
       retryAttempts: 2,
       enableParallel: true,
       dependencyAware: true,
-      ...options
+      ...options,
     };
 
     this.graph = {
       nodes: [],
-      edges: []
+      edges: [],
     };
 
     this.abortController = new AbortController();
   }
 
-  async executeActions(actions: (ActionStep | FunctionCall)[]): Promise<ExecutionResult[]> {
+  async executeActions(
+    actions: (ActionStep | FunctionCall)[]
+  ): Promise<ExecutionResult[]> {
     if (!this.options.enableParallel || actions.length === 1) {
       // Fall back to sequential execution
       return this.executeSequential(actions);
@@ -80,7 +82,7 @@ export class ParallelExecutor {
     logger.info('Starting parallel execution', {
       actionCount: actions.length,
       maxConcurrency: this.options.maxConcurrency,
-      dependencyAware: this.options.dependencyAware
+      dependencyAware: this.options.dependencyAware,
     });
 
     // Build execution graph
@@ -91,9 +93,10 @@ export class ParallelExecutor {
 
     logger.info('Parallel execution completed', {
       totalActions: actions.length,
-      successful: results.filter(r => r.success).length,
-      failed: results.filter(r => !r.success).length,
-      averageDuration: results.reduce((sum, r) => sum + r.duration, 0) / results.length
+      successful: results.filter((r) => r.success).length,
+      failed: results.filter((r) => !r.success).length,
+      averageDuration:
+        results.reduce((sum, r) => sum + r.duration, 0) / results.length,
     });
 
     return results;
@@ -106,7 +109,7 @@ export class ParallelExecutor {
       status: 'pending',
       dependencies: this.getActionDependencies(action),
       dependents: [],
-      retryCount: 0
+      retryCount: 0,
     }));
 
     // Build dependency edges
@@ -115,15 +118,15 @@ export class ParallelExecutor {
         this.graph.edges.push({
           from: depId,
           to: node.id,
-          type: 'dependency'
+          type: 'dependency',
         });
       }
     }
 
     // Build dependent relationships
     for (const edge of this.graph.edges) {
-      const fromNode = this.graph.nodes.find(n => n.id === edge.from);
-      const toNode = this.graph.nodes.find(n => n.id === edge.to);
+      const fromNode = this.graph.nodes.find((n) => n.id === edge.from);
+      const toNode = this.graph.nodes.find((n) => n.id === edge.to);
       if (fromNode && toNode) {
         fromNode.dependents.push(toNode.id);
       }
@@ -132,7 +135,7 @@ export class ParallelExecutor {
     logger.info('Built execution graph', {
       nodes: this.graph.nodes.length,
       edges: this.graph.edges.length,
-      maxDepth: this.calculateMaxDepth()
+      maxDepth: this.calculateMaxDepth(),
     });
   }
 
@@ -143,18 +146,21 @@ export class ParallelExecutor {
 
     while (executionQueue.length > 0 || activeExecutions > 0) {
       // Start new executions if under concurrency limit
-      while (executionQueue.length > 0 && activeExecutions < this.options.maxConcurrency) {
+      while (
+        executionQueue.length > 0 &&
+        activeExecutions < this.options.maxConcurrency
+      ) {
         const node = executionQueue.shift()!;
         const execution = this.executeNode(node);
-        
+
         this.runningExecutions.set(node.id, execution);
         activeExecutions++;
-        
+
         // Handle completion
         execution.finally(() => {
           activeExecutions--;
           this.runningExecutions.delete(node.id);
-          
+
           // Add newly executable nodes to queue
           const newExecutableNodes = this.getExecutableNodes();
           executionQueue.push(...newExecutableNodes);
@@ -175,8 +181,9 @@ export class ParallelExecutor {
           success: node.status === 'completed',
           result: node.result,
           error: node.error,
-          duration: (node.endTime || Date.now()) - (node.startTime || Date.now()),
-          dependencies: node.dependencies
+          duration:
+            (node.endTime || Date.now()) - (node.startTime || Date.now()),
+          dependencies: node.dependencies,
         });
       }
     }
@@ -192,7 +199,7 @@ export class ParallelExecutor {
         success: false,
         error: 'Execution cancelled',
         duration: 0,
-        dependencies: node.dependencies
+        dependencies: node.dependencies,
       };
     }
 
@@ -203,7 +210,7 @@ export class ParallelExecutor {
       logger.info(`Executing node: ${node.id}`);
 
       let result: any;
-      
+
       if ('type' in node.action) {
         // ActionStep execution
         result = await this.executeActionStep(node.action as ActionStep);
@@ -221,12 +228,12 @@ export class ParallelExecutor {
         success: true,
         result,
         duration: node.endTime - node.startTime!,
-        dependencies: node.dependencies
+        dependencies: node.dependencies,
       };
 
       logger.info(`Node execution completed: ${node.id}`, {
         duration: executionResult.duration,
-        success: true
+        success: true,
       });
 
       return executionResult;
@@ -240,7 +247,7 @@ export class ParallelExecutor {
         success: false,
         error: node.error,
         duration: node.endTime - node.startTime!,
-        dependencies: node.dependencies
+        dependencies: node.dependencies,
       };
 
       logger.error(`Node execution failed: ${node.id}`, error);
@@ -250,7 +257,7 @@ export class ParallelExecutor {
         node.retryCount++;
         node.status = 'pending';
         logger.info(`Retrying node: ${node.id} (attempt ${node.retryCount})`);
-        
+
         // Add back to execution queue
         setTimeout(() => {
           // The node will be picked up in the next execution cycle
@@ -264,43 +271,56 @@ export class ParallelExecutor {
   private async executeActionStep(action: ActionStep): Promise<any> {
     // This would integrate with the existing action execution system
     logger.info(`Executing ActionStep: ${action.type}`, action.params);
-    
+
     // Mock implementation for now
-    await new Promise(resolve => setTimeout(resolve, Math.random() * 1000 + 500));
-    
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.random() * 1000 + 500)
+    );
+
     return {
       actionType: action.type,
       params: action.params,
       result: `Mock result for ${action.type}`,
       success: true,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
   }
 
   private async executeFunctionCall(functionCall: FunctionCall): Promise<any> {
-    logger.info(`Executing FunctionCall: ${functionCall.name}`, functionCall.arguments);
-    
+    logger.info(
+      `Executing FunctionCall: ${functionCall.name}`,
+      functionCall.arguments
+    );
+
     // Validate parameters
-    const validation = toolRegistry.validateParameters(functionCall.name, functionCall.arguments);
+    const validation = toolRegistry.validateParameters(
+      functionCall.name,
+      functionCall.arguments
+    );
     if (!validation.valid) {
-      throw new Error(`Parameter validation failed: ${validation.errors.join(', ')}`);
+      throw new Error(
+        `Parameter validation failed: ${validation.errors.join(', ')}`
+      );
     }
 
     // Execute the function call
-    const result = await toolRegistry.executeTool(functionCall.name, functionCall.arguments);
-    
+    const result = await toolRegistry.executeTool(
+      functionCall.name,
+      functionCall.arguments
+    );
+
     logger.info(`FunctionCall executed successfully: ${functionCall.name}`);
-    
+
     return result;
   }
 
   private getExecutableNodes(): ExecutionNode[] {
-    return this.graph.nodes.filter(node => {
+    return this.graph.nodes.filter((node) => {
       if (node.status !== 'pending') return false;
-      
+
       // Check if all dependencies are completed
-      return node.dependencies.every(depId => {
-        const depNode = this.graph.nodes.find(n => n.id === depId);
+      return node.dependencies.every((depId) => {
+        const depNode = this.graph.nodes.find((n) => n.id === depId);
         return depNode?.status === 'completed';
       });
     });
@@ -310,31 +330,37 @@ export class ParallelExecutor {
     if ('dependencies' in action) {
       return action.dependencies || [];
     }
-    
+
     // For function calls, determine dependencies based on parameter relationships
     const dependencies: string[] = [];
-    
+
     // Example: If a function call needs a transaction hash from a previous call
     if ('name' in action && action.name === 'approveToken') {
       // Look for previous checkBalance calls that might be needed
-      const checkBalanceNodes = this.graph.nodes.filter(node => 
-        'action' in node && 'type' in node.action && node.action.type === 'checkBalance'
+      const checkBalanceNodes = this.graph.nodes.filter(
+        (node) =>
+          'action' in node &&
+          'type' in node.action &&
+          node.action.type === 'checkBalance'
       );
-      dependencies.push(...checkBalanceNodes.map(n => n.id));
+      dependencies.push(...checkBalanceNodes.map((n) => n.id));
     }
-    
+
     return dependencies;
   }
 
-  private getActionId(action: ActionStep | FunctionCall, index: number): string {
+  private getActionId(
+    action: ActionStep | FunctionCall,
+    index: number
+  ): string {
     if ('id' in action && action.id) {
       return action.id;
     }
-    
+
     if ('name' in action && action.name) {
       return `func_${action.name}_${index}_${Date.now()}`;
     }
-    
+
     return `action_${index}_${Date.now()}`;
   }
 
@@ -348,45 +374,49 @@ export class ParallelExecutor {
       }
 
       visited.add(nodeId);
-      const node = this.graph.nodes.find(n => n.id === nodeId);
-      
+      const node = this.graph.nodes.find((n) => n.id === nodeId);
+
       if (!node || node.dependencies.length === 0) {
         depths.set(nodeId, 1);
         return 1;
       }
 
-      const maxDepDepth = Math.max(...node.dependencies.map(depId => calculateDepth(depId)));
+      const maxDepDepth = Math.max(
+        ...node.dependencies.map((depId) => calculateDepth(depId))
+      );
       const depth = maxDepDepth + 1;
       depths.set(nodeId, depth);
-      
+
       return depth;
     };
 
-    return Math.max(...this.graph.nodes.map(node => calculateDepth(node.id)));
+    return Math.max(...this.graph.nodes.map((node) => calculateDepth(node.id)));
   }
 
-  private async executeSequential(actions: (ActionStep | FunctionCall)[]): Promise<ExecutionResult[]> {
+  private async executeSequential(
+    actions: (ActionStep | FunctionCall)[]
+  ): Promise<ExecutionResult[]> {
     const results: ExecutionResult[] = [];
-    
+
     for (let i = 0; i < actions.length; i++) {
       const action = actions[i];
       const startTime = Date.now();
-      
+
       try {
         let result: any;
-        
+
         if ('type' in action) {
           result = await this.executeActionStep(action as ActionStep);
         } else {
           result = await this.executeFunctionCall(action as FunctionCall);
         }
-        
+
         results.push({
           actionId: this.getActionId(action, i),
           success: true,
           result,
           duration: Date.now() - startTime,
-          dependencies: this.getActionDependencies(action)
+          dependencies: this.getActionDependencies(action),
         });
       } catch (error) {
         results.push({
@@ -394,11 +424,11 @@ export class ParallelExecutor {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           duration: Date.now() - startTime,
-          dependencies: this.getActionDependencies(action)
+          dependencies: this.getActionDependencies(action),
         });
       }
     }
-    
+
     return results;
   }
 
@@ -417,10 +447,13 @@ export class ParallelExecutor {
     progress: number;
   } {
     const total = this.graph.nodes.length;
-    const completed = this.graph.nodes.filter(n => n.status === 'completed').length;
-    const running = this.graph.nodes.filter(n => n.status === 'running').length;
-    const failed = this.graph.nodes.filter(n => n.status === 'failed').length;
-    const pending = this.graph.nodes.filter(n => n.status === 'pending').length;
+    const completed = this.graph.nodes.filter((n) => n.status === 'completed')
+      .length;
+    const running = this.graph.nodes.filter((n) => n.status === 'running')
+      .length;
+    const failed = this.graph.nodes.filter((n) => n.status === 'failed').length;
+    const pending = this.graph.nodes.filter((n) => n.status === 'pending')
+      .length;
     const progress = total > 0 ? (completed / total) * 100 : 0;
 
     return {
@@ -429,7 +462,7 @@ export class ParallelExecutor {
       running,
       failed,
       pending,
-      progress
+      progress,
     };
   }
 
@@ -440,7 +473,7 @@ export class ParallelExecutor {
   reset(): void {
     this.graph = {
       nodes: [],
-      edges: []
+      edges: [],
     };
     this.runningExecutions.clear();
     this.abortController = new AbortController();
@@ -460,7 +493,10 @@ export function canExecuteInParallel(
   actions: (ActionStep | FunctionCall)[]
 ): { canParallel: boolean; reason?: string } {
   if (actions.length <= 1) {
-    return { canParallel: false, reason: 'Single action, no benefit from parallel execution' };
+    return {
+      canParallel: false,
+      reason: 'Single action, no benefit from parallel execution',
+    };
   }
 
   // Check for actions that must be sequential
@@ -470,17 +506,21 @@ export function canExecuteInParallel(
     // Balance check should come before transactions
     { before: 'checkBalance', after: 'sendTransaction' },
     // Network switch should come before chain-specific operations
-    { before: 'switchNetwork', after: 'sendTransaction' }
+    { before: 'switchNetwork', after: 'sendTransaction' },
   ];
 
   for (const pattern of sequentialPatterns) {
-    const beforeIndex = actions.findIndex(a => 'type' in a && a.type === pattern.before);
-    const afterIndex = actions.findIndex(a => 'type' in a && a.type === pattern.after);
-    
+    const beforeIndex = actions.findIndex(
+      (a) => 'type' in a && a.type === pattern.before
+    );
+    const afterIndex = actions.findIndex(
+      (a) => 'type' in a && a.type === pattern.after
+    );
+
     if (beforeIndex !== -1 && afterIndex !== -1 && beforeIndex > afterIndex) {
-      return { 
-        canParallel: false, 
-        reason: `${pattern.after} must come after ${pattern.before}` 
+      return {
+        canParallel: false,
+        reason: `${pattern.after} must come after ${pattern.before}`,
       };
     }
   }
@@ -494,15 +534,26 @@ export function optimizeExecutionOrder(
   if (actions.length <= 1) return actions;
 
   // Group actions by type and dependencies
-  const readActions = actions.filter(a => 
-    'type' in a && ['checkBalance', 'getNFTs', 'getTransactionHistory', 'getGasPrice'].includes(a.type)
-  );
-  
-  const writeActions = actions.filter(a => 
-    'type' in a && ['sendTransaction', 'approveToken', 'swapTokens', 'stakeTokens'].includes(a.type)
+  const readActions = actions.filter(
+    (a) =>
+      'type' in a &&
+      [
+        'checkBalance',
+        'getNFTs',
+        'getTransactionHistory',
+        'getGasPrice',
+      ].includes(a.type)
   );
 
-  const functionCalls = actions.filter(a => 'name' in a);
+  const writeActions = actions.filter(
+    (a) =>
+      'type' in a &&
+      ['sendTransaction', 'approveToken', 'swapTokens', 'stakeTokens'].includes(
+        a.type
+      )
+  );
+
+  const functionCalls = actions.filter((a) => 'name' in a);
 
   // Optimal order: reads -> function calls -> writes
   return [...readActions, ...functionCalls, ...writeActions];
