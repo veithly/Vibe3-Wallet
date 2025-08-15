@@ -6,7 +6,7 @@ import {
 } from '@ethereumjs/util';
 import { ethErrors } from 'eth-rpc-errors';
 import { ethers, Contract } from 'ethers';
-import { groupBy, isEqual, pick, sortBy, truncate, uniq } from 'lodash';
+import { groupBy, isEqual, pick, sortBy, uniq } from 'lodash';
 import abiCoder, { AbiCoder } from 'web3-eth-abi';
 import {
   keyringService,
@@ -37,10 +37,7 @@ import buildinProvider, {
 } from '@/background/utils/buildinProvider';
 import { openIndexPage } from '@/background/webapi/tab';
 import { CacheState } from '@/background/service/pageStateCache';
-import {
-  DisplayedKeryring,
-  KeyringService,
-} from '@/background/service/keyring';
+import { DisplayedKeryring } from '@/background/service/keyring';
 import providerController from './provider/controller';
 import BaseController from './base';
 import {
@@ -86,13 +83,8 @@ import KeystoneKeyring, {
 } from '../service/keyring/eth-keystone-keyring';
 import WatchKeyring from '@rabby-wallet/eth-watch-keyring';
 import stats from '@/stats';
-import {
-  generateAliasName,
-  isFullVersionAccountType,
-  isSameAccount,
-} from '@/utils/account';
+import { generateAliasName, isSameAccount } from '@/utils/account';
 import BigNumber from 'bignumber.js';
-import * as Sentry from '@sentry/browser';
 import PQueue from 'p-queue';
 import { ProviderRequest } from './provider/type';
 import { QuoteResult } from '@rabby-wallet/rabby-swap/dist/quote';
@@ -453,21 +445,7 @@ export class WalletController extends BaseController {
         await postGasStationOrder();
         reportGasTopUpPostGasStationOrder();
       } catch (error) {
-        Sentry.captureException(
-          new Error(
-            'postGasStationOrder failed, params: ' +
-              JSON.stringify({
-                userAddr: account.address,
-                fromChainId: others.chainServerId,
-                fromTxId: txId,
-                toChainId: toChainId,
-                toTokenAmount,
-                fromTokenId: others.tokenId,
-                fromTokenAmount: fromTokenAmount,
-                fromUsdValue,
-              })
-          )
-        );
+        console.error('controller/wallet.ts');
       }
     }
   };
@@ -2960,9 +2938,7 @@ export class WalletController extends BaseController {
       });
 
       keyring.on('transport_error', (data) => {
-        Sentry.captureException(
-          new Error('Transport error: ' + JSON.stringify(data))
-        );
+        console.error('transport_error');
       });
 
       keyring.on('statusChange', (data) => {
@@ -2995,7 +2971,6 @@ export class WalletController extends BaseController {
       });
       keyring.on('error', (error) => {
         console.error(error);
-        Sentry.captureException(error);
       });
     }
     this._currentWalletConnectStashId = stashId;
@@ -5217,17 +5192,7 @@ export class WalletController extends BaseController {
         nonce: nonce! - 1,
       });
     } else {
-      Sentry.captureException(
-        new Error(
-          'topUp GasAccount tx failed, params: ' +
-            JSON.stringify({
-              userAddr: account.address,
-              gasAccount: accountId,
-              chain: chainServerId,
-              amount: amount,
-            })
-        )
-      );
+      console.error('tx error');
     }
   };
 

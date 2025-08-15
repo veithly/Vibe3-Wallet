@@ -11,7 +11,6 @@ import providerController from './controller';
 import eventBus from '@/eventBus';
 import { resemblesETHAddress } from '@/utils';
 import { ProviderRequest } from './type';
-import * as Sentry from '@sentry/browser';
 import stats from '@/stats';
 import { addHexPrefix, intToHex, stripHexPrefix } from '@ethereumjs/util';
 import { findChain } from '@/utils/chain';
@@ -369,7 +368,6 @@ const flowContext = flow
                 payload.params = e.message;
               }
 
-              Sentry.captureException(e);
               if (isSignApproval(approvalType)) {
                 eventBus.emit(EVENTS.broadcastToUI, payload);
               }

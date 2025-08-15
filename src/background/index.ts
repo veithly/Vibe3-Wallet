@@ -6,7 +6,6 @@ import { appIsDev, getSentryEnv, isManifestV3 } from '@/utils/env';
 import { matomoRequestEvent } from '@/utils/matomo-request';
 import { Message, sendReadyMessageToTabs } from '@/utils/message';
 import Safe from '@rabby-wallet/gnosis-sdk';
-import * as Sentry from '@sentry/browser';
 import fetchAdapter from '@vespaiach/axios-fetch-adapter';
 import { WalletController } from '@/background/controller/wallet';
 import {
@@ -66,24 +65,6 @@ dayjs.extend(utc);
 const { PortMessage } = Message;
 
 let appStoreLoaded = false;
-
-Sentry.init({
-  dsn:
-    'https://f4a992c621c55f48350156a32da4778d@o4507018303438848.ingest.us.sentry.io/4507018389749760',
-  release: process.env.release,
-  environment: getSentryEnv(),
-  ignoreErrors: [
-    'Transport error: {"event":"transport_error","params":["Websocket connection failed"]}',
-    'Failed to fetch',
-    'TransportOpenUserCancelled',
-    'Non-Error promise rejection captured with keys: message, stack',
-    'Non-Error promise rejection captured with keys: message',
-    /Non-Error promise rejection captured with keys/,
-    /\[From .*\]/, // error from custom rpc
-    /AxiosError/,
-    /WebSocket connection failed/,
-  ],
-});
 
 async function restoreAppState() {
   await onInstall();

@@ -5,7 +5,6 @@ const path = require('path');
 const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const TSConfigPathsPlugin = require('tsconfig-paths-webpack-plugin');
-const ESLintWebpackPlugin = require('eslint-webpack-plugin');
 const tsImportPluginFactory = require('ts-import-plugin');
 // const AssetReplacePlugin = require('./plugins/AssetReplacePlugin');
 const CopyPlugin = require('copy-webpack-plugin');
@@ -45,8 +44,8 @@ const FINAL_DIST = IS_MANIFEST_MV3 ? paths.dist : paths.distMv2;
 const IS_FIREFOX = MANIFEST_TYPE.includes('firefox');
 
 const removeRawPrefix = (content, path) => {
-        return content;
-      }
+  return content;
+};
 
 const config = {
   entry: {
@@ -212,9 +211,6 @@ const config = {
     ],
   },
   plugins: [
-    new ESLintWebpackPlugin({
-      extensions: ['ts', 'tsx', 'js', 'jsx'],
-    }),
     // new AntdDayjsWebpackPlugin(),
     new HtmlWebpackPlugin({
       inject: true,
@@ -252,7 +248,7 @@ const config = {
       filename: 'agent.html',
       chunks: ['agent-sidebar'],
     }),
-      new webpack.ProvidePlugin({
+    new webpack.ProvidePlugin({
       Buffer: ['buffer', 'Buffer'],
       process: 'process',
       dayjs: 'dayjs',

@@ -33,20 +33,15 @@ import i18n from '@/i18n';
 import GasSelectorHeader, {
   GasSelectorResponse,
 } from '../TxComponents/GasSelectorHeader';
-import { MessageWrapper } from '../TextActions';
-import { Card } from '../Card';
 import { SignAdvancedSettings } from '../SignAdvancedSettings';
 import clsx from 'clsx';
 import { Modal } from 'antd';
 import { ga4 } from '@/utils/ga4';
 import { TestnetActions } from './Actions';
 import {
-  ActionRequireData,
   fetchActionRequiredData,
   parseAction,
-  ParsedTransactionActionData,
 } from '@rabby-wallet/rabby-action';
-import * as Sentry from '@sentry/browser';
 import { getCexInfo } from '@/ui/models/exchange';
 
 const checkGasAndNonce = ({
@@ -499,7 +494,6 @@ export const SignTestnetTx = ({
           },
         });
       }
-      Sentry.captureException(e);
     }
   };
 
@@ -609,7 +603,6 @@ export const SignTestnetTx = ({
           content: e.message || JSON.stringify(e),
           className: 'modal-support-darkmode',
         });
-        Sentry.captureException(e);
       },
     }
   );
