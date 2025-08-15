@@ -18,7 +18,7 @@ import {
   useStreamingMessage,
 } from './components/StreamingMessage';
 import { AgentStatus, useAgentStatus } from './components/AgentStatus';
-import { Message, Actors } from './types/message';
+import { Message, Actors, ReActStatusMessage } from './types/message';
 import { EventType, AgentEvent, ExecutionState } from './types/event';
 import { chatHistoryStore } from '@/background/service/agent/chatHistory';
 import favoritesStorage from '@/background/service/agent/storage/favorites';
@@ -77,6 +77,7 @@ export const SidePanelApp = () => {
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(
     null
   );
+  const [reactStatus, setReactStatus] = useState<ReActStatusMessage | null>(null);
   const portRef = useRef<chrome.runtime.Port | null>(null);
   const heartbeatIntervalRef = useRef<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -111,6 +112,34 @@ export const SidePanelApp = () => {
     [currentSessionId]
   );
 
+  // ReAct state management functions
+  const updateReActStatus = useCallback((newStatus: Partial<ReActStatusMessage>) => {
+    const updatedStatus: ReActStatusMessage = {
+      isThinking: false,
+      isActing: false,
+      currentStep: 0,
+      maxSteps: 5,
+      isActive: false,
+      timestamp: Date.now(),
+      ...reactStatus,
+      ...newStatus
+    };
+    setReactStatus(updatedStatus);
+    
+    // Also add ReAct status as a message to the message list
+    appendMessage({
+      actor: Actors.SYSTEM,
+      content: updatedStatus.thinkingContent || 'Processing...',
+      timestamp: Date.now(),
+      messageType: 'react_status',
+      reactStatus: updatedStatus
+    });
+  }, [reactStatus, appendMessage]);
+
+  const resetReActStatus = useCallback(() => {
+    setReactStatus(null);
+  }, []);
+
   // Memoized task state handler with stable appendMessage dependency
   const handleTaskState = useCallback(
     (event: AgentEvent) => {
@@ -128,6 +157,7 @@ export const SidePanelApp = () => {
           setInputEnabled(true);
           setShowStopButton(false);
           setIsReplaying(false);
+          resetReActStatus();
         }
         if (state === ExecutionState.TASK_OK) {
           setIsFollowUpMode(true);
@@ -142,7 +172,7 @@ export const SidePanelApp = () => {
         });
       }
     },
-    [appendMessage]
+    [appendMessage, resetReActStatus]
   );
 
   // Helper function to log connection events
@@ -303,6 +333,42 @@ export const SidePanelApp = () => {
           logEvent('streaming_error', {
             taskId: message.taskId,
             error: message.error,
+          });
+        } else if (message && message.type === 'thinking') {
+          // Handle thinking/ReAct messages
+          appendMessage({
+            actor: Actors.SYSTEM,
+            content: message.data.details,
+            timestamp: Date.now(),
+            messageType: 'thinking',
+            thinking: [{
+              step: 1,
+              content: message.data.details,
+              type: message.data.thinkingType || 'thinking',
+              timestamp: Date.now(),
+            }],
+          });
+        } else if (message && message.type === 'react_status') {
+          // Handle ReAct status messages
+          const reactStatusData: ReActStatusMessage = {
+            isThinking: message.data.isThinking || false,
+            isActing: message.data.isActing || false,
+            currentStep: message.data.currentStep || 1,
+            maxSteps: message.data.maxSteps || 5,
+            currentAction: message.data.currentAction,
+            thinkingContent: message.data.thinkingContent,
+            isActive: message.data.isActive || false,
+            timestamp: Date.now(),
+          };
+          setReactStatus(reactStatusData);
+          
+          // Also add as a message to the message list
+          appendMessage({
+            actor: Actors.SYSTEM,
+            content: reactStatusData.thinkingContent || 'Processing...',
+            timestamp: Date.now(),
+            messageType: 'react_status',
+            reactStatus: reactStatusData
           });
         } else if (message && message.type === 'agent_capabilities') {
           // Update agent capabilities
@@ -802,6 +868,16 @@ export const SidePanelApp = () => {
         setShowStopButton(true);
         logger.debug(COMPONENT_NAME, 'UI state updated');
 
+        // Initialize ReAct status
+        updateReActStatus({
+          isActive: true,
+          isThinking: true,
+          isActing: false,
+          currentStep: 1,
+          maxSteps: 5,
+          thinkingContent: 'Analyzing your request...'
+        });
+
         // Create session and message
         const { sessionId, userMessage } = createSessionAndMessage(text);
         logger.debug(COMPONENT_NAME, 'Created session and message', {
@@ -845,6 +921,7 @@ export const SidePanelApp = () => {
         // Reset UI state on error
         setInputEnabled(true);
         setShowStopButton(false);
+        resetReActStatus();
 
         appendMessage({
           actor: Actors.SYSTEM,

@@ -11,7 +11,7 @@ import {
   FunctionCall,
 } from './types';
 import type { BaseChatModel as IBaseChatModel } from './messages';
-import { BaseMessage, HumanMessage } from './messages';
+import { BaseMessage, HumanMessage, AIMessage, ToolMessage } from './messages';
 import { Web3Intent } from '../intent/IntentRecognizer';
 import { toolRegistry } from '../tools/ToolRegistry';
 import {
@@ -89,6 +89,9 @@ class RealChatModel implements IBaseChatModel {
   }
 
   private async invokeOpenAI(messages: any[]): Promise<any> {
+    // Convert internal BaseMessage[] into OpenAI Chat Completions schema with tools
+    const { payloadMessages, tools } = this.transformToOpenAI(messages);
+
     const response = await fetch(
       `${this.baseUrl || 'https://api.openai.com/v1'}/chat/completions`,
       {
@@ -99,11 +102,10 @@ class RealChatModel implements IBaseChatModel {
         },
         body: JSON.stringify({
           model: this._modelName,
-          messages: messages.map((msg) => ({
-            role: msg.role || 'user',
-            content: msg.content,
-          })),
+          messages: payloadMessages,
           temperature: this._temperature,
+          tools: tools.length ? tools : undefined,
+          tool_choice: tools.length ? 'auto' : undefined,
           ...this.parameters,
         }),
       }
@@ -116,9 +118,12 @@ class RealChatModel implements IBaseChatModel {
     }
 
     const data = await response.json();
+    const msg = data.choices?.[0]?.message || {};
     return {
-      content: data.choices[0]?.message?.content || '',
+      content: msg.content || '',
       usage: data.usage,
+      tool_calls: msg.tool_calls || [],
+      role: msg.role,
     };
   }
 
@@ -484,6 +489,42 @@ class RealChatModel implements IBaseChatModel {
   _llmType(): string {
     return `real-${this.provider}`;
   }
+
+  // Transform internal messages to OpenAI schema with tools support
+  private transformToOpenAI(
+    messages: any[]
+  ): { payloadMessages: any[]; tools: any[] } {
+    const payloadMessages: any[] = [];
+    for (const msg of messages) {
+      if (msg.type === 'system') {
+        payloadMessages.push({ role: 'system', content: msg.content });
+      } else if (msg.type === 'human' || msg.type === 'user') {
+        payloadMessages.push({ role: 'user', content: msg.content });
+      } else if (msg.type === 'ai' || msg.type === 'assistant') {
+        const entry: any = { role: 'assistant', content: msg.content };
+        if (msg.additional_kwargs?.tool_calls) {
+          entry.tool_calls = msg.additional_kwargs.tool_calls;
+        }
+        payloadMessages.push(entry);
+      } else if (msg.type === 'tool') {
+        const tool_call_id = msg.additional_kwargs?.tool_call_id;
+        payloadMessages.push({
+          role: 'tool',
+          content:
+            typeof msg.content === 'string'
+              ? msg.content
+              : JSON.stringify(msg.content),
+          tool_call_id,
+        });
+      } else {
+        payloadMessages.push({ role: 'user', content: msg.content });
+      }
+    }
+
+    // Tools may be injected by wrapper via a private field
+    const tools: any[] = (this as any)._pending_tools || [];
+    return { payloadMessages, tools };
+  }
 }
 
 // Enhanced Web3LLM class with function calling and streaming support
@@ -527,11 +568,14 @@ class Web3LLM implements IWeb3LLM {
     });
 
     try {
-      if (this._supportsFunctionCalling && tools && tools.length > 0) {
+      // Prefer function calling whenever model supports it. If caller didn't provide tools,
+      // fall back to all available tool schemas from the registry.
+      const effectiveTools = (tools && tools.length > 0) ? tools : this.getAvailableTools();
+      if (this._supportsFunctionCalling && effectiveTools.length > 0) {
         return await this.generateFunctionCallingResponse(
           messages,
           context,
-          tools,
+          effectiveTools,
           intent
         );
       } else {
@@ -616,51 +660,394 @@ class Web3LLM implements IWeb3LLM {
     return toolRegistry.getFunctionSchemas();
   }
 
+  // Internal: attach OpenAI tools for RealChatModel when provider supports it
+  private attachToolsForProvider(tools?: FunctionSchema[]) {
+    if (!tools || tools.length === 0) return;
+    const openaiTools = toolRegistry.getOpenAITools();
+
+    // Always set on Web3LLM wrapper for reference
+    (this as any)._pending_tools = openaiTools;
+
+    // Case 1: RealChatModel (has transformToOpenAI/invokeOpenAI)
+    if (
+      (this.model as any).transformToOpenAI ||
+      (this.model as any).invokeOpenAI
+    ) {
+      (this.model as any)._pending_tools = openaiTools;
+      return;
+    }
+
+    // Case 2: LangChainAdapter wrapping a provider model (e.g., ChatOpenAI)
+    // Set pending tools on the adapter and the underlying provider model
+    (this.model as any)._pending_tools = openaiTools; // read by LangChainAdapter.invoke
+    if ((this.model as any).model) {
+      (this.model as any).model._pending_tools = openaiTools; // for safety
+      if (typeof (this.model as any).model.bind === 'function') {
+        try {
+          (this.model as any).model = (this.model as any).model.bind({ tools: openaiTools, tool_choice: 'auto' });
+        } catch {}
+      }
+    }
+  }
+
   private async generateFunctionCallingResponse(
     messages: BaseMessage[],
     context: Web3Context,
     tools: FunctionSchema[],
     intent?: Web3Intent
   ): Promise<LLMResponse> {
-    // Create enhanced prompt with function calling capabilities
-    const prompt = this.createFunctionCallingPrompt(
-      messages,
-      context,
-      tools,
-      intent
-    );
+    // Check if ReAct pattern is enabled
+    const enableReAct = this.shouldUseReActPattern(tools, intent);
+    
+    if (enableReAct) {
+      return await this.generateReActResponse(messages, context, tools, intent);
+    }
+    
+    // Use existing single-turn function calling
+    return await this.generateSingleTurnFunctionCallingResponse(messages, context, tools, intent);
+  }
 
-    // Generate response from LLM
-    const llmResponse = await this.model.invoke([new HumanMessage(prompt)]);
-    const responseText = llmResponse.content as string;
+  private shouldUseReActPattern(tools: FunctionSchema[], intent?: Web3Intent): boolean {
+    // Enable ReAct for complex tasks that likely require multiple steps
+    const complexTasks = [
+      'swap', 'bridge', 'stake', 'unstake', 'defi', 'liquidity',
+      'compound', 'yield', 'farm', 'protocol', 'strategy'
+    ];
+    
+    const isComplexTask = intent?.action && 
+      complexTasks.some(task => intent.action.toLowerCase().includes(task));
+    
+    const hasMultipleTools = tools.length > 1;
+    
+    // Enable ReAct for complex tasks or when multiple tools are available
+    return isComplexTask || hasMultipleTools;
+  }
 
-    // Parse function calls from response
-    const functionCalls = this.parseFunctionCalls(responseText, tools);
-
-    // Extract actions from function calls
-    const actions = this.convertFunctionCallsToActions(functionCalls);
-
-    // Extract thinking and response
-    const thinking = this.extractThinking(responseText);
-    const reply = this.extractReply(responseText);
-
-    // Calculate confidence
-    const confidence = this.calculateConfidence(actions, responseText);
-
-    logger.info('Function calling response generated successfully', {
-      responseLength: responseText.length,
-      functionCallsCount: functionCalls.length,
-      actionsCount: actions.length,
+  private async generateReActResponse(
+    messages: BaseMessage[],
+    context: Web3Context,
+    tools: FunctionSchema[],
+    intent?: Web3Intent
+  ): Promise<LLMResponse> {
+    const maxSteps = 5;
+    let currentMessages = [...messages];
+    let finalResponse = '';
+    let allActions: LLMAction[] = [];
+    let allFunctionCalls: FunctionCall[] = [];
+    
+    logger.info('Starting ReAct reasoning loop', {
+      maxSteps,
+      toolsCount: tools.length,
+      intent: intent?.action
+    });
+    
+    for (let step = 0; step < maxSteps; step++) {
+      logger.debug(`ReAct Step ${step + 1}/${maxSteps}`);
+      
+      // Step 1: Reasoning - What should I do next?
+      const reasoningResult = await this.performReActReasoning(
+        currentMessages,
+        context,
+        tools,
+        intent,
+        step,
+        maxSteps
+      );
+      
+      // Add reasoning to conversation
+      currentMessages.push(new AIMessage(reasoningResult.content));
+      
+      // Step 2: Action - Execute function calls if any
+      const functionCalls = this.parseFunctionCalls(reasoningResult.content, tools);
+      
+      if (functionCalls.length > 0) {
+        logger.debug(`Executing ${functionCalls.length} function calls in step ${step + 1}`);
+        
+        // Execute tools and get results
+        const toolResults = await this.executeToolCalls(functionCalls);
+        
+        // Add action and results to conversation
+        currentMessages.push(new AIMessage(
+          `Executing ${functionCalls.length} actions: ${functionCalls.map(fc => fc.name).join(', ')}`,
+          { tool_calls: functionCalls.map(fc => ({
+            id: fc.id || `call_${step}_${Date.now()}`,
+            type: 'function',
+            function: {
+              name: fc.name,
+              arguments: JSON.stringify(fc.arguments)
+            }
+          })) }
+        ));
+        
+        // Add tool results as ToolMessage objects
+        currentMessages.push(...toolResults);
+        
+        // Convert to actions and function calls
+        const actions = this.convertFunctionCallsToActions(functionCalls);
+        allActions.push(...actions);
+        allFunctionCalls.push(...functionCalls);
+        
+        // Check if we should continue (tool results might indicate we need more steps)
+        const shouldContinue = this.shouldContinueReActLoop(toolResults, step, maxSteps);
+        if (!shouldContinue) {
+          finalResponse = reasoningResult.content;
+          break;
+        }
+      } else {
+        // No more actions needed, generate final response
+        logger.debug(`No function calls in step ${step + 1}, completing ReAct loop`);
+        finalResponse = await this.generateFinalResponse(currentMessages, context, intent);
+        break;
+      }
+    }
+    
+    // If we exhausted all steps, generate a summary response
+    if (!finalResponse) {
+      finalResponse = `I've completed ${allActions.length} actions across ${maxSteps} steps. ${allActions.map(a => a.type).join(', ')}`;
+    }
+    
+    const confidence = this.calculateConfidence(allActions, finalResponse);
+    
+    logger.info('ReAct response generated successfully', {
+      steps: Math.min(maxSteps, allFunctionCalls.length > 0 ? Math.min(maxSteps, allFunctionCalls.length) : 1),
+      totalActions: allActions.length,
+      totalFunctionCalls: allFunctionCalls.length,
+      confidence
+    });
+    
+    return {
+      response: finalResponse,
+      actions: allActions,
       confidence,
+      thinking: `ReAct reasoning completed with ${allActions.length} actions`,
+      functionCalls: allFunctionCalls,
+    };
+  }
+
+  private async performReActReasoning(
+    messages: BaseMessage[],
+    context: Web3Context,
+    tools: FunctionSchema[],
+    intent: Web3Intent | undefined,
+    currentStep: number,
+    maxSteps: number
+  ): Promise<{ content: string }> {
+    const systemPrompt = this.createReActSystemPrompt(context, tools, intent, currentStep, maxSteps);
+    const userPrompt = this.createReActUserPrompt(messages, context, currentStep, maxSteps);
+    
+    // Create proper message array with system prompt
+    const reasoningMessages: BaseMessage[] = [
+      new (await import('../llm/messages')).SystemMessage(systemPrompt),
+      ...messages.slice(-10), // Include recent conversation history
+      new (await import('../llm/messages')).HumanMessage(userPrompt)
+    ];
+    
+    const result = await this.model.invoke(reasoningMessages);
+    return {
+      content: result.content as string
+    };
+  }
+
+  private createReActSystemPrompt(
+    context: Web3Context,
+    tools: FunctionSchema[],
+    intent: Web3Intent | undefined,
+    currentStep: number,
+    maxSteps: number
+  ): string {
+    return `You are Vibe3 AI, an intelligent Web3 assistant using ReAct (Reasoning + Action) pattern.
+
+Current Step: ${currentStep + 1} of ${maxSteps}
+Task: ${intent?.action || 'General Web3 assistance'}
+
+ReAct Pattern Instructions:
+1. **Reason**: Analyze the current situation and decide what action to take next
+2. **Action**: Use function calls to execute your decisions
+3. **Observation**: Review the results and determine if more steps are needed
+
+Available Tools:
+${this.formatToolsForPrompt(tools)}
+
+Current Context:
+- Network: ${context.currentChain}
+- Address: ${context.currentAddress}
+- Risk Level: ${context.riskLevel}
+- Balance: ${Object.entries(context.balances).map(([token, amount]) => `${token}: ${amount}`).join(', ')}
+
+Guidelines:
+- Think step by step about what information you need
+- Use tools to gather information and execute actions
+- Stop when you have enough information to provide a complete answer
+- Be concise in your reasoning
+- Always explain what you're doing and why
+
+If no more actions are needed, respond with "COMPLETE" and provide your final answer.`;
+  }
+
+  private createReActUserPrompt(
+    messages: BaseMessage[],
+    context: Web3Context,
+    currentStep: number,
+    maxSteps: number
+  ): string {
+    const recentHistory = messages.slice(-5).map(msg => {
+      const role = msg.type === 'human' ? 'User' : 'Assistant';
+      return `${role}: ${msg.content}`;
+    }).join('\n');
+    
+    return `Step ${currentStep + 1}/${maxSteps}
+
+Recent Conversation:
+${recentHistory}
+
+What action should I take next? If I need to use tools, specify which ones and with what parameters. If I have enough information, respond with "COMPLETE" and provide the final answer.`;
+  }
+
+  private async executeToolCalls(functionCalls: FunctionCall[]): Promise<BaseMessage[]> {
+    const results: BaseMessage[] = [];
+    
+    for (const call of functionCalls) {
+      try {
+        const tool = toolRegistry.getTool(call.name);
+        if (!tool) {
+          throw new Error(`Tool ${call.name} not found`);
+        }
+        
+        logger.debug(`Executing tool: ${call.name}`, call.arguments);
+        
+        const result = await tool.handler(call.arguments);
+        
+        results.push(new ToolMessage({
+          content: JSON.stringify(result),
+          name: call.name,
+          tool_call_id: call.id || `call_${Date.now()}`
+        }));
+        
+        logger.debug(`Tool ${call.name} executed successfully`);
+        
+      } catch (error) {
+        logger.error(`Tool ${call.name} execution failed:`, error);
+        
+        results.push(new (await import('../llm/messages')).ToolMessage({
+          content: JSON.stringify({ error: error.message }),
+          name: call.name,
+          tool_call_id: call.id || `call_${Date.now()}`
+        }));
+      }
+    }
+    
+    return results;
+  }
+
+  private shouldContinueReActLoop(
+    toolResults: BaseMessage[],
+    currentStep: number,
+    maxSteps: number
+  ): boolean {
+    // Stop if we've reached max steps
+    if (currentStep >= maxSteps - 1) {
+      return false;
+    }
+    
+    // Check if any tool results indicate we should continue
+    for (const result of toolResults) {
+      try {
+        const content = JSON.parse(result.content);
+        
+        // Continue if we got incomplete data or need more information
+        if (content.requiresMoreInfo || content.incomplete || content.needsFollowUp) {
+          return true;
+        }
+        
+        // Stop if we got a definitive result
+        if (content.complete || content.success || content.final) {
+          return false;
+        }
+        
+      } catch (error) {
+        // If we can't parse the result, continue to be safe
+        return true;
+      }
+    }
+    
+    // Default: continue if we have more steps available
+    return currentStep < maxSteps - 1;
+  }
+
+  private async generateFinalResponse(
+    messages: BaseMessage[],
+    context: Web3Context,
+    intent?: Web3Intent
+  ): Promise<string> {
+    const finalPrompt = `Based on the conversation and tool results, provide a comprehensive final answer to the user's request.
+
+Context:
+- Network: ${context.currentChain}
+- Address: ${context.currentAddress}
+- Task: ${intent?.action || 'General assistance'}
+
+Summarize what you've accomplished and provide any additional insights or recommendations.`;
+    
+    const finalMessages: BaseMessage[] = [
+      ...messages.slice(-10),
+      new (await import('../llm/messages')).HumanMessage(finalPrompt)
+    ];
+    
+    const result = await this.model.invoke(finalMessages);
+    return result.content as string;
+  }
+
+  private async generateSingleTurnFunctionCallingResponse(
+    messages: BaseMessage[],
+    context: Web3Context,
+    tools: FunctionSchema[],
+    intent?: Web3Intent
+  ): Promise<LLMResponse> {
+    // Build role-separated messages using PromptManager outputs (assumed provided upstream)
+    // Here we send the messages directly and rely on provider-native tool calling
+    // Attach provider-native tool schema if supported
+    this.attachToolsForProvider(tools);
+    const llmRaw = await this.model.invoke(messages as any);
+
+    // If provider exposed tool_calls, convert to our FunctionCall[]
+    let toolCalls = (llmRaw.tool_calls || []).map((tc: any) => ({
+      name: tc.function?.name,
+      arguments: this.tryParseJson(tc.function?.arguments) ?? {},
+      id: tc.id,
+    }));
+
+    const reply = llmRaw.content ?? '';
+    // Fallback: try to parse function calls from textual reply if provider returned none
+    if ((!toolCalls || toolCalls.length === 0) && reply) {
+      const legacyParsed = this.parseFunctionCalls(reply, tools);
+      if (legacyParsed.length > 0) {
+        toolCalls = legacyParsed;
+      }
+    }
+
+    const actions = this.convertFunctionCallsToActions(toolCalls);
+    const confidence = this.calculateConfidence(actions, reply);
+
+    logger.info('Single-turn function calling response generated successfully', {
+      toolCalls: toolCalls.length,
+      actions: actions.length,
     });
 
     return {
       response: reply,
       actions,
       confidence,
-      thinking,
-      functionCalls,
+      thinking: '',
+      functionCalls: toolCalls,
     };
+  }
+  private tryParseJson(text: any): any {
+    if (typeof text !== 'string') return text;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return undefined;
+    }
   }
 
   private async generateLegacyResponse(
@@ -761,64 +1148,47 @@ class Web3LLM implements IWeb3LLM {
     tools: FunctionSchema[],
     intent?: Web3Intent
   ): string {
-    const availableTools = tools || this.getAvailableTools();
+    // Deprecated: We no longer generate a monolithic user prompt for function calling.
+    // Prompts must be built upstream by PromptManager into proper System/Human/AI/Tool messages,
+    // and tools must be provided via the tools array (OpenAI function schema) — not embedded in user content.
+    // Keeping this function to avoid breaking imports; it should not be used.
+    return (messages[messages.length - 1]?.content as string) || '';
+  }
 
-    const systemPrompt = `You are Vibe3 AI, an intelligent Web3 assistant with advanced function calling capabilities.
-
-Your capabilities include:
-- Understanding complex Web3 instructions and breaking them down into function calls
-- Using available tools to execute blockchain operations
-- Providing clear explanations of operations, risks, and costs
-- Maintaining security awareness and guiding users through safe practices
-
-Key principles:
-1. **Security First**: Always verify contract addresses, warn about high-risk operations
-2. **Transparency**: Clearly explain fees, slippage, and estimated times
-3. **Efficiency**: Use the most appropriate tools for each task
-4. **User Control**: Never proceed without user confirmation for significant operations
-
-Available Tools:
-${this.formatToolsForPrompt(availableTools)}
-
-When responding:
-1. Use natural language to explain what you're doing
-2. Call functions when you need to execute operations
-3. Provide clear explanations of the results
-4. Ask for confirmation when needed
-
-Example response format:
-{
-  "thinking": "I need to check the user's ETH balance before proceeding with the swap",
-  "actions": [
-    {
-      "type": "checkBalance",
-      "params": {"address": "0x..."}
+  // Transform internal messages to OpenAI schema with tools support
+  private transformToOpenAI(
+    messages: any[]
+  ): { payloadMessages: any[]; tools: any[] } {
+    const payloadMessages: any[] = [];
+    for (const msg of messages) {
+      if (msg.type === 'system') {
+        payloadMessages.push({ role: 'system', content: msg.content });
+      } else if (msg.type === 'human' || msg.type === 'user') {
+        payloadMessages.push({ role: 'user', content: msg.content });
+      } else if (msg.type === 'ai' || msg.type === 'assistant') {
+        const entry: any = { role: 'assistant', content: msg.content };
+        if (msg.additional_kwargs?.tool_calls) {
+          entry.tool_calls = msg.additional_kwargs.tool_calls;
+        }
+        payloadMessages.push(entry);
+      } else if (msg.type === 'tool') {
+        const tool_call_id = msg.additional_kwargs?.tool_call_id;
+        payloadMessages.push({
+          role: 'tool',
+          content:
+            typeof msg.content === 'string'
+              ? msg.content
+              : JSON.stringify(msg.content),
+          tool_call_id,
+        });
+      } else {
+        payloadMessages.push({ role: 'user', content: msg.content });
+      }
     }
-  ],
-  "confidence": 0.9,
-  "reply": "Let me check your current ETH balance first..."
-}`;
 
-    // Format conversation history
-    const conversationHistory = this.formatConversation(messages);
-
-    // Format current context
-    const formattedContext = this.formatContext(context);
-
-    // Format user message
-    const userMessage = messages[messages.length - 1].content as string;
-
-    return `${systemPrompt}
-
-${conversationHistory}
-
-=== CURRENT WEB3 CONTEXT ===
-${formattedContext}
-
-=== USER INSTRUCTION ===
-${userMessage}
-
-Please respond with a JSON object containing your thinking process and any function calls you want to make.`;
+    // Supply tools if present on the last assistant message; otherwise caller should inject via parameters
+    const tools: any[] = (this as any)._pending_tools || [];
+    return { payloadMessages, tools };
   }
 
   private createPrompt(
@@ -882,26 +1252,8 @@ ${conversationHistory}
 === CURRENT WEB3 CONTEXT ===
 ${formattedContext}
 
-=== AVAILABLE ACTIONS ===
-- checkBalance: Query token balances
-- sendTransaction: Send native tokens or call contracts
-- approveToken: Grant spending allowance to contracts
-- swapTokens: Exchange tokens via DEX aggregators
-- bridgeTokens: Transfer tokens across blockchains
-- stakeTokens: Deposit tokens in staking contracts
-- connectWallet: Connect wallet to dApps
-- switchNetwork: Change blockchain networks
-
 === USER INSTRUCTION ===
-${userMessage}
-
-Please respond with a JSON object containing:
-{
-  "thinking": "Your step-by-step reasoning process",
-  "actions": [Array of actions to take],
-  "confidence": 0.8,
-  "reply": "Natural language response to user"
-}`;
+${userMessage}`;
   }
 
   private formatConversation(messages: BaseMessage[]): string {
@@ -1202,17 +1554,10 @@ Protocols: ${Object.keys(context.protocols).join(', ')}
   }
 
   private detectFunctionCallingSupport(): boolean {
-    // Detect if the underlying model supports function calling
-    // This is a simplified detection - in production, you'd check model capabilities
-    const functionCallingProviders = [
-      'openai',
-      'anthropic',
-      'gemini',
-      'azure-openai',
-      'openrouter',
-    ];
-
-    return functionCallingProviders.includes(this.providerType.toLowerCase());
+    // Be permissive: default to true so we always attempt function calling.
+    // Providers that don't support it will simply ignore tools and return no tool_calls,
+    // and our pipeline will gracefully fall back.
+    return true;
   }
 
   private detectStreamingSupport(): boolean {
@@ -1254,14 +1599,74 @@ class LangChainAdapter implements IBaseChatModel {
 
   async invoke(messages: any[]): Promise<any> {
     try {
-      // Convert our message format to LangChain format
-      const langChainMessages = messages.map((msg) => ({
-        content: msg.content,
-        type:
-          msg.type === 'human' ? 'human' : msg.type === 'ai' ? 'ai' : 'system',
-      }));
+      // Import LangChain message classes at runtime to avoid bundling issues
+      const {
+        HumanMessage: LCHumanMessage,
+        AIMessage: LCAIMessage,
+        SystemMessage: LCSystemMessage,
+        ToolMessage: LCToolMessage,
+      } = await import('@langchain/core/messages');
 
-      return await this.model.invoke(langChainMessages);
+      // Convert our message format (including tool messages) to LangChain messages
+      const lcMessages = messages.map((msg) => {
+        if (msg.type === 'human' || msg.type === 'user') {
+          return new LCHumanMessage({ content: msg.content });
+        }
+        if (msg.type === 'ai' || msg.type === 'assistant') {
+          const additional_kwargs = msg.additional_kwargs || {};
+          return new LCAIMessage({ content: msg.content, additional_kwargs });
+        }
+        if (msg.type === 'system') {
+          return new LCSystemMessage({ content: msg.content });
+        }
+        if (msg.type === 'tool') {
+          const tool_call_id = msg.additional_kwargs?.tool_call_id;
+          const name = msg.name || 'tool';
+          return new LCToolMessage({
+            content: msg.content,
+            tool_call_id,
+            name,
+          });
+        }
+        return new LCSystemMessage({ content: msg.content });
+      });
+
+      // Pass tools via model.bind if available, otherwise via invoke options
+      const pendingTools = (this.model as any)._pending_tools;
+      let output: any;
+      if (pendingTools && typeof (this.model as any).bind === 'function') {
+        const bound = (this.model as any).bind({
+          tools: pendingTools,
+          tool_choice: 'auto',
+        });
+        output = await bound.invoke(lcMessages);
+      } else {
+        const options = pendingTools
+          ? { tools: pendingTools, tool_choice: 'auto' }
+          : undefined;
+        output = await this.model.invoke(lcMessages, options);
+      }
+
+      // Normalize output to a common shape with content and tool_calls
+      // Normalize content and tool_calls
+      let tool_calls = output?.additional_kwargs?.tool_calls || [];
+      const content =
+        typeof output?.content === 'string'
+          ? output.content
+          : Array.isArray(output?.content)
+          ? output.content
+              .map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
+              .join('\n')
+          : output?.content ?? '';
+
+      // Some providers place tool calls at top-level fields
+      if (
+        (!tool_calls || tool_calls.length === 0) &&
+        Array.isArray(output?.tool_calls)
+      ) {
+        tool_calls = output.tool_calls;
+      }
+      return { content, tool_calls, role: 'assistant' };
     } catch (error) {
       logger.error('LangChainAdapter invoke failed:', error);
       throw error;

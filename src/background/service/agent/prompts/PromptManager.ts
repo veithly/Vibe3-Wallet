@@ -273,44 +273,21 @@ Execute the requested browser automation or provide guidance on how to accomplis
       id: 'function_calling',
       name: 'Function Calling',
       description: 'Structured function calling with tool schemas',
-      systemPrompt: `You are an AI assistant with function calling capabilities. You must use the provided tools to accomplish user requests rather than providing text-only responses.
+      systemPrompt: `You are an AI assistant with function calling capabilities. Always use native function calling with the provided tools to accomplish user requests. Do not output JSON in assistant content when tools are needed.
 
-Available tools:
-{{tools}}
-
-For each tool call, you must:
+Guidelines:
 1. Use the exact tool name and parameters
 2. Provide all required parameters
 3. Follow the parameter schema exactly
 4. Handle errors gracefully
-
-Response format:
-- If tools are needed: Respond with function calls only
-- If no tools needed: Provide helpful text response
-- Always explain what you're doing and why
-
-Current context:
-- Network: {{network}}
-- Address: {{address}}
-- Available tools: {{availableTools}}
-- Risk level: {{riskLevel}}`,
-      userPromptTemplate: `User: {{userInput}}
-
-Conversation history: {{conversationHistory}}
-Current context: {{context}}
-
-Use the available tools to help the user. If you need to make function calls, respond with the exact function name and parameters.`,
+5. If no tools are needed, provide a concise direct answer
+6. After tool results are available, explain what you did and the results succinctly`,
+      userPromptTemplate: `{{userInput}}`,
       variables: [
         {
           name: 'userInput',
           type: 'string',
           description: 'User input text',
-          required: true,
-        },
-        {
-          name: 'tools',
-          type: 'array',
-          description: 'Available tool schemas',
           required: true,
         },
         {
@@ -326,12 +303,6 @@ Use the available tools to help the user. If you need to make function calls, re
           required: false,
         },
         {
-          name: 'availableTools',
-          type: 'array',
-          description: 'Available tool names',
-          required: false,
-        },
-        {
           name: 'riskLevel',
           type: 'string',
           description: 'Current risk level',
@@ -341,12 +312,6 @@ Use the available tools to help the user. If you need to make function calls, re
           name: 'context',
           type: 'object',
           description: 'Current context',
-          required: false,
-        },
-        {
-          name: 'conversationHistory',
-          type: 'array',
-          description: 'Conversation history',
           required: false,
         },
       ],
@@ -406,7 +371,7 @@ Use the available tools to help the user. If you need to make function calls, re
       // Build user prompt
       const userPrompt = this.buildUserPrompt(template, variables);
 
-      // Prepare messages
+      // Prepare messages (ensure ReAct: plan first, then tool calls)
       const messages = this.prepareMessages(
         systemPrompt,
         userPrompt,
@@ -573,14 +538,14 @@ Use the available tools to help the user. If you need to make function calls, re
   ): BaseMessage[] {
     const messages: BaseMessage[] = [];
 
-    // Add system message
+    // Proper OpenAI-style roles: system → history → user
     messages.push(new SystemMessage(systemPrompt));
 
-    // Add conversation history (last 10 messages to prevent context overflow)
+    // Include only recent history to manage context size
     const recentHistory = conversationHistory.slice(-10);
     messages.push(...recentHistory);
 
-    // Add current user message
+    // Current turn user message
     messages.push(new HumanMessage(userPrompt));
 
     return messages;

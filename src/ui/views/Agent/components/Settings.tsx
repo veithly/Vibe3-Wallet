@@ -17,6 +17,15 @@ import ProviderValidator from './ProviderValidator';
 import '../styles/ProviderValidator.less';
 import '../styles/Settings.less';
 
+// ReAct configuration interface
+interface ReActConfig {
+  enabled: boolean;
+  maxSteps: number;
+  timeoutMs: number;
+  showThinking: boolean;
+  autoContinue: boolean;
+}
+
 interface SettingsProps {
   onClose: () => void;
 }
@@ -33,6 +42,13 @@ export default function Settings({ onClose }: SettingsProps) {
   const [selectedProvider, setSelectedProvider] = useState<string>('openai');
   const [expandedProvider, setExpandedProvider] = useState<string>('openai');
   const [isSaving, setIsSaving] = useState(false);
+  const [reactConfig, setReActConfig] = useState<ReActConfig>({
+    enabled: true,
+    maxSteps: 10,
+    timeoutMs: 30000,
+    showThinking: true,
+    autoContinue: true,
+  });
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -110,6 +126,10 @@ export default function Settings({ onClose }: SettingsProps) {
     setExpandedProvider(providerId);
   };
 
+  const handleReActConfigChange = (config: Partial<ReActConfig>) => {
+    setReActConfig((prev) => ({ ...prev, ...config }));
+  };
+
   const handleSave = async () => {
     try {
       setIsSaving(true);
@@ -121,6 +141,8 @@ export default function Settings({ onClose }: SettingsProps) {
       for (const [agentName, config] of Object.entries(agentModels)) {
         await agent.setAgentModel(agentName as AgentNameEnum, config);
       }
+      // Save ReAct configuration
+      await agent.setReActConfig(reactConfig);
       onClose();
     } catch (error) {
       logger.error('Settings', 'Failed to save settings', error);
@@ -425,6 +447,101 @@ export default function Settings({ onClose }: SettingsProps) {
             )}
           </div>
         )}
+
+        {/* ReAct Configuration Section */}
+        <div className="react-config-section">
+          <h3>ReAct Agent Configuration</h3>
+          <div className="react-config-form">
+            <div className="config-row">
+              <div className="input-group">
+                <label>Enable ReAct Agent</label>
+                <div className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    checked={reactConfig.enabled}
+                    onChange={(e) =>
+                      handleReActConfigChange({ enabled: e.target.checked })
+                    }
+                    id="react-enabled"
+                  />
+                  <label htmlFor="react-enabled" className="switch" />
+                </div>
+              </div>
+            </div>
+
+            <div className="config-row">
+              <div className="input-group">
+                <label>Maximum Steps</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={reactConfig.maxSteps}
+                  onChange={(e) =>
+                    handleReActConfigChange({
+                      maxSteps: parseInt(e.target.value) || 10,
+                    })
+                  }
+                  disabled={!reactConfig.enabled}
+                />
+              </div>
+            </div>
+
+            <div className="config-row">
+              <div className="input-group">
+                <label>Timeout (seconds)</label>
+                <input
+                  type="number"
+                  min="5"
+                  max="300"
+                  value={reactConfig.timeoutMs / 1000}
+                  onChange={(e) =>
+                    handleReActConfigChange({
+                      timeoutMs: (parseInt(e.target.value) || 30) * 1000,
+                    })
+                  }
+                  disabled={!reactConfig.enabled}
+                />
+              </div>
+            </div>
+
+            <div className="config-row">
+              <div className="input-group">
+                <label>Show Thinking Process</label>
+                <div className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    checked={reactConfig.showThinking}
+                    onChange={(e) =>
+                      handleReActConfigChange({ showThinking: e.target.checked })
+                    }
+                    id="react-thinking"
+                    disabled={!reactConfig.enabled}
+                  />
+                  <label htmlFor="react-thinking" className="switch" />
+                </div>
+              </div>
+            </div>
+
+            <div className="config-row">
+              <div className="input-group">
+                <label>Auto-Continue on Success</label>
+                <div className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    checked={reactConfig.autoContinue}
+                    onChange={(e) =>
+                      handleReActConfigChange({ autoContinue: e.target.checked })
+                    }
+                    id="react-auto"
+                    disabled={!reactConfig.enabled}
+                  />
+                  <label htmlFor="react-auto" className="switch" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* Custom Provider Section */}
         <div className="custom-provider-section">

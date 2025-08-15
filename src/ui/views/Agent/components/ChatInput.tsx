@@ -38,10 +38,11 @@ export default function ChatInput({
   isHistoricalSession = false,
 }: ChatInputProps) {
   const [text, setText] = useState('');
-  const isSendButtonDisabled = useMemo(() => disabled || text.trim() === '', [
-    disabled,
-    text,
-  ]);
+  
+  const isSendButtonDisabled = useMemo(() => {
+    return disabled || text.trim() === '';
+  }, [disabled, text]);
+  
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleTextChange = useCallback(
@@ -148,7 +149,7 @@ export default function ChatInput({
           aria-disabled={disabled}
           rows={5}
           className="textarea"
-          placeholder="What can I help you with?"
+          placeholder='What can I help you with?'
           aria-label="Message input"
         />
 
@@ -201,7 +202,7 @@ export default function ChatInput({
             <button
               type="button"
               onClick={(e) => {
-                logger.info('ChatInput', 'Stop button clicked');
+                logger.info('ChatInput', 'Stop button clicked', {});
                 e.preventDefault();
                 e.stopPropagation();
                 try {

@@ -52,9 +52,11 @@ function MessageBlock({
   const actor = getActorProfile(message.actor);
 
   const isProgress = message.content === 'Showing progress...';
+  const isThinking = message.messageType === 'thinking';
+  const isReActStatus = message.messageType === 'react_status';
 
   return (
-    <div className={`message-block ${!isSameActor ? 'with-separator' : ''}`}>
+    <div className={`message-block ${!isSameActor ? 'with-separator' : ''} ${isThinking ? 'thinking-message' : ''} ${isReActStatus ? 'react-status-message' : ''}`}>
       {!isSameActor && (
         <div
           className="avatar-container"
@@ -66,13 +68,52 @@ function MessageBlock({
       {isSameActor && <div className="avatar-spacer" />}
 
       <div className="message-content">
-        {!isSameActor && <div className="actor-name">{actor.name}</div>}
+        {!isSameActor && (
+          <div className="actor-name">
+            {actor.name}
+            {isThinking && (
+              <span className="thinking-indicator">Thinking...</span>
+            )}
+            {isReActStatus && message.reactStatus && (
+              <span className="react-indicator">
+                {message.reactStatus.isThinking ? '🤔 Thinking...' : 
+                 message.reactStatus.isActing ? '🔧 Executing...' : 
+                 '⚡ Processing...'}
+                {message.reactStatus.isActive && (
+                  <span className="step-info">
+                    (Step {message.reactStatus.currentStep}/{message.reactStatus.maxSteps})
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
+        )}
 
         <div>
-          <div className="message-text">
+          <div className={`message-text ${isThinking ? 'thinking-text' : ''} ${isReActStatus ? 'react-status-text' : ''}`}>
             {isProgress ? (
               <div className="progress-indicator">
                 <div className="progress-bar" />
+              </div>
+            ) : isThinking ? (
+              <div className="thinking-content">
+                <div className="thinking-icon">🤔</div>
+                <div className="thinking-message-content">{message.content}</div>
+              </div>
+            ) : isReActStatus && message.reactStatus ? (
+              <div className="react-status-content">
+                {message.reactStatus.thinkingContent && (
+                  <div className="thinking-content">
+                    <div className="thinking-icon">💭</div>
+                    <div className="thinking-message-content">{message.reactStatus.thinkingContent}</div>
+                  </div>
+                )}
+                {message.reactStatus.currentAction && (
+                  <div className="current-action">
+                    <div className="action-icon">⚡</div>
+                    <div className="action-content">{message.reactStatus.currentAction}</div>
+                  </div>
+                )}
               </div>
             ) : (
               message.content

@@ -16,6 +16,24 @@ export interface FunctionCall {
   timestamp: number;
 }
 
+export interface ThinkingStep {
+  step: number;
+  content: string;
+  type: 'thinking' | 'planning' | 'reasoning' | 'analysis';
+  timestamp: number;
+}
+
+export interface ReActStatusMessage {
+  isThinking: boolean;
+  isActing: boolean;
+  currentStep: number;
+  maxSteps: number;
+  currentAction?: string;
+  thinkingContent?: string;
+  isActive: boolean;
+  timestamp: number;
+}
+
 export interface Message {
   actor: Actors;
   content: string;
@@ -23,6 +41,9 @@ export interface Message {
   isStreaming?: boolean;
   messageId?: string;
   functionCalls?: FunctionCall[];
+  thinking?: ThinkingStep[];
+  reactStatus?: ReActStatusMessage;
+  messageType?: 'standard' | 'thinking' | 'function_call' | 'reasoning' | 'react_status';
 }
 
 export interface ActorProfile {

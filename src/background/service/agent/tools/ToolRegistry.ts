@@ -3,6 +3,7 @@ import { FunctionSchema, ParameterSchema } from '../llm/types';
 import { web3ActionSchemas } from '../actions/web3-schemas';
 import { createLogger } from '@/utils/logger';
 import { Web3Action } from '../actions/web3-actions';
+import { BrowserAutomationController } from '../automation/BrowserAutomationController';
 import type { AgentContext } from '../types';
 import preferenceService from '@/background/service/preference';
 import keyringService from '@/background/service/keyring';
@@ -26,6 +27,7 @@ export class ToolRegistry {
 
   constructor() {
     this.initializeWeb3Tools();
+    this.initializeBrowserTools();
     this.initializeUtilityTools();
     this.initializeSystemTools();
   }
@@ -576,6 +578,163 @@ export class ToolRegistry {
     });
   }
 
+  private initializeBrowserTools(): void {
+    // Browser automation tools
+    this.registerTool({
+      name: 'navigateToUrl',
+      description: 'Navigate to a specific URL in the browser',
+      parameters: [
+        {
+          type: 'string',
+          description: 'The URL to navigate to',
+          pattern: '^https?://.+',
+        },
+        {
+          type: 'string',
+          description: 'Optional: Wait condition (load, networkidle, selector)',
+          enum: ['load', 'networkidle', 'selector'],
+        },
+        {
+          type: 'number',
+          description: 'Optional: Timeout in milliseconds',
+          minimum: 1000,
+          maximum: 60000,
+        },
+      ],
+      required: ['url'],
+      handler: this.createBrowserHandler('navigateToUrl'),
+      category: 'web3',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'clickElement',
+      description: 'Click on a web element using CSS selector or text content',
+      parameters: [
+        {
+          type: 'string',
+          description: 'CSS selector for the element to click',
+        },
+        {
+          type: 'string',
+          description: 'Text content to find and click (alternative to selector)',
+        },
+        {
+          type: 'boolean',
+          description: 'Optional: Wait for navigation after click',
+        },
+        {
+          type: 'number',
+          description: 'Optional: Timeout in milliseconds',
+          minimum: 1000,
+          maximum: 30000,
+        },
+      ],
+      required: [],
+      handler: this.createBrowserHandler('clickElement'),
+      category: 'web3',
+      riskLevel: 'medium',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'fillForm',
+      description: 'Fill out a web form with specified values',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Array of form fields to fill (JSON format)',
+        },
+        {
+          type: 'boolean',
+          description: 'Optional: Submit the form after filling',
+        },
+      ],
+      required: ['fields'],
+      handler: this.createBrowserHandler('fillForm'),
+      category: 'web3',
+      riskLevel: 'medium',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'extractContent',
+      description: 'Extract content from web pages using CSS selectors',
+      parameters: [
+        {
+          type: 'string',
+          description: 'CSS selector to extract content from',
+        },
+        {
+          type: 'string',
+          description: 'Type of content to extract',
+          enum: ['text', 'html', 'value', 'attribute'],
+        },
+        {
+          type: 'boolean',
+          description: 'Optional: Extract multiple elements',
+        },
+        {
+          type: 'string',
+          description: 'Optional: Attribute name if type is "attribute"',
+        },
+      ],
+      required: ['selector'],
+      handler: this.createBrowserHandler('extractContent'),
+      category: 'web3',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'waitFor',
+      description: 'Wait for a specific condition or time period',
+      parameters: [
+        {
+          type: 'string',
+          description: 'What to wait for',
+          enum: ['time', 'element', 'navigation'],
+        },
+        {
+          type: 'number',
+          description: 'Timeout in milliseconds',
+          minimum: 1000,
+          maximum: 60000,
+        },
+        {
+          type: 'string',
+          description: 'Optional: CSS selector if waiting for element',
+        },
+      ],
+      required: [],
+      handler: this.createBrowserHandler('waitFor'),
+      category: 'web3',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'takeScreenshot',
+      description: 'Take a screenshot of the current page',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Optional: Specific element to screenshot (CSS selector)',
+        },
+        {
+          type: 'boolean',
+          description: 'Optional: Capture full page',
+        },
+      ],
+      required: [],
+      handler: this.createBrowserHandler('takeScreenshot'),
+      category: 'web3',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+  }
+
   private initializeSystemTools(): void {
     // System tools for wallet and agent management
     this.registerTool({
@@ -659,6 +818,66 @@ export class ToolRegistry {
       riskLevel: 'low',
       requiresConfirmation: false,
     });
+  }
+
+  private createBrowserHandler(actionName: string) {
+    return async (params: any) => {
+      try {
+        logger.info(`Executing browser automation action: ${actionName}`, params);
+
+        // Create browser automation controller
+        const browserController = new BrowserAutomationController();
+
+        // Handle special case for fillForm - parse JSON string
+        let processedParams = params;
+        if (actionName === 'fillForm' && typeof params.fields === 'string') {
+          try {
+            processedParams = {
+              ...params,
+              fields: JSON.parse(params.fields),
+            };
+          } catch (parseError) {
+            logger.warn('Failed to parse fields JSON, using as-is', parseError);
+          }
+        }
+
+        // Create action step for compatibility
+        const actionStep = {
+          id: `browser_${Date.now()}`,
+          name: `Execute ${actionName}`,
+          type: actionName,
+          description: `Browser automation: ${actionName}`,
+          params: processedParams,
+          status: 'pending' as const,
+          dependencies: [],
+          riskLevel: 'MEDIUM' as const,
+        };
+
+        // Execute browser action
+        const result = await browserController.executeAction(actionStep);
+
+        return {
+          action: actionName,
+          params: processedParams,
+          result: result.data,
+          success: result.success,
+          timestamp: Date.now(),
+          error: result.error,
+          screenshot: result.screenshot,
+          timing: result.timing,
+        };
+      } catch (error) {
+        logger.error(`Browser automation action failed: ${actionName}`, error);
+        return {
+          action: actionName,
+          params,
+          result: null,
+          success: false,
+          timestamp: Date.now(),
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
+    };
   }
 
   private createWeb3Handler(actionName: string) {
@@ -779,9 +998,24 @@ export class ToolRegistry {
     }));
   }
 
+  /**
+   * Return OpenAI-compatible tool list for native function calling
+   */
+  getOpenAITools(): any[] {
+    return this.getFunctionSchemas().map((schema) => ({
+      type: 'function',
+      function: {
+        name: schema.name,
+        description: schema.description,
+        parameters: schema.parameters,
+      },
+    }));
+  }
+
   private getParameterName(toolName: string, index: number): string {
     // Map parameter names based on tool and position
     const paramMappings: Record<string, string[]> = {
+      // Web3 tools
       checkBalance: ['address', 'tokenAddress', 'chainId'],
       sendTransaction: ['to', 'value', 'data', 'chainId'],
       approveToken: ['tokenAddress', 'spender', 'amount', 'chainId'],
@@ -810,9 +1044,18 @@ export class ToolRegistry {
         'toChainId',
         'recipient',
       ],
+      // Browser automation tools
+      navigateToUrl: ['url', 'waitFor', 'timeout'],
+      clickElement: ['selector', 'text', 'waitForNavigation', 'timeout'],
+      fillForm: ['fields', 'submit'],
+      extractContent: ['selector', 'type', 'multiple', 'attribute'],
+      waitFor: ['condition', 'timeout', 'selector'],
+      takeScreenshot: ['selector', 'fullPage'],
+      // Utility tools
       getCurrentTime: [],
       formatNumber: ['number', 'decimals', 'unit'],
       calculateGasEstimate: ['gasUnits', 'gasPriceGwei'],
+      // System tools
       getWalletInfo: [],
       getAgentStatus: [],
     };

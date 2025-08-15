@@ -5,6 +5,7 @@ import {
   HumanMessage,
   AIMessage,
   SystemMessage,
+  ToolMessage,
 } from './llm/messages';
 import { Web3Intent, Web3ActionType } from './intent/IntentRecognizer';
 import { ActionPlan } from './planning/ActionPlanner';
@@ -412,11 +413,7 @@ export class Web3Agent {
       this.state.conversationHistory.push(assistantMessage);
 
       // Store in chat history
-      await this.storeConversationStep(
-        userMessage,
-        assistantMessage,
-        executedActions
-      );
+      await this.storeConversationStep(userMessage, assistantMessage, executedActions);
 
       // Update state
       this.state.lastActivity = Date.now();
@@ -903,13 +900,18 @@ export class Web3Agent {
   }
 
   private async updateWeb3Context(): Promise<void> {
-    // TODO: Implement actual Web3 context updates
-    // This should fetch current chain, address, balances, etc.
+    // Fetch current chain, address, balances, and gas from real services
+    const [addr, balances, gasPrices] = await Promise.all([
+      this.getCurrentAddress(),
+      this.getCurrentBalances(),
+      this.getCurrentGasPrices(),
+    ]);
+
     this.state.currentContext = {
       ...this.state.currentContext,
-      currentAddress: await this.getCurrentAddress(),
-      balances: await this.getCurrentBalances(),
-      gasPrices: await this.getCurrentGasPrices(),
+      currentAddress: addr,
+      balances,
+      gasPrices,
     };
   }
 
@@ -917,7 +919,9 @@ export class Web3Agent {
   async processUserInstructionWithFunctionCalling(
     instruction: string,
     enableStreaming: boolean = false,
-    onChunk?: (chunk: StreamingLLMResponse) => void
+    onChunk?: (chunk: StreamingLLMResponse) => void,
+    onThinking?: (thinking: any) => void,
+    onReActStatus?: (status: any) => void
   ): Promise<AgentResponse> {
     try {
       const startTime = Date.now();
@@ -925,6 +929,19 @@ export class Web3Agent {
       // Add user message to conversation history
       const userMessage = new HumanMessage(instruction);
       this.state.conversationHistory.push(userMessage);
+
+      // Initialize ReAct status
+      if (onReActStatus) {
+        onReActStatus({
+          isActive: true,
+          isThinking: true,
+          isActing: false,
+          currentStep: 1,
+          maxSteps: 5,
+          thinkingContent: 'Analyzing your request...',
+          timestamp: Date.now(),
+        });
+      }
 
       // Step 1: Extract intent from user instruction
       const intent = await this.intentRecognizer.extractIntent(
@@ -935,44 +952,211 @@ export class Web3Agent {
         `Extracted intent: ${intent.action} with confidence ${intent.confidence}`
       );
 
-      // Step 2: Get available tools for function calling
+      // Update ReAct status after intent extraction
+      if (onReActStatus) {
+        onReActStatus({
+          isActive: true,
+          isThinking: true,
+          isActing: false,
+          currentStep: 2,
+          maxSteps: 5,
+          thinkingContent: `Intent recognized: ${intent.action}`,
+          timestamp: Date.now(),
+        });
+      }
+
+      // Step 2: Optional ReAct planning phase (create plan first)
+      let reactPlan: ActionPlan | undefined;
+      try {
+        if (intent.action !== 'QUERY') {
+          // Send thinking message about planning
+          if (onThinking) {
+            onThinking({
+              type: 'thinking',
+              content: 'Analyzing your request and creating a plan...',
+              timestamp: Date.now(),
+            });
+          }
+
+          // Update ReAct status for planning
+          if (onReActStatus) {
+            onReActStatus({
+              isActive: true,
+              isThinking: true,
+              isActing: false,
+              currentStep: 3,
+              maxSteps: 5,
+              thinkingContent: 'Creating action plan...',
+              timestamp: Date.now(),
+            });
+          }
+
+          reactPlan = await this.actionPlanner.createPlan(intent);
+          
+          // Send thinking message about the plan
+          if (onThinking && reactPlan) {
+            onThinking({
+              type: 'planning',
+              content: `I've created a plan with ${reactPlan.actions.length} steps:\n${this.formatPlanSummary(reactPlan)}`,
+              timestamp: Date.now(),
+            });
+          }
+
+          const planMsg = new SystemMessage(
+            `Planned steps (ReAct):\n${this.formatPlanSummary(reactPlan)}\n\nFollow this plan step-by-step using available tools. Ask for any missing parameters before executing risky operations.`
+          );
+          this.state.conversationHistory.push(planMsg);
+        }
+      } catch (e) {
+        // Planning optional; continue without blocking
+      }
+
+      // Step 3: Get available tools for function calling
       const availableTools = this.llm.getAvailableTools();
 
-      // Step 3: Generate LLM response with function calling
+      // Build prompt with proper system/user messages
+      const promptContext: PromptContext = {
+        messages: this.state.conversationHistory,
+        context: this.state.currentContext,
+        intent,
+        tools: availableTools,
+        conversationHistory: this.state.conversationHistory,
+        availableActions: this.actionRegistry.getAvailableActions(),
+      };
+      const generatedPrompt = await this.promptManager.createPrompt(promptContext);
+
+      // Step 4: Generate LLM response with function calling (ReAct loop)
       let llmResponse: LLMResponse;
-      if (enableStreaming && this.llm.supportsFunctionCalling()) {
-        llmResponse = await this.llm.generateStreamingResponse(
-          this.state.conversationHistory,
-          this.state.currentContext,
-          intent,
-          availableTools,
-          onChunk
-        );
-      } else {
-        llmResponse = await this.llm.generateResponse(
-          this.state.conversationHistory,
-          this.state.currentContext,
-          intent,
-          availableTools
-        );
+      const accumulatedActions: ActionStep[] = [];
+      
+      // Send thinking message about starting function calling
+      if (onThinking) {
+        onThinking({
+          type: 'reasoning',
+          content: 'Now I\'ll use the available tools to help with your request...',
+          timestamp: Date.now(),
+        });
       }
 
-      // Step 4: Execute function calls if any
-      const executedActions: ActionStep[] = [];
+      // Update ReAct status for function calling
+      if (onReActStatus) {
+        onReActStatus({
+          isActive: true,
+          isThinking: true,
+          isActing: false,
+          currentStep: 4,
+          maxSteps: 5,
+          thinkingContent: 'Preparing to execute tools...',
+          timestamp: Date.now(),
+        });
+      }
+
+      // First turn: ask for tool calls
+      // Ensure provider receives tool schemas
+      ;(this.llm as any).attachToolsForProvider?.(availableTools);
+      llmResponse = await this.llm.generateResponse(
+        generatedPrompt.messages,
+        generatedPrompt.context,
+        generatedPrompt.intent,
+        generatedPrompt.tools
+      );
+
+      // If model requested tool calls, execute then send tool results back for a second turn
       if (llmResponse.functionCalls && llmResponse.functionCalls.length > 0) {
-        executedActions.push(
-          ...(await this.executeFunctionCalls(llmResponse.functionCalls))
+        // Send thinking message about executing tools
+        if (onThinking) {
+          const toolNames = llmResponse.functionCalls.map(fc => fc.name).join(', ');
+          onThinking({
+            type: 'function_call',
+            content: `I need to execute these tools: ${toolNames}`,
+            timestamp: Date.now(),
+          });
+        }
+
+        // Update ReAct status for tool execution
+        if (onReActStatus) {
+          const toolNames = llmResponse.functionCalls.map(fc => fc.name).join(', ');
+          onReActStatus({
+            isActive: true,
+            isThinking: false,
+            isActing: true,
+            currentStep: 5,
+            maxSteps: 5,
+            thinkingContent: `Executing tools: ${toolNames}`,
+            currentAction: `Running ${toolNames}`,
+            timestamp: Date.now(),
+          });
+        }
+
+        // Record the assistant tool_calls message to keep role structure consistent
+        const assistantToolCallMsg = new AIMessage('', {
+          tool_calls: llmResponse.functionCalls.map((fc) => ({
+            id: fc.id || `call_${fc.name}_${Date.now()}`,
+            type: 'function',
+            function: {
+              name: fc.name,
+              arguments: JSON.stringify(fc.arguments || {}),
+            },
+          })),
+        });
+        this.state.conversationHistory.push(assistantToolCallMsg);
+
+        const firstTurnActions = await this.executeFunctionCalls(
+          llmResponse.functionCalls
+        );
+        accumulatedActions.push(...firstTurnActions);
+
+        // Append tool results as ToolMessages
+        for (let i = 0; i < firstTurnActions.length; i++) {
+          const step = firstTurnActions[i];
+          const fc = llmResponse.functionCalls[i];
+          const toolContent = JSON.stringify({
+            success: step.status === 'completed',
+            result: step.result,
+            params: step.params,
+          });
+          const toolMsg = new ToolMessage({
+            content: toolContent,
+            name: step.type || 'tool',
+            tool_call_id: fc?.id || `${step.type || 'tool'}_${i}`,
+          });
+          this.state.conversationHistory.push(toolMsg);
+        }
+
+        // Second turn: let the model incorporate results into a final answer
+        const secondPrompt = await this.promptManager.createPrompt({
+          messages: this.state.conversationHistory,
+          context: this.state.currentContext,
+          intent,
+          tools: availableTools,
+          conversationHistory: this.state.conversationHistory,
+          availableActions: this.actionRegistry.getAvailableActions(),
+        });
+        ;(this.llm as any).attachToolsForProvider?.(availableTools);
+        llmResponse = await this.llm.generateResponse(
+          secondPrompt.messages,
+          secondPrompt.context,
+          secondPrompt.intent,
+          secondPrompt.tools
         );
       }
 
-      // Step 5: Generate final response
+      // Step 5: Execute function calls if any (second turn)
+      if (llmResponse.functionCalls && llmResponse.functionCalls.length > 0) {
+        const secondTurnActions = await this.executeFunctionCalls(
+          llmResponse.functionCalls
+        );
+        accumulatedActions.push(...secondTurnActions);
+      }
+
+      // Step 6: Generate final response
       const response = await this.generateFinalResponse(
         instruction,
         intent,
         llmResponse,
-        undefined, // No traditional plan for function calling
+        reactPlan, // Provide plan from ReAct phase (if any)
         undefined, // No simulation for function calling
-        executedActions
+        accumulatedActions
       );
 
       // Add assistant response to conversation history
@@ -983,17 +1167,18 @@ export class Web3Agent {
       await this.storeConversationStep(
         userMessage,
         assistantMessage,
-        executedActions
+        accumulatedActions
       );
 
       // Update state
       this.state.lastActivity = Date.now();
-      this.state.executionHistory.push(...executedActions);
+      this.state.executionHistory.push(...accumulatedActions);
 
       return {
         success: true,
         message: response,
-        actions: executedActions,
+        actions: accumulatedActions,
+        plan: reactPlan,
         sessionId: this.state.sessionId,
         timestamp: Date.now(),
       };
@@ -1351,18 +1536,59 @@ export class Web3Agent {
   }
 
   private async getCurrentAddress(): Promise<string> {
-    // TODO: Get current wallet address
-    return '0x0000000000000000000000000000000000000000';
+    try {
+      const account = await (await import('@/background/service')).preferenceService.getCurrentAccount();
+      return account?.address || '';
+    } catch (e) {
+      return '';
+    }
   }
 
   private async getCurrentBalances(): Promise<Record<string, string>> {
-    // TODO: Get current token balances
-    return {};
+    try {
+      const { preferenceService, openapiService } = await import('@/background/service');
+      const account = await preferenceService.getCurrentAccount();
+      if (!account?.address) return {};
+      // Use existing cached total balance fetch path similar to wallet controller
+      const total = await openapiService.getTotalBalance(account.address);
+      // Flatten by chain symbol for quick context; keep small to avoid token bloat
+      const balances: Record<string, string> = {};
+      (total?.chain_list || []).forEach((c: any) => {
+        if (c?.asset_token?.symbol && c?.asset_token?.amount) {
+          balances[c.asset_token.symbol] = String(c.asset_token.amount);
+        }
+      });
+      return balances;
+    } catch (e) {
+      return {};
+    }
   }
 
   private async getCurrentGasPrices(): Promise<Record<number, string>> {
-    // TODO: Get current gas prices
-    return {};
+    try {
+      const { RPCService } = await import('@/background/service');
+      const { findChain, findChainByEnum } = await import('@/utils/chain');
+      // Query a few common chains using default RPC; keep minimal
+      const chains = [1, 56, 137];
+      const results: Record<number, string> = {};
+      await Promise.all(
+        chains.map(async (id) => {
+          try {
+            const chain = (await import('consts')).CHAINS_ENUM.ETH; // fallback default enum
+            const rpcItem = RPCService.getDefaultRPC(findChain({ id })!.serverId);
+            const host = rpcItem?.rpcUrl?.[0];
+            if (!host) return;
+            const data = await RPCService.defaultRPCRequest(host, 'eth_gasPrice', []);
+            if (typeof data === 'string') {
+              results[id] = data;
+            }
+          } catch {}
+        })
+      );
+      return results;
+    } catch (e) {
+      return {};
+    }
   }
 
   private async storeConversationStep(
@@ -1371,14 +1597,15 @@ export class Web3Agent {
     actions: ActionStep[]
   ): Promise<void> {
     try {
+      const uiActors = (await import('@/ui/views/Agent/types/message')).Actors;
       await chatHistoryStore.addMessage(this.state.sessionId, {
-        actor: Actors.USER,
+        actor: uiActors.USER,
         content: userMessage.content as string,
         timestamp: Date.now(),
       });
 
       await chatHistoryStore.addMessage(this.state.sessionId, {
-        actor: Actors.SYSTEM,
+        actor: uiActors.ASSISTANT,
         content: assistantMessage.content as string,
         timestamp: Date.now(),
       });

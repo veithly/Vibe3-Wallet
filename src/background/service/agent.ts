@@ -364,7 +364,7 @@ class AgentService {
     message: AgentMessage,
     port: chrome.runtime.Port
   ) {
-    const { task, tabId, taskId } = message;
+    const { task, tabId, taskId, historySessionId } = message;
 
     if (!task || !tabId) {
       throw new Error('Missing required parameters for new task');
@@ -378,7 +378,7 @@ class AgentService {
     try {
       switch (taskType) {
         case 'web3':
-          await this.handleWeb3Task(task, tabId, port, taskId);
+          await this.handleWeb3Task(task, tabId, port, historySessionId);
           break;
         case 'automation':
         default:
@@ -458,18 +458,55 @@ class AgentService {
 
     logger.info('AgentService', `Routing to Web3 Agent: ${task}`);
 
-    // Initialize Web3 Agent with session ID if available
-    if (!this.web3Agent['state']?.sessionId) {
-      await this.web3Agent.initialize(sessionId);
+    // Initialize or switch Web3 Agent session when needed
+    const desiredSessionId = sessionId || undefined;
+    const currentSessionId = this.web3Agent['state']?.sessionId;
+    if (!currentSessionId || (desiredSessionId && desiredSessionId !== currentSessionId)) {
+      await this.web3Agent.initialize(desiredSessionId);
+      try {
+        // Keep Chat UI and storage aligned with active session
+        const { chatHistoryStore } = await import('./agent/chatHistory');
+        if (this.web3Agent['state']?.sessionId) {
+          await chatHistoryStore.setCurrentSession(this.web3Agent['state'].sessionId);
+        }
+      } catch (e) {
+        // non-fatal
+      }
     }
 
     // Check if we should use function calling
     const supportsFunctionCalling = await this.web3Agent.supportsFunctionCalling();
 
     if (supportsFunctionCalling) {
-      // Use enhanced function calling capabilities
+      // Use enhanced function calling capabilities with thinking support
       const response = await this.web3Agent.processUserInstructionWithFunctionCalling(
-        task
+        task,
+        false, // streaming disabled for now
+        undefined, // no streaming callback
+        (thinking) => {
+          // Send thinking message to client
+          port.postMessage({
+            type: 'thinking',
+            actor: Actors.SYSTEM,
+            state: 'THINKING',
+            timestamp: Date.now(),
+            data: {
+              details: thinking.content,
+              thinkingType: thinking.type,
+              functionCalling: true,
+            },
+          });
+        },
+        (reactStatus) => {
+          // Send ReAct status message to client
+          port.postMessage({
+            type: 'react_status',
+            actor: Actors.SYSTEM,
+            state: 'REACT_STATUS',
+            timestamp: Date.now(),
+            data: reactStatus,
+          });
+        }
       );
 
       // Send response back to client
@@ -511,7 +548,7 @@ class AgentService {
     message: AgentMessage,
     port: chrome.runtime.Port
   ) {
-    const { task, tabId, sessionId } = message;
+    const { task, tabId, historySessionId } = message;
 
     if (!task || !tabId) {
       throw new Error('Missing required parameters for streaming task');
@@ -523,9 +560,19 @@ class AgentService {
 
     logger.info('AgentService', `Starting streaming task: ${task}`);
 
-    // Initialize Web3 Agent with session ID if available
-    if (!this.web3Agent['state']?.sessionId) {
-      await this.web3Agent.initialize(sessionId);
+    // Initialize or switch Web3 Agent session when needed
+    const desiredSessionId = historySessionId || undefined;
+    const currentSessionId = this.web3Agent['state']?.sessionId;
+    if (!currentSessionId || (desiredSessionId && desiredSessionId !== currentSessionId)) {
+      await this.web3Agent.initialize(desiredSessionId);
+      try {
+        const { chatHistoryStore } = await import('./agent/chatHistory');
+        if (this.web3Agent['state']?.sessionId) {
+          await chatHistoryStore.setCurrentSession(this.web3Agent['state'].sessionId);
+        }
+      } catch (e) {
+        // non-fatal
+      }
     }
 
     // Check if streaming is supported
@@ -533,7 +580,7 @@ class AgentService {
 
     if (!supportsStreaming) {
       // Fall back to non-streaming response
-      return this.handleWeb3Task(task, tabId, port, sessionId);
+      return this.handleWeb3Task(task, tabId, port, historySessionId);
     }
 
     try {
@@ -779,6 +826,20 @@ class AgentService {
 
   public async setAgentModel(agent: AgentNameEnum, config: ModelConfig) {
     return agentModelStore.setAgentModel(agent, config);
+  }
+
+  public async setReActConfig(config: any) {
+    // Store ReAct configuration in agent model store or create a new storage mechanism
+    // For now, we'll store it as a special agent model
+    const reactConfig = {
+      provider: 'system',
+      modelName: 'react_config',
+      parameters: {
+        ...config,
+        configType: 'react'
+      }
+    };
+    return agentModelStore.setAgentModel('SYSTEM' as AgentNameEnum, reactConfig);
   }
 
   /**
