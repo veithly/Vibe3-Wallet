@@ -18,9 +18,6 @@ interface ChatInputProps {
   showStopButton: boolean;
   setContent?: (setter: (text: string) => void) => void;
   isDarkMode?: boolean;
-  historicalSessionId?: string | null;
-  onReplay?: (sessionId: string) => void;
-  isHistoricalSession?: boolean;
 }
 
 export default function ChatInput({
@@ -33,9 +30,6 @@ export default function ChatInput({
   showStopButton,
   setContent,
   isDarkMode = false,
-  historicalSessionId,
-  onReplay,
-  isHistoricalSession = false,
 }: ChatInputProps) {
   const [text, setText] = useState('');
   
@@ -119,20 +113,7 @@ export default function ChatInput({
     [handleSubmit, disabled]
   );
 
-  const handleReplay = useCallback(() => {
-    logger.info('ChatInput', 'Replay button clicked', {
-      hasSessionId: !!historicalSessionId,
-      hasCallback: !!onReplay,
-    });
-    if (historicalSessionId && onReplay) {
-      try {
-        onReplay(historicalSessionId);
-      } catch (error) {
-        logger.error('ChatInput', 'Error in onReplay', error);
-      }
-    }
-  }, [historicalSessionId, onReplay]);
-
+  
   return (
     <form
       onSubmit={handleSubmit}
@@ -214,21 +195,6 @@ export default function ChatInput({
               className="action-button stop-button"
             >
               Stop
-            </button>
-          ) : historicalSessionId ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                logger.debug('ChatInput', 'Replay button clicked');
-                e.preventDefault();
-                e.stopPropagation();
-                handleReplay();
-              }}
-              disabled={!historicalSessionId}
-              aria-disabled={!historicalSessionId}
-              className="action-button replay-button"
-            >
-              Replay
             </button>
           ) : (
             <button

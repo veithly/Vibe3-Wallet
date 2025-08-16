@@ -28,6 +28,8 @@ export class StreamingHandler {
   private options: StreamingOptions;
   private abortController: AbortController;
   private retryCount: number = 0;
+  private completionTimeout: NodeJS.Timeout | null = null;
+  private isCompleted: boolean = false;
 
   constructor(options: StreamingOptions) {
     this.options = {
@@ -63,16 +65,29 @@ export class StreamingHandler {
       };
     }
 
+    // Reset state for new streaming session
+    this.isCompleted = false;
     this.state.isActive = true;
     this.state.startTime = Date.now();
     this.state.currentContent = '';
     this.state.functionCalls = [];
     this.state.chunksReceived = 0;
 
+    // Set up completion timeout to prevent hanging
+    this.completionTimeout = setTimeout(() => {
+      if (!this.isCompleted) {
+        logger.warn('StreamingHandler', 'Streaming completion timeout reached');
+        this.markCompleted('timeout');
+      }
+    }, 30000); // 30 second completion timeout
+
     try {
       // Simulate streaming by breaking the response into chunks
       const response = await generateResponse();
       await this.simulateStreaming(response);
+
+      // Mark as completed if not already done
+      this.markCompleted('success');
 
       return {
         content: this.state.currentContent,
@@ -87,16 +102,37 @@ export class StreamingHandler {
         return this.startStreaming(generateResponse);
       }
 
+      this.markCompleted('error');
+
       if (this.options.onError) {
         this.options.onError(error as Error);
       }
 
       throw error;
-    } finally {
-      this.state.isActive = false;
-      if (this.options.onComplete) {
-        this.options.onComplete(this.state.currentContent);
-      }
+    }
+  }
+
+  private markCompleted(reason: 'success' | 'error' | 'timeout' | 'abort') {
+    if (this.isCompleted) return;
+    
+    this.isCompleted = true;
+    this.state.isActive = false;
+    
+    // Clear completion timeout
+    if (this.completionTimeout) {
+      clearTimeout(this.completionTimeout);
+      this.completionTimeout = null;
+    }
+
+    logger.info('StreamingHandler', `Streaming completed: ${reason}`, {
+      chunksReceived: this.state.chunksReceived,
+      contentLength: this.state.currentContent.length,
+      functionCalls: this.state.functionCalls.length,
+    });
+
+    // Call completion callback if provided
+    if (this.options.onComplete) {
+      this.options.onComplete(this.state.currentContent);
     }
   }
 
@@ -104,11 +140,14 @@ export class StreamingHandler {
     content: string;
     functionCalls?: FunctionCall[];
   }): Promise<void> {
+    if (this.isCompleted) return;
+
     const chunks = this.chunkResponse(response.content);
 
     for (let i = 0; i < chunks.length; i++) {
-      if (!this.state.isActive || this.abortController.signal.aborted) {
-        break;
+      if (this.isCompleted || !this.state.isActive || this.abortController.signal.aborted) {
+        this.markCompleted('abort');
+        return;
       }
 
       const chunk = chunks[i];
@@ -136,8 +175,9 @@ export class StreamingHandler {
     // Handle function calls if any
     if (response.functionCalls && response.functionCalls.length > 0) {
       for (const functionCall of response.functionCalls) {
-        if (!this.state.isActive || this.abortController.signal.aborted) {
-          break;
+        if (this.isCompleted || !this.state.isActive || this.abortController.signal.aborted) {
+          this.markCompleted('abort');
+          return;
         }
 
         this.state.functionCalls.push(functionCall);
@@ -161,7 +201,7 @@ export class StreamingHandler {
     }
 
     // Send completion signal
-    if (this.state.isActive && !this.abortController.signal.aborted) {
+    if (!this.isCompleted && this.state.isActive && !this.abortController.signal.aborted) {
       const completionResponse: StreamingLLMResponse = {
         id: `complete_${Date.now()}`,
         type: 'done',
@@ -190,7 +230,7 @@ export class StreamingHandler {
   }
 
   abort(): void {
-    this.state.isActive = false;
+    this.markCompleted('abort');
     this.abortController.abort();
     logger.info('Streaming aborted');
   }
@@ -225,6 +265,14 @@ export class StreamingHandler {
 // Real-time streaming adapter for different LLM providers
 export class RealTimeStreamingAdapter {
   private streamingHandlers: Map<string, StreamingHandler> = new Map();
+  private cleanupInterval: NodeJS.Timeout | null = null;
+
+  constructor() {
+    // Set up periodic cleanup of old/completed streams
+    this.cleanupInterval = setInterval(() => {
+      this.performCleanup();
+    }, 60000); // Clean up every minute
+  }
 
   createStream(
     streamId: string,
@@ -234,8 +282,17 @@ export class RealTimeStreamingAdapter {
       functionCalls?: FunctionCall[];
     }>
   ): Promise<{ content: string; functionCalls: FunctionCall[] }> {
+    // Clean up any existing handler with the same ID
+    const existingHandler = this.streamingHandlers.get(streamId);
+    if (existingHandler) {
+      existingHandler.abort();
+      this.streamingHandlers.delete(streamId);
+    }
+
     const handler = new StreamingHandler(options);
     this.streamingHandlers.set(streamId, handler);
+
+    logger.info('RealTimeStreamingAdapter', `Created new stream: ${streamId}`);
 
     return handler.startStreaming(generateResponse);
   }
@@ -245,6 +302,7 @@ export class RealTimeStreamingAdapter {
     if (handler) {
       handler.abort();
       this.streamingHandlers.delete(streamId);
+      logger.info('RealTimeStreamingAdapter', `Aborted stream: ${streamId}`);
       return true;
     }
     return false;
@@ -264,13 +322,46 @@ export class RealTimeStreamingAdapter {
     );
   }
 
+  private performCleanup(): void {
+    const now = Date.now();
+    const streamsToCleanup: string[] = [];
+
+    for (const [streamId, handler] of this.streamingHandlers.entries()) {
+      const state = handler.getState();
+      
+      // Clean up streams that are inactive for more than 5 minutes
+      if (state.lastChunkTime > 0 && (now - state.lastChunkTime) > 300000) {
+        streamsToCleanup.push(streamId);
+      }
+      
+      // Clean up streams that have been active for more than 10 minutes
+      if (state.startTime > 0 && (now - state.startTime) > 600000) {
+        streamsToCleanup.push(streamId);
+      }
+    }
+
+    for (const streamId of streamsToCleanup) {
+      this.abortStream(streamId);
+    }
+
+    if (streamsToCleanup.length > 0) {
+      logger.info('RealTimeStreamingAdapter', `Cleaned up ${streamsToCleanup.length} old streams`);
+    }
+  }
+
   cleanup(): void {
+    // Clear cleanup interval
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+
     // Abort all active streams
     for (const [streamId, handler] of this.streamingHandlers.entries()) {
       handler.abort();
     }
     this.streamingHandlers.clear();
-    logger.info('All streams cleaned up');
+    logger.info('RealTimeStreamingAdapter', 'All streams cleaned up');
   }
 }
 

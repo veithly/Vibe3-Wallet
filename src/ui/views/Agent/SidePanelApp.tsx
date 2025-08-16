@@ -89,22 +89,58 @@ export const SidePanelApp = () => {
   const connectionRetryCount = useRef(0);
   const maxRetries = TIMING_CONSTANTS.MAX_RETRIES;
   const retryDelay = TIMING_CONSTANTS.RECONNECTION_BASE_DELAY;
+  const streamingTimeoutRef = useRef<number | null>(null);
 
-  // Simplified message appender with minimal dependencies
+  // Enhanced message appender with comprehensive logging and validation
   const appendMessage = useCallback(
     (newMessage: Message, sessionId?: string) => {
       logger.debug(COMPONENT_NAME, 'AppendMessage called', {
         actor: newMessage.actor,
         contentLength: newMessage.content.length,
+        messageType: newMessage.messageType,
+        messageId: newMessage.messageId,
+        isStreaming: newMessage.isStreaming,
+        timestamp: newMessage.timestamp,
       });
-      setMessages((prev) => [...prev, newMessage]);
+
+      // Validate message before adding
+      if (!newMessage.actor || !newMessage.content) {
+        logger.error(COMPONENT_NAME, 'Invalid message structure', {
+          message: newMessage,
+          hasActor: !!newMessage.actor,
+          hasContent: !!newMessage.content,
+        });
+        return;
+      }
+
+      // Generate message ID if not provided
+      const messageWithId = {
+        ...newMessage,
+        messageId: newMessage.messageId || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        timestamp: newMessage.timestamp || Date.now(),
+      };
+
+      setMessages((prev) => {
+        const updatedMessages = [...prev, messageWithId];
+        logger.debug(COMPONENT_NAME, 'Message appended to state', {
+          totalMessages: updatedMessages.length,
+          lastMessageActor: messageWithId.actor,
+          lastMessageLength: messageWithId.content.length,
+        });
+        return updatedMessages;
+      });
+
       const effectiveSessionId = sessionId || currentSessionId;
       if (effectiveSessionId) {
         try {
-          chatHistoryStore.addMessage(effectiveSessionId, newMessage);
+          chatHistoryStore.addMessage(effectiveSessionId, messageWithId);
+          logger.debug(COMPONENT_NAME, 'Message saved to history', {
+            sessionId: effectiveSessionId,
+          });
         } catch (error) {
           logger.warn(COMPONENT_NAME, 'Failed to save message to history', {
             error,
+            sessionId: effectiveSessionId,
           });
         }
       }
@@ -140,11 +176,21 @@ export const SidePanelApp = () => {
     setReactStatus(null);
   }, []);
 
-  // Memoized task state handler with stable appendMessage dependency
+  // Enhanced task state handler with improved streaming completion detection
   const handleTaskState = useCallback(
     (event: AgentEvent) => {
       const { actor, state, timestamp, data } = event;
       const content = data?.details;
+
+      logger.debug(COMPONENT_NAME, 'Handling task state', {
+        actor,
+        state,
+        hasContent: !!content,
+        hasData: !!data,
+        timestamp,
+        isStreamingResponse: data?.isStreaming,
+        streamingMessageId,
+      });
 
       if (actor === Actors.SYSTEM) {
         if (
@@ -154,6 +200,10 @@ export const SidePanelApp = () => {
           // Also reset for any response that contains a message (indicates completion)
           (content && !state.startsWith('step_') && !state.startsWith('act_'))
         ) {
+          logger.debug(COMPONENT_NAME, 'Task completed, resetting UI state', {
+            state,
+            hasContent: !!content,
+          });
           setInputEnabled(true);
           setShowStopButton(false);
           setIsReplaying(false);
@@ -165,14 +215,61 @@ export const SidePanelApp = () => {
       }
 
       if (content) {
-        appendMessage({
-          actor: actor as Actors,
-          content,
-          timestamp,
+        // Check if this is actually a streaming response that wasn't properly handled
+        const isStreamingResponse = content.includes('streaming') || 
+                                  (data && data.isStreaming);
+        
+        if (isStreamingResponse && streamingMessageId) {
+          logger.debug(COMPONENT_NAME, 'Updating existing streaming message', {
+            streamingMessageId,
+            contentLength: content.length,
+          });
+          
+          // If we have an active streaming message, update it instead of creating a new one
+          setMessages((prev) => {
+            const updatedMessages = prev.map((msg) =>
+              msg.messageId === streamingMessageId
+                ? {
+                    ...msg,
+                    content: content,
+                    isStreaming: false,
+                    messageType: 'execution' as const,
+                  }
+                : msg
+            );
+            
+            logger.debug(COMPONENT_NAME, 'Streaming message updated via execution', {
+              wasStreaming: true,
+              newContentLength: content.length,
+            });
+            
+            return updatedMessages;
+          });
+          setStreamingMessageId(null);
+        } else {
+          logger.debug(COMPONENT_NAME, 'Adding regular execution message', {
+            actor,
+            contentLength: content.length,
+            state,
+          });
+          
+          // Regular message handling
+          appendMessage({
+            actor: actor as Actors,
+            content,
+            timestamp,
+            messageType: 'execution',
+          });
+        }
+      } else {
+        logger.debug(COMPONENT_NAME, 'Task state event with no content', {
+          actor,
+          state,
+          data,
         });
       }
     },
-    [appendMessage, resetReActStatus]
+    [appendMessage, resetReActStatus, streamingMessageId]
   );
 
   // Helper function to log connection events
@@ -218,10 +315,16 @@ export const SidePanelApp = () => {
     return true;
   }, [logEvent]);
 
-  // Memoized message handlers with optimized dependencies
+  // Enhanced message handlers with comprehensive logging and error recovery
   const setupMessageHandlers = useCallback(
     (port: chrome.runtime.Port) => {
       port.onMessage.addListener((message: any) => {
+        logger.debug(COMPONENT_NAME, 'Received message from backend', {
+          type: message.type,
+          hasTaskId: !!message.taskId,
+          hasData: !!message.data,
+          timestamp: Date.now(),
+        });
         logEvent('message_received', { type: message.type });
 
         if (message.type === 'heartbeat_ack') {
@@ -236,20 +339,32 @@ export const SidePanelApp = () => {
           return;
         }
         if (message && message.type === EventType.EXECUTION) {
+          logger.debug(COMPONENT_NAME, 'Processing execution message', {
+            actor: message.actor,
+            state: message.state,
+            hasData: !!message.data,
+          });
           handleTaskState(message);
         } else if (message && message.type === 'error') {
           logger.error(COMPONENT_NAME, 'Received error message', {
             error: message.error,
+            fullMessage: message,
           });
           logEvent('error', { error: message.error || 'Unknown error' });
           appendMessage({
             actor: Actors.SYSTEM,
             content: message.error || 'Unknown error occurred',
             timestamp: Date.now(),
+            messageType: 'error',
           });
           setInputEnabled(true);
           setShowStopButton(false);
+          resetReActStatus();
         } else if (message && message.type === 'streaming_start') {
+          logger.info(COMPONENT_NAME, 'Starting streaming response', {
+            taskId: message.taskId,
+          });
+          
           // Start streaming response
           const messageId = `streaming_${Date.now()}_${Math.random()
             .toString(36)
@@ -264,14 +379,22 @@ export const SidePanelApp = () => {
             isStreaming: true,
             messageId,
             functionCalls: [],
+            messageType: 'streaming_start',
           });
 
           logEvent('streaming_start', { taskId: message.taskId });
         } else if (message && message.type === 'streaming_chunk') {
+          logger.debug(COMPONENT_NAME, 'Processing streaming chunk', {
+            taskId: message.taskId,
+            chunkType: message.chunk?.type,
+            hasContent: !!message.chunk?.content,
+            streamingMessageId,
+          });
+          
           // Handle streaming chunk
           if (streamingMessageId && message.chunk) {
-            setMessages((prev) =>
-              prev.map((msg) =>
+            setMessages((prev) => {
+              const updatedMessages = prev.map((msg) =>
                 msg.messageId === streamingMessageId
                   ? {
                       ...msg,
@@ -281,8 +404,24 @@ export const SidePanelApp = () => {
                         message.chunk.functionCalls || msg.functionCalls || [],
                     }
                   : msg
-              )
-            );
+              );
+              
+              // Log the update
+              const streamingMsg = updatedMessages.find(m => m.messageId === streamingMessageId);
+              if (streamingMsg) {
+                logger.debug(COMPONENT_NAME, 'Streaming message updated', {
+                  contentLength: streamingMsg.content.length,
+                  functionCallsCount: streamingMsg.functionCalls?.length || 0,
+                });
+              }
+              
+              return updatedMessages;
+            });
+          } else {
+            logger.warn(COMPONENT_NAME, 'Received streaming chunk but no active streaming message', {
+              hasStreamingMessageId: !!streamingMessageId,
+              hasChunk: !!message.chunk,
+            });
           }
 
           logEvent('streaming_chunk', {
@@ -290,28 +429,91 @@ export const SidePanelApp = () => {
             chunkType: message.chunk?.type,
           });
         } else if (message && message.type === 'streaming_complete') {
+          logger.info(COMPONENT_NAME, 'Streaming response completed', {
+            taskId: message.taskId,
+            hasData: !!message.data,
+            streamingMessageId,
+          });
+          
           // Complete streaming response
-          if (streamingMessageId && message.data) {
-            setMessages((prev) =>
-              prev.map((msg) =>
+          if (streamingMessageId) {
+            let finalContent = '';
+            let finalFunctionCalls: any[] = [];
+            
+            if (message.data) {
+              finalContent = message.data.details || message.data.content || '';
+              finalFunctionCalls = message.data.functionCalls || [];
+              
+              logger.debug(COMPONENT_NAME, 'Streaming complete with data', {
+                streamingMessageId,
+                contentLength: finalContent.length,
+                hasDetails: !!message.data.details,
+                hasContent: !!message.data.content,
+                functionCallsCount: finalFunctionCalls.length,
+              });
+            } else {
+              logger.warn(COMPONENT_NAME, 'Streaming complete but no data provided', {
+                streamingMessageId,
+                hasData: !!message.data,
+              });
+              
+              // Fallback: Get current content from the streaming message
+              const currentMsg = messages.find(m => m.messageId === streamingMessageId);
+              finalContent = currentMsg?.content || '';
+              finalFunctionCalls = currentMsg?.functionCalls || [];
+            }
+            
+            setMessages((prev) => {
+              const updatedMessages = prev.map((msg) =>
                 msg.messageId === streamingMessageId
                   ? {
                       ...msg,
-                      content: message.data.details,
+                      content: finalContent,
                       isStreaming: false,
-                      functionCalls:
-                        message.data.functionCalls || msg.functionCalls || [],
+                      functionCalls: finalFunctionCalls,
+                      messageType: 'streaming_complete' as const,
                     }
                   : msg
-              )
-            );
+              );
+              
+              logger.debug(COMPONENT_NAME, 'Streaming message finalized', {
+                finalContentLength: finalContent.length,
+                wasEmpty: finalContent.length === 0,
+              });
+              
+              return updatedMessages;
+            });
+          } else {
+            logger.error(COMPONENT_NAME, 'Streaming complete but no streaming message ID', {
+              hasStreamingMessageId: !!streamingMessageId,
+            });
+            
+            // Fallback: Create a new message with the response
+            if (message.data) {
+              appendMessage({
+                actor: Actors.SYSTEM,
+                content: message.data.details || message.data.content || 'Response received',
+                timestamp: Date.now(),
+                messageType: 'streaming_complete',
+                functionCalls: message.data.functionCalls || [],
+              });
+            }
           }
+          
           setStreamingMessageId(null);
           setInputEnabled(true);
           setShowStopButton(false);
+          setIsFollowUpMode(true);
+          resetReActStatus();
 
           logEvent('streaming_complete', { taskId: message.taskId });
         } else if (message && message.type === 'streaming_error') {
+          logger.error(COMPONENT_NAME, 'Streaming error occurred', {
+            taskId: message.taskId,
+            error: message.error,
+            streamingMessageId,
+          });
+          
           // Handle streaming error
           if (streamingMessageId) {
             setMessages((prev) =>
@@ -321,20 +523,36 @@ export const SidePanelApp = () => {
                       ...msg,
                       content: message.error || 'Streaming error occurred',
                       isStreaming: false,
+                      messageType: 'streaming_error' as const,
                     }
                   : msg
               )
             );
+          } else {
+            // Fallback: Create error message
+            appendMessage({
+              actor: Actors.SYSTEM,
+              content: message.error || 'Streaming error occurred',
+              timestamp: Date.now(),
+              messageType: 'streaming_error',
+            });
           }
+          
           setStreamingMessageId(null);
           setInputEnabled(true);
           setShowStopButton(false);
+          resetReActStatus();
 
           logEvent('streaming_error', {
             taskId: message.taskId,
             error: message.error,
           });
         } else if (message && message.type === 'thinking') {
+          logger.debug(COMPONENT_NAME, 'Processing thinking message', {
+            thinkingType: message.data.thinkingType,
+            contentLength: message.data.details?.length || 0,
+          });
+          
           // Handle thinking/ReAct messages
           appendMessage({
             actor: Actors.SYSTEM,
@@ -349,6 +567,13 @@ export const SidePanelApp = () => {
             }],
           });
         } else if (message && message.type === 'react_status') {
+          logger.debug(COMPONENT_NAME, 'Processing ReAct status message', {
+            isThinking: message.data.isThinking,
+            isActing: message.data.isActing,
+            currentStep: message.data.currentStep,
+            maxSteps: message.data.maxSteps,
+          });
+          
           // Handle ReAct status messages
           const reactStatusData: ReActStatusMessage = {
             isThinking: message.data.isThinking || false,
@@ -371,21 +596,23 @@ export const SidePanelApp = () => {
             reactStatus: reactStatusData
           });
         } else if (message && message.type === 'agent_capabilities') {
-          // Update agent capabilities
+          logger.debug(COMPONENT_NAME, 'Agent capabilities updated', {
+            capabilities: message.capabilities,
+          });
           setAgentCapabilities(message.capabilities);
           logEvent('agent_capabilities', message.capabilities);
         } else if (message && message.type === 'available_tools') {
-          // Update available tools
           logger.info(
+            COMPONENT_NAME,
             'Available tools updated',
             `${message.tools?.length || 0} tools available`
           );
           logEvent('available_tools', { count: message.tools?.length || 0 });
         } else if (message && message.type === 'speech_to_text_result') {
+          logger.debug(COMPONENT_NAME, 'Speech recognition successful', {
+            textLength: message.text.length,
+          });
           if (message.text && setInputTextRef.current) {
-            logger.debug(COMPONENT_NAME, 'Speech recognition successful', {
-              textLength: message.text.length,
-            });
             setInputTextRef.current(message.text);
           }
           setIsProcessingSpeech(false);
@@ -400,13 +627,64 @@ export const SidePanelApp = () => {
             actor: Actors.SYSTEM,
             content: message.error || 'Speech recognition failed',
             timestamp: Date.now(),
+            messageType: 'speech_to_text_error',
           });
           setIsProcessingSpeech(false);
+        } else {
+          logger.warn(COMPONENT_NAME, 'Unknown message type received', {
+            type: message.type,
+            fullMessage: message,
+          });
         }
       });
     },
-    [handleTaskState, appendMessage, logEvent]
+    [handleTaskState, appendMessage, logEvent, resetReActStatus, messages]
   );
+
+  // Fallback message handler for cases where streaming might not work properly
+  const ensureMessageVisibility = useCallback((content: string, actor: Actors = Actors.SYSTEM) => {
+    logger.debug(COMPONENT_NAME, 'Ensuring message visibility', {
+      contentLength: content.length,
+      actor,
+      currentMessagesCount: messages.length,
+      hasStreamingMessage: !!streamingMessageId,
+    });
+
+    // If we have an active streaming message, try to complete it
+    if (streamingMessageId) {
+      setMessages((prev) => {
+        const streamingMsg = prev.find(m => m.messageId === streamingMessageId);
+        if (streamingMsg && streamingMsg.isStreaming) {
+          logger.debug(COMPONENT_NAME, 'Completing streaming message via fallback', {
+            streamingMessageId,
+            currentContent: streamingMsg.content,
+            newContent: content,
+          });
+          
+          return prev.map((msg) =>
+            msg.messageId === streamingMessageId
+              ? {
+                  ...msg,
+                  content: content || msg.content,
+                  isStreaming: false,
+                  messageType: 'fallback_complete' as const,
+                }
+              : msg
+          );
+        }
+        return prev;
+      });
+      setStreamingMessageId(null);
+    } else {
+      // Create a new message
+      appendMessage({
+        actor,
+        content,
+        timestamp: Date.now(),
+        messageType: 'fallback',
+      });
+    }
+  }, [messages, streamingMessageId, appendMessage]);
 
   const setupConnectionRef = useRef<() => void>();
 
@@ -764,7 +1042,6 @@ export const SidePanelApp = () => {
       if (!isFollowUpMode) {
         sessionId = `session-${Date.now()}`;
         setCurrentSessionId(sessionId);
-        setIsFollowUpMode(false);
       }
 
       const userMessage = {
@@ -889,15 +1166,14 @@ export const SidePanelApp = () => {
         logger.debug(COMPONENT_NAME, 'User message appended');
 
         // Check if we should use streaming based on agent capabilities
-        const useStreaming = agentCapabilities?.streaming || false;
+        // Default to streaming to ensure compatibility with backend
+        const useStreaming = agentCapabilities?.streaming !== false;
 
         // Prepare and send message
         const messageId = generateMessageId();
         const messagePayload = {
           type: useStreaming
             ? 'streaming_task'
-            : isFollowUpMode
-            ? 'follow_up_task'
             : 'new_task',
           task: text,
           taskId: sessionId,
@@ -1440,7 +1716,6 @@ export const SidePanelApp = () => {
                 sessions={chatSessions}
                 onSessionSelect={handleSessionSelect}
                 onNewChat={handleNewChat}
-                onReplay={handleReplay}
               />
             </ErrorBoundary>
           ) : (
@@ -1489,9 +1764,6 @@ export const SidePanelApp = () => {
               disabled={!inputEnabled || (isHistoricalSession && !isReplaying)}
               showStopButton={showStopButton}
               setContent={(setter) => (setInputTextRef.current = setter)}
-              onReplay={handleReplay}
-              historicalSessionId={currentSessionId}
-              isHistoricalSession={isHistoricalSession}
             />
           </ErrorBoundary>
         </div>

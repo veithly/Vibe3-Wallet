@@ -19,7 +19,6 @@ interface ChatHistoryListProps {
   sessions: ChatSession[];
   onSessionSelect: (sessionId: string) => void;
   onNewChat?: () => void;
-  onReplay?: (sessionId: string) => void;
   onBookmark?: (sessionId: string, isBookmarked: boolean) => void;
   onArchive?: (sessionId: string, isArchived: boolean) => void;
   onDelete?: (sessionId: string) => void;
@@ -33,7 +32,6 @@ export default function ChatHistoryList({
   sessions,
   onSessionSelect,
   onNewChat,
-  onReplay,
   onBookmark,
   onArchive,
   onDelete,
@@ -156,13 +154,7 @@ export default function ChatHistoryList({
     setShowMenuForSession(null);
   };
 
-  const handleReplay = (sessionId: string) => {
-    if (onReplay) {
-      onReplay(sessionId);
-    }
-    setShowMenuForSession(null);
-  };
-
+  
   const handleExport = () => {
     if (onExport) {
       onExport();
@@ -435,17 +427,6 @@ export default function ChatHistoryList({
                 </button>
                 {showMenuForSession === session.id && (
                   <div className="session-menu-dropdown">
-                    {onReplay && (
-                      <button
-                        className="menu-item"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleReplay(session.id);
-                        }}
-                      >
-                        🔄 Replay
-                      </button>
-                    )}
                     {onBookmark && (
                       <button
                         className="menu-item"

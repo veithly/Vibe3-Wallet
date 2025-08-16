@@ -35,6 +35,10 @@ class AgentService {
   private web3Agent: Web3Agent | null = null;
   private agentContext: AgentContext | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private connectionMonitorInterval: ReturnType<typeof setInterval> | null = null;
+  private connectionStatus: Map<string, { lastSeen: number; status: 'connected' | 'disconnected' | 'reconnecting' }> = new Map();
+  private recoveryAttempts: Map<string, number> = new Map();
+  private maxRecoveryAttempts: number = 3;
 
   constructor() {
     console.log('🔥🔥🔥 AGENT SERVICE CONSTRUCTOR CALLED! 🔥🔥🔥', {
@@ -46,6 +50,7 @@ class AgentService {
     try {
       this.setupPortManagement();
       this.initializeAgents();
+      this.setupConnectionMonitoring();
       logger.info('AgentService', 'Agent Service initialized successfully');
       
       console.log('🚨🚨🚨 AGENT SERVICE INITIALIZATION COMPLETE! 🚨🚨🚨');
@@ -162,6 +167,131 @@ class AgentService {
     }, 30000);
   }
 
+  private setupConnectionMonitoring() {
+    // Monitor connection status and attempt recovery
+    this.connectionMonitorInterval = setInterval(() => {
+      this.monitorConnections();
+    }, 10000); // Check every 10 seconds
+
+    logger.info('AgentService', 'Connection monitoring initialized');
+  }
+
+  private monitorConnections() {
+    const now = Date.now();
+    const connectionTimeout = 45000; // 45 seconds timeout
+
+    for (const [portName, portStatus] of this.connectionStatus.entries()) {
+      const timeSinceLastSeen = now - portStatus.lastSeen;
+
+      if (timeSinceLastSeen > connectionTimeout && portStatus.status !== 'reconnecting') {
+        logger.warn('AgentService', 'Connection timeout detected', {
+          portName,
+          timeSinceLastSeen,
+          status: portStatus.status,
+        });
+
+        this.attemptConnectionRecovery(portName);
+      }
+    }
+
+    // Clean up old connection statuses
+    const staleConnections: string[] = [];
+    for (const [portName, portStatus] of this.connectionStatus.entries()) {
+      const timeSinceLastSeen = now - portStatus.lastSeen;
+      if (timeSinceLastSeen > 300000) { // 5 minutes
+        staleConnections.push(portName);
+      }
+    }
+
+    for (const portName of staleConnections) {
+      this.connectionStatus.delete(portName);
+      this.recoveryAttempts.delete(portName);
+      logger.info('AgentService', 'Cleaned up stale connection status', { portName });
+    }
+  }
+
+  private updateConnectionStatus(portName: string, status: 'connected' | 'disconnected' | 'reconnecting') {
+    this.connectionStatus.set(portName, {
+      lastSeen: Date.now(),
+      status,
+    });
+
+    logger.debug('AgentService', 'Connection status updated', {
+      portName,
+      status,
+      totalConnections: this.connectionStatus.size,
+    });
+  }
+
+  private async attemptConnectionRecovery(portName: string) {
+    const currentAttempts = this.recoveryAttempts.get(portName) || 0;
+    
+    if (currentAttempts >= this.maxRecoveryAttempts) {
+      logger.error('AgentService', 'Max recovery attempts reached', {
+        portName,
+        attempts: currentAttempts,
+      });
+      this.connectionStatus.delete(portName);
+      this.recoveryAttempts.delete(portName);
+      return;
+    }
+
+    this.recoveryAttempts.set(portName, currentAttempts + 1);
+    this.updateConnectionStatus(portName, 'reconnecting');
+
+    logger.info('AgentService', 'Attempting connection recovery', {
+      portName,
+      attempt: currentAttempts + 1,
+      maxAttempts: this.maxRecoveryAttempts,
+    });
+
+    try {
+      // Attempt to reconnect by sending a test message
+      const agentPort = this.ports.get(portName);
+      if (agentPort && agentPort.connected) {
+        agentPort.port.postMessage({
+          type: 'connection_test',
+          timestamp: Date.now(),
+          attempt: currentAttempts + 1,
+        });
+
+        // Wait for response
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+
+        // Check if connection was restored
+        const portStatus = this.connectionStatus.get(portName);
+        if (portStatus && portStatus.status === 'connected') {
+          logger.info('AgentService', 'Connection recovery successful', {
+            portName,
+            attempts: currentAttempts + 1,
+          });
+          this.recoveryAttempts.delete(portName);
+        } else {
+          // Continue with next recovery attempt
+          setTimeout(() => {
+            this.attemptConnectionRecovery(portName);
+          }, Math.pow(2, currentAttempts) * 2000); // Exponential backoff
+        }
+      } else {
+        // Port is no longer available, clean up
+        this.connectionStatus.delete(portName);
+        this.recoveryAttempts.delete(portName);
+        this.ports.delete(portName);
+      }
+    } catch (error) {
+      logger.error('AgentService', 'Connection recovery failed', {
+        portName,
+        attempt: currentAttempts + 1,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      // Schedule next attempt
+      setTimeout(() => {
+        this.attemptConnectionRecovery(portName);
+      }, Math.pow(2, currentAttempts) * 2000);
+    }
+  }
+
   private sendHeartbeat() {
     this.ports.forEach((agentPort, portName) => {
       if (agentPort.connected) {
@@ -185,23 +315,41 @@ class AgentService {
       connected: true,
     });
 
+    // Initialize connection status tracking
+    this.updateConnectionStatus(portName, 'connected');
+    this.recoveryAttempts.delete(portName); // Reset recovery attempts
+
     // Setup message listener
     port.onMessage.addListener((message: AgentMessage) => {
+      // Update connection status on any message
+      this.updateConnectionStatus(portName, 'connected');
       this.handleMessage(message, port);
     });
 
     // Setup disconnect listener
     port.onDisconnect.addListener(() => {
       logger.info(`Port ${portName} disconnected`);
+      this.updateConnectionStatus(portName, 'disconnected');
       this.removePort(portName);
     });
 
     // Send initial connection confirmation
     try {
-      port.postMessage({ type: 'connected', status: 'ready' });
+      port.postMessage({ 
+        type: 'connected', 
+        status: 'ready',
+        timestamp: Date.now(),
+        connectionId: portName,
+      });
     } catch (error) {
       logger.error('Failed to send connection confirmation:', error);
     }
+
+    logger.info('AgentService', 'Connection setup complete', {
+      portName,
+      totalConnections: this.ports.size,
+      totalMonitoredConnections: this.connectionStatus.size,
+    });
   }
 
   private removePort(portName: string) {
@@ -209,6 +357,16 @@ class AgentService {
     if (agentPort) {
       agentPort.connected = false;
       this.ports.delete(portName);
+      
+      // Clean up connection status and recovery attempts
+      this.connectionStatus.delete(portName);
+      this.recoveryAttempts.delete(portName);
+      
+      logger.info('AgentService', 'Port removed and cleanup completed', {
+        portName,
+        remainingConnections: this.ports.size,
+        remainingMonitoredConnections: this.connectionStatus.size,
+      });
     }
   }
 
@@ -219,25 +377,40 @@ class AgentService {
     logger.info('AgentService', 'Received message', {
       type: message.type,
       taskId: message.taskId,
+      port: port.name,
+      connected: port.sender?.url,
     });
 
-    // Check if any agent is available
+    // Enhanced fallback mechanism with immediate acknowledgment
+    if (!['heartbeat', 'get_providers', 'get_agent_models'].includes(message.type)) {
+      try {
+        port.postMessage({
+          type: 'message_received',
+          messageId: message.taskId || `msg_${Date.now()}`,
+          timestamp: Date.now(),
+          originalType: message.type,
+        });
+      } catch (ackError) {
+        logger.warn('AgentService', 'Failed to send message acknowledgment', ackError);
+      }
+    }
+
+    // Check if any agent is available with enhanced fallback
     if (
       !this.executor &&
       !this.web3Agent &&
-      !['heartbeat'].includes(message.type)
+      !['heartbeat', 'get_providers', 'get_agent_models'].includes(message.type)
     ) {
       const errorMsg = 'No agents available. Please try again later.';
       logger.error('AgentService', errorMsg);
-      try {
-        port.postMessage({
-          type: 'error',
-          error: errorMsg,
-          timestamp: Date.now(),
-        });
-      } catch (sendError) {
-        logger.error('AgentService', 'Failed to send error message', sendError);
-      }
+      
+      // Send immediate error response
+      await this.sendWithFallback(port, {
+        type: 'error',
+        error: errorMsg,
+        timestamp: Date.now(),
+        fallback: true,
+      });
       return;
     }
 
@@ -360,11 +533,138 @@ class AgentService {
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
-      logger.error('Error handling message:', errorMessage);
-      port.postMessage({
+      logger.error('Error handling message:', {
+        messageType: message.type,
+        error: errorMessage,
+        taskId: message.taskId,
+        port: port.name,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+
+      // Enhanced error response with fallback mechanism
+      await this.sendWithFallback(port, {
         type: 'error',
         error: `Failed to handle ${message.type}: ${errorMessage}`,
+        timestamp: Date.now(),
+        originalType: message.type,
+        taskId: message.taskId,
+        fallback: true,
       });
+    }
+  }
+
+  /**
+   * Enhanced message sending with fallback mechanisms
+   */
+  private async sendWithFallback(
+    port: chrome.runtime.Port,
+    message: any,
+    maxRetries: number = 3
+  ): Promise<boolean> {
+    let attempt = 0;
+    let lastError: Error | null = null;
+
+    while (attempt < maxRetries) {
+      try {
+        attempt++;
+        
+        // Check if port is still connected
+        if (!port.sender) {
+          throw new Error('Port is no longer connected');
+        }
+
+        // Send the message
+        port.postMessage(message);
+        
+        logger.debug('AgentService', 'Message sent successfully', {
+          attempt,
+          type: message.type,
+          port: port.name,
+        });
+        
+        return true;
+      } catch (error) {
+        lastError = error as Error;
+        logger.warn('AgentService', `Message send attempt ${attempt} failed`, {
+          error: lastError.message,
+          type: message.type,
+          port: port.name,
+        });
+
+        // Wait before retry (exponential backoff)
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 100));
+        }
+      }
+    }
+
+    // All attempts failed, try to send to all connected ports as fallback
+    logger.error('AgentService', 'All send attempts failed, trying broadcast fallback', {
+      originalError: lastError?.message,
+      messageType: message.type,
+    });
+
+    let fallbackSuccess = false;
+    this.ports.forEach((agentPort, portName) => {
+      if (agentPort.connected && agentPort.port !== port) {
+        try {
+          agentPort.port.postMessage({
+            ...message,
+            type: 'fallback_message',
+            originalPort: port.name,
+            fallbackReason: lastError?.message,
+          });
+          fallbackSuccess = true;
+          logger.info('AgentService', `Fallback message sent to port: ${portName}`);
+        } catch (fallbackError) {
+          logger.warn('AgentService', `Fallback send failed to port: ${portName}`, fallbackError);
+        }
+      }
+    });
+
+    return fallbackSuccess;
+  }
+
+  /**
+   * Ensure message is displayed with multiple fallback strategies
+   */
+  private async ensureMessageDisplayed(
+    message: any,
+    originalPort: chrome.runtime.Port,
+    context: string = 'unknown'
+  ): Promise<void> {
+    // Strategy 1: Send to original port
+    const originalSuccess = await this.sendWithFallback(originalPort, message);
+    
+    if (originalSuccess) {
+      logger.info('AgentService', 'Message sent successfully to original port', { context });
+      return;
+    }
+
+    // Strategy 2: Broadcast to all connected ports
+    logger.warn('AgentService', 'Original port send failed, broadcasting to all ports', { context });
+    let broadcastSuccess = false;
+
+    for (const [portName, agentPort] of this.ports.entries()) {
+      if (agentPort.connected) {
+        try {
+          agentPort.port.postMessage({
+            ...message,
+            type: `${message.type}_broadcast`,
+            broadcastContext: context,
+            originalPort: originalPort.name,
+          });
+          broadcastSuccess = true;
+        } catch (broadcastError) {
+          logger.warn('AgentService', `Broadcast failed to port: ${portName}`, broadcastError);
+        }
+      }
+    }
+
+    if (broadcastSuccess) {
+      logger.info('AgentService', 'Message broadcast successfully to fallback ports', { context });
+    } else {
+      logger.error('AgentService', 'All message delivery strategies failed', { context, messageType: message.type });
     }
   }
 
@@ -517,8 +817,8 @@ class AgentService {
         }
       );
 
-      // Send response back to client
-      port.postMessage({
+      // Send response back to client with enhanced fallback
+      await this.ensureMessageDisplayed({
         type: 'execution',
         actor: Actors.SYSTEM,
         state: 'TASK_OK',
@@ -530,13 +830,13 @@ class AgentService {
           simulation: response.simulation,
           functionCalling: true,
         },
-      });
+      }, port, 'web3_task_response');
     } else {
       // Fall back to traditional processing
       const response = await this.web3Agent.processUserInstruction(task);
 
-      // Send response back to client
-      port.postMessage({
+      // Send response back to client with enhanced fallback
+      await this.ensureMessageDisplayed({
         type: 'execution',
         actor: Actors.SYSTEM,
         state: 'TASK_OK',
@@ -548,7 +848,7 @@ class AgentService {
           simulation: response.simulation,
           functionCalling: false,
         },
-      });
+      }, port, 'web3_task_fallback_response');
     }
   }
 
@@ -591,6 +891,20 @@ class AgentService {
       return this.handleWeb3Task(task, tabId, port, historySessionId);
     }
 
+    // Set up streaming timeout and completion handling
+    const streamingTimeout = setTimeout(() => {
+      logger.warn('AgentService', 'Streaming task timed out', { task, tabId });
+      port.postMessage({
+        type: 'streaming_error',
+        taskId: message.taskId,
+        error: 'Streaming response timed out',
+        timestamp: Date.now(),
+      });
+    }, 60000); // 60 second timeout
+
+    let isCompleted = false;
+    let chunkCount = 0;
+
     try {
       // Send initial response indicating streaming is starting
       port.postMessage({
@@ -599,11 +913,20 @@ class AgentService {
         timestamp: Date.now(),
       });
 
-      // Process with streaming support
+      // Process with streaming support and enhanced completion handling
       const response = await this.web3Agent.processUserInstructionWithFunctionCalling(
         task,
         true, // enable streaming
         (chunk) => {
+          if (isCompleted) return; // Ignore chunks after completion
+          
+          chunkCount++;
+          logger.debug('AgentService', `Streaming chunk ${chunkCount}`, {
+            taskId: message.taskId,
+            chunkType: chunk.type,
+            chunkSize: chunk.content?.length || 0
+          });
+
           // Send streaming chunk to client
           port.postMessage({
             type: 'streaming_chunk',
@@ -611,11 +934,30 @@ class AgentService {
             chunk,
             timestamp: Date.now(),
           });
+        },
+        undefined, // thinking callback (optional)
+        () => {
+          // Completion callback - called when streaming is finished
+          if (!isCompleted) {
+            isCompleted = true;
+            clearTimeout(streamingTimeout);
+            logger.info('AgentService', 'Streaming completed naturally', {
+              task,
+              tabId,
+              chunkCount,
+            });
+          }
         }
       );
 
-      // Send final response
-      port.postMessage({
+      // Ensure completion state is properly set
+      if (!isCompleted) {
+        isCompleted = true;
+        clearTimeout(streamingTimeout);
+      }
+
+      // Send final response with enhanced state tracking
+      const finalMessage = {
         type: 'streaming_complete',
         taskId: message.taskId,
         data: {
@@ -624,25 +966,44 @@ class AgentService {
           plan: response.plan,
           simulation: response.simulation,
           functionCalling: true,
+          chunkCount,
+          streamingDuration: Date.now() - (typeof message.taskId === 'number' ? message.taskId : Date.now()),
         },
         timestamp: Date.now(),
-      });
+        state: 'COMPLETED',
+      };
 
-      logger.info('AgentService', 'Streaming task completed successfully', {
+      logger.info('AgentService', 'Sending streaming completion', {
         task,
         tabId,
         success: response.success,
+        chunkCount,
+        messageType: finalMessage.type,
       });
-    } catch (error) {
-      logger.error('AgentService', 'Streaming task failed', error);
 
-      // Send error response
-      port.postMessage({
+      await this.ensureMessageDisplayed(finalMessage, port, 'streaming_completion');
+
+    } catch (error) {
+      // Clear timeout on error
+      clearTimeout(streamingTimeout);
+      isCompleted = true;
+
+      logger.error('AgentService', 'Streaming task failed', {
+        error: error instanceof Error ? error.message : String(error),
+        task,
+        tabId,
+        chunkCount,
+      });
+
+      // Send error response with enhanced error details
+      await this.ensureMessageDisplayed({
         type: 'streaming_error',
         taskId: message.taskId,
         error: error instanceof Error ? error.message : String(error),
         timestamp: Date.now(),
-      });
+        chunkCount,
+        state: 'ERROR',
+      }, port, 'streaming_error');
     }
   }
 
@@ -653,8 +1014,8 @@ class AgentService {
   ) {
     logger.info('AgentService', `Routing to Automation Executor: ${task}`);
 
-    // Instead of using mock executor, send a direct response
-    port.postMessage({
+    // Instead of using mock executor, send a direct response with fallback
+    await this.ensureMessageDisplayed({
       type: 'execution',
       actor: Actors.SYSTEM,
       state: 'TASK_OK',
@@ -665,7 +1026,7 @@ class AgentService {
         plan: null,
         simulation: null,
       },
-    });
+    }, port, 'automation_task_response');
 
     // For now, we'll respond directly rather than using the mock executor
     // This ensures the user gets immediate feedback
@@ -851,6 +1212,41 @@ class AgentService {
   }
 
   /**
+   * Get current connection status for monitoring
+   */
+  public getConnectionStatus() {
+    const status = {
+      totalPorts: this.ports.size,
+      monitoredConnections: this.connectionStatus.size,
+      connections: Array.from(this.connectionStatus.entries()).map(([portName, status]) => ({
+        portName,
+        ...status,
+        timeSinceLastSeen: Date.now() - status.lastSeen,
+      })),
+      recoveryAttempts: Object.fromEntries(this.recoveryAttempts.entries()),
+      timestamp: Date.now(),
+    };
+
+    return status;
+  }
+
+  /**
+   * Force connection recovery for a specific port
+   */
+  public async forceConnectionRecovery(portName: string): Promise<boolean> {
+    try {
+      await this.attemptConnectionRecovery(portName);
+      return true;
+    } catch (error) {
+      logger.error('AgentService', 'Force connection recovery failed', {
+        portName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  /**
    * Auto-assign a newly configured provider to agents that don't have one
    */
   private async autoAssignProviderToAgents(
@@ -1000,6 +1396,13 @@ class AgentService {
       logger.info('AgentService', 'Heartbeat interval cleared');
     }
 
+    // Clear connection monitoring interval
+    if (this.connectionMonitorInterval) {
+      clearInterval(this.connectionMonitorInterval);
+      this.connectionMonitorInterval = null;
+      logger.info('AgentService', 'Connection monitoring interval cleared');
+    }
+
     // Cleanup executor if it exists
     if (this.executor) {
       try {
@@ -1073,9 +1476,15 @@ class AgentService {
     });
 
     this.ports.clear();
+    
+    // Clean up connection status and recovery attempts
+    this.connectionStatus.clear();
+    this.recoveryAttempts.clear();
+    logger.info('AgentService', 'Connection status and recovery attempts cleared');
+
     logger.info(
       'AgentService',
-      `Cleanup completed. Disconnected ${disconnectedPorts} ports`
+      `Cleanup completed. Disconnected ${disconnectedPorts} ports, cleared ${this.connectionStatus.size} connection statuses`
     );
   }
 }

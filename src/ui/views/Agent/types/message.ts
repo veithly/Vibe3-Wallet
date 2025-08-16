@@ -43,7 +43,7 @@ export interface Message {
   functionCalls?: FunctionCall[];
   thinking?: ThinkingStep[];
   reactStatus?: ReActStatusMessage;
-  messageType?: 'standard' | 'thinking' | 'function_call' | 'reasoning' | 'react_status';
+  messageType?: 'standard' | 'thinking' | 'function_call' | 'reasoning' | 'react_status' | 'execution' | 'error' | 'streaming_start' | 'streaming_chunk' | 'streaming_complete' | 'streaming_error' | 'speech_to_text_error' | 'fallback' | 'fallback_complete';
 }
 
 export interface ActorProfile {
