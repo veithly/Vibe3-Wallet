@@ -758,7 +758,8 @@ class Web3LLM implements IWeb3LLM {
       currentMessages.push(new AIMessage(reasoningResult.content));
       
       // Step 2: Action - Execute function calls if any
-      const functionCalls = this.parseFunctionCalls(reasoningResult.content, tools);
+      // Use tool calls from structured response first, fallback to parsing from text
+      const functionCalls = reasoningResult.toolCalls || this.parseFunctionCalls(reasoningResult.content, tools);
       
       if (functionCalls.length > 0) {
         logger.debug(`Executing ${functionCalls.length} function calls in step ${step + 1}`);
@@ -831,7 +832,7 @@ class Web3LLM implements IWeb3LLM {
     intent: Web3Intent | undefined,
     currentStep: number,
     maxSteps: number
-  ): Promise<{ content: string }> {
+  ): Promise<{ content: string; toolCalls?: FunctionCall[] }> {
     const systemPrompt = this.createReActSystemPrompt(context, tools, intent, currentStep, maxSteps);
     const userPrompt = this.createReActUserPrompt(messages, context, currentStep, maxSteps);
     
@@ -842,9 +843,118 @@ class Web3LLM implements IWeb3LLM {
       new (await import('../llm/messages')).HumanMessage(userPrompt)
     ];
     
+    // Attach tools for OpenAI function calling
+    if (this._supportsFunctionCalling && tools.length > 0) {
+      const openaiTools = tools.map(tool => ({
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters
+        }
+      }));
+      
+      // Set tools on the model if it supports it
+      if ((this.model as any).bind) {
+        this.model = (this.model as any).bind({ tools: openaiTools, tool_choice: 'auto' });
+      }
+      (this.model as any)._pending_tools = openaiTools;
+    }
+    
     const result = await this.model.invoke(reasoningMessages);
+    
+    // Extract tool calls from OpenAI response
+    let toolCalls: FunctionCall[] = [];
+    if (result.tool_calls && Array.isArray(result.tool_calls) && result.tool_calls.length > 0) {
+      logger.info('Found tool calls in ReAct reasoning response', {
+        toolCallsCount: result.tool_calls.length,
+        toolCallNames: result.tool_calls.map((tc: any) => tc.function?.name || 'unknown'),
+      });
+      
+      // Convert OpenAI tool_calls to FunctionCall format
+      toolCalls = result.tool_calls.map((toolCall: any) => {
+        try {
+          let parsedArguments: Record<string, any> = {};
+          
+          if (toolCall.function && toolCall.function.arguments) {
+            const rawArgs = toolCall.function.arguments;
+            console.log('🚨🚨🚨 CRITICAL DEBUGGING: ReAct tool call arguments parsing:', {
+              rawArgs,
+              rawArgsType: typeof rawArgs,
+              functionName: toolCall.function.name,
+              toolCallId: toolCall.id,
+            });
+            
+            if (typeof rawArgs === 'string') {
+              try {
+                parsedArguments = JSON.parse(rawArgs);
+                console.log('✅ ReAct JSON parsing success:', {
+                  parsedArguments,
+                  keys: Object.keys(parsedArguments),
+                  hasUrl: 'url' in parsedArguments,
+                  urlValue: parsedArguments.url,
+                });
+              } catch (parseError) {
+                console.error('🚨🚨🚨 CRITICAL: ReAct JSON parsing failed!', {
+                  error: parseError instanceof Error ? parseError.message : String(parseError),
+                  rawArgs,
+                  rawArgsLength: rawArgs.length,
+                  isOfCorruption: rawArgs === 'of',
+                  functionName: toolCall.function.name,
+                  fullToolCall: JSON.stringify(toolCall, null, 2),
+                });
+                logger.warn('Failed to parse tool call arguments, using empty object', {
+                  error: parseError instanceof Error ? parseError.message : String(parseError),
+                  rawArgs,
+                });
+                parsedArguments = {};
+              }
+            } else {
+              parsedArguments = rawArgs || {};
+              console.log('✅ ReAct arguments already parsed:', {
+                parsedArguments,
+                keys: Object.keys(parsedArguments),
+              });
+            }
+          }
+
+          const finalFunctionCall = {
+            name: toolCall.function?.name || 'unknown',
+            arguments: parsedArguments,
+            id: toolCall.id || `call_${currentStep}_${Date.now()}`,
+          };
+          
+          console.log('🚨🚨🚨 FINAL ReAct FUNCTION CALL CREATED:', {
+            functionName: finalFunctionCall.name,
+            arguments: finalFunctionCall.arguments,
+            argumentsKeys: Object.keys(finalFunctionCall.arguments),
+            hasUrl: 'url' in finalFunctionCall.arguments,
+            urlValue: finalFunctionCall.arguments.url,
+            isUrlValid: finalFunctionCall.arguments.url && 
+                       typeof finalFunctionCall.arguments.url === 'string' && 
+                       finalFunctionCall.arguments.url.startsWith('http'),
+            fullFunctionCall: JSON.stringify(finalFunctionCall, null, 2),
+          });
+          
+          return finalFunctionCall;
+        } catch (error) {
+          logger.error('Failed to parse OpenAI tool call in ReAct', {
+            error: error instanceof Error ? error.message : String(error),
+            toolCall,
+          });
+          
+          return {
+            name: toolCall.function?.name || 'unknown',
+            arguments: {},
+            id: toolCall.id || `call_${currentStep}_${Date.now()}`,
+          };
+        }
+      });
+    }
+    
     return {
-      content: result.content as string
+      content: result.content as string,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined
     };
   }
 

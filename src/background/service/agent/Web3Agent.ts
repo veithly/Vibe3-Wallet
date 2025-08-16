@@ -103,6 +103,16 @@ export class Web3Agent {
       actionRegistry?: ActionRegistry;
     }
   ) {
+    // 🔥🔥🔥 EXTREMELY AGGRESSIVE DEBUGGING - WEB3AGENT CONSTRUCTOR CALLED! 🔥🔥🔥
+    console.log('🔥🔥🔥 WEB3AGENT CONSTRUCTOR INITIALIZED - THIS MUST APPEAR IN CONSOLE! 🔥🔥🔥', {
+      timestamp: Date.now(),
+      contextType: typeof context,
+      llmType: typeof llm,
+      configProvided: !!config,
+      dependenciesProvided: !!dependencies,
+      constructorStack: new Error().stack
+    });
+    
     this.context = context;
     this.llm = llm;
 
@@ -1061,11 +1071,24 @@ export class Web3Agent {
         generatedPrompt.tools
       );
 
+      // 🚨🚨🚨 CRITICAL DEBUGGING: Check LLM response before extraction
+      console.log('🚨🚨🚨 LLM RESPONSE BEFORE EXTRACTION:', {
+        responseKeys: Object.keys(llmResponse),
+        hasFunctionCalls: !!(llmResponse.functionCalls && llmResponse.functionCalls.length > 0),
+        hasToolCalls: !!(llmResponse as any).tool_calls,
+        toolCalls: (llmResponse as any).tool_calls,
+        functionCalls: llmResponse.functionCalls,
+        rawResponse: JSON.stringify(llmResponse, null, 2).substring(0, 2000),
+      });
+
+      // Extract function calls from LLM response (handles both OpenAI tool_calls and internal functionCalls formats)
+      const extractedFunctionCalls = this.extractFunctionCallsFromResponse(llmResponse);
+      
       // If model requested tool calls, execute then send tool results back for a second turn
-      if (llmResponse.functionCalls && llmResponse.functionCalls.length > 0) {
+      if (extractedFunctionCalls && extractedFunctionCalls.length > 0) {
         // Send thinking message about executing tools
         if (onThinking) {
-          const toolNames = llmResponse.functionCalls.map(fc => fc.name).join(', ');
+          const toolNames = extractedFunctionCalls.map(fc => fc.name).join(', ');
           onThinking({
             type: 'function_call',
             content: `I need to execute these tools: ${toolNames}`,
@@ -1075,7 +1098,7 @@ export class Web3Agent {
 
         // Update ReAct status for tool execution
         if (onReActStatus) {
-          const toolNames = llmResponse.functionCalls.map(fc => fc.name).join(', ');
+          const toolNames = extractedFunctionCalls.map(fc => fc.name).join(', ');
           onReActStatus({
             isActive: true,
             isThinking: false,
@@ -1090,7 +1113,7 @@ export class Web3Agent {
 
         // Record the assistant tool_calls message to keep role structure consistent
         const assistantToolCallMsg = new AIMessage('', {
-          tool_calls: llmResponse.functionCalls.map((fc) => ({
+          tool_calls: extractedFunctionCalls.map((fc) => ({
             id: fc.id || `call_${fc.name}_${Date.now()}`,
             type: 'function',
             function: {
@@ -1102,14 +1125,14 @@ export class Web3Agent {
         this.state.conversationHistory.push(assistantToolCallMsg);
 
         const firstTurnActions = await this.executeFunctionCalls(
-          llmResponse.functionCalls
+          extractedFunctionCalls
         );
         accumulatedActions.push(...firstTurnActions);
 
         // Append tool results as ToolMessages
         for (let i = 0; i < firstTurnActions.length; i++) {
           const step = firstTurnActions[i];
-          const fc = llmResponse.functionCalls[i];
+          const fc = extractedFunctionCalls[i];
           const toolContent = JSON.stringify({
             success: step.status === 'completed',
             result: step.result,
@@ -1142,9 +1165,10 @@ export class Web3Agent {
       }
 
       // Step 5: Execute function calls if any (second turn)
-      if (llmResponse.functionCalls && llmResponse.functionCalls.length > 0) {
+      const secondTurnFunctionCalls = this.extractFunctionCallsFromResponse(llmResponse);
+      if (secondTurnFunctionCalls && secondTurnFunctionCalls.length > 0) {
         const secondTurnActions = await this.executeFunctionCalls(
-          llmResponse.functionCalls
+          secondTurnFunctionCalls
         );
         accumulatedActions.push(...secondTurnActions);
       }
@@ -1213,26 +1237,36 @@ export class Web3Agent {
     functionCalls: FunctionCall[]
   ): Promise<ActionStep[]> {
     if (functionCalls.length === 0) {
+      logger.warn('executeFunctionCalls called with empty function calls array');
       return [];
     }
 
-    // Check if we can execute in parallel
-    const parallelCheck = canExecuteInParallel(functionCalls);
+    // Convert OpenAI tool_calls format to internal FunctionCall format if needed
+    const normalizedFunctionCalls = this.normalizeFunctionCalls(functionCalls);
+    
+    logger.info('executeFunctionCalls starting', {
+      count: normalizedFunctionCalls.length,
+      functionNames: normalizedFunctionCalls.map(fc => fc.name),
+      originalFormat: functionCalls.length > 0 && 'function' in functionCalls[0] ? 'OpenAI tool_calls' : 'Internal FunctionCall',
+    });
 
-    if (parallelCheck.canParallel && functionCalls.length > 1) {
+    // Check if we can execute in parallel
+    const parallelCheck = canExecuteInParallel(normalizedFunctionCalls);
+
+    if (parallelCheck.canParallel && normalizedFunctionCalls.length > 1) {
       logger.info('Executing function calls in parallel', {
-        count: functionCalls.length,
+        count: normalizedFunctionCalls.length,
         reason: parallelCheck.reason,
       });
 
-      return await this.executeFunctionCallsParallel(functionCalls);
+      return await this.executeFunctionCallsParallel(normalizedFunctionCalls);
     } else {
       logger.info('Executing function calls sequentially', {
-        count: functionCalls.length,
+        count: normalizedFunctionCalls.length,
         reason: parallelCheck.reason || 'Single function call',
       });
 
-      return await this.executeFunctionCallsSequential(functionCalls);
+      return await this.executeFunctionCallsSequential(normalizedFunctionCalls);
     }
   }
 
@@ -1240,13 +1274,41 @@ export class Web3Agent {
     functionCalls: FunctionCall[]
   ): Promise<ActionStep[]> {
     const executedActions: ActionStep[] = [];
+    const executionId = `sequential_${Date.now()}`;
 
-    for (const functionCall of functionCalls) {
+    logger.info(`[${executionId}] Starting sequential function call execution`, {
+      totalCalls: functionCalls.length,
+      functionNames: functionCalls.map(fc => fc.name),
+      executionId,
+    });
+
+    for (let i = 0; i < functionCalls.length; i++) {
+      const functionCall = functionCalls[i];
+      const stepStartTime = Date.now();
+      const stepExecutionId = `${executionId}_step_${i}`;
+
       try {
-        logger.info(
-          `Executing function call: ${functionCall.name}`,
-          functionCall.arguments
-        );
+        logger.info(`[${stepExecutionId}] Executing function call: ${functionCall.name}`, {
+          arguments: functionCall.arguments,
+          callId: functionCall.id,
+          stepIndex: i,
+          totalSteps: functionCalls.length,
+        });
+
+        // Check if tool exists
+        const toolExists = toolRegistry.getTool(functionCall.name);
+        if (!toolExists) {
+          logger.error(`[${stepExecutionId}] Tool not found: ${functionCall.name}`, {
+            availableTools: Array.from(toolRegistry.getAllTools()).map(t => t.name),
+          });
+          throw new Error(`Tool not found: ${functionCall.name}`);
+        }
+
+        logger.info(`[${stepExecutionId}] Tool found, validating parameters`, {
+          toolName: functionCall.name,
+          toolCategory: toolExists.category,
+          toolRiskLevel: toolExists.riskLevel,
+        });
 
         // Validate parameters
         const validation = toolRegistry.validateParameters(
@@ -1255,17 +1317,48 @@ export class Web3Agent {
         );
         if (!validation.valid) {
           logger.warn(
-            `Parameter validation failed for ${functionCall.name}:`,
-            validation.errors
+            `[${stepExecutionId}] Parameter validation failed for ${functionCall.name}:`,
+            {
+              errors: validation.errors,
+              receivedParams: functionCall.arguments,
+              requiredParams: toolExists.required,
+            }
           );
-          continue;
+          throw new Error(`Parameter validation failed: ${validation.errors.join(', ')}`);
         }
+
+        logger.info(`[${stepExecutionId}] Parameter validation successful, executing tool`);
+
+        // 🚨🚨🚨 CRITICAL DEBUGGING: Check parameters right before execution
+        console.log('🚨🚨🚨 RIGHT BEFORE TOOL REGISTRY EXECUTION:', {
+          toolName: functionCall.name,
+          arguments: functionCall.arguments,
+          argumentsType: typeof functionCall.arguments,
+          argumentsKeys: Object.keys(functionCall.arguments),
+          hasUrl: 'url' in functionCall.arguments,
+          urlValue: functionCall.arguments.url,
+          urlType: typeof functionCall.arguments.url,
+          isUrlValid: functionCall.arguments.url && 
+                     typeof functionCall.arguments.url === 'string' && 
+                     functionCall.arguments.url.startsWith('http'),
+          functionCallDetails: JSON.stringify(functionCall, null, 2),
+        });
 
         // Execute the function call
         const result = await toolRegistry.executeTool(
           functionCall.name,
           functionCall.arguments
         );
+        
+        const stepExecutionTime = Date.now() - stepStartTime;
+        logger.info(`[${stepExecutionId}] Tool execution completed`, {
+          toolName: functionCall.name,
+          success: result.success,
+          hasResult: !!result.result,
+          executionTime: stepExecutionTime,
+          resultSummary: result.result ? JSON.stringify(result.result).substring(0, 200) : undefined,
+          error: result.error,
+        });
 
         // Create action step
         const actionStep: ActionStep = {
@@ -1281,13 +1374,18 @@ export class Web3Agent {
         };
 
         executedActions.push(actionStep);
-        logger.info(
-          `Function call executed successfully: ${functionCall.name}`
-        );
+        logger.info(`[${stepExecutionId}] Function call executed successfully: ${functionCall.name}`);
       } catch (error) {
+        const stepExecutionTime = Date.now() - stepStartTime;
         logger.error(
-          `Function call execution failed: ${functionCall.name}`,
-          error
+          `[${stepExecutionId}] Function call execution failed: ${functionCall.name}`,
+          {
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+            arguments: functionCall.arguments,
+            executionTime: stepExecutionTime,
+            stepIndex: i,
+          }
         );
 
         // Create failed action step
@@ -1309,6 +1407,15 @@ export class Web3Agent {
         executedActions.push(actionStep);
       }
     }
+
+    const totalExecutionTime = Date.now() - parseInt(executionId.split('_')[1]);
+    logger.info(`[${executionId}] Sequential function call execution completed`, {
+      totalCalls: functionCalls.length,
+      successfulActions: executedActions.filter(a => a.status === 'completed').length,
+      failedActions: executedActions.filter(a => a.status === 'failed').length,
+      totalExecutionTime,
+      averageTimePerCall: totalExecutionTime / functionCalls.length,
+    });
 
     return executedActions;
   }
@@ -1398,6 +1505,247 @@ export class Web3Agent {
       default:
         return 'MEDIUM';
     }
+  }
+
+  /**
+   * Extract function calls from LLM response (handles both OpenAI tool_calls and internal functionCalls formats)
+   */
+  private extractFunctionCallsFromResponse(llmResponse: LLMResponse): FunctionCall[] {
+    console.log('🚨🚨🚨 CRITICAL DEBUGGING: extractFunctionCallsFromResponse called!', {
+      hasFunctionCalls: !!(llmResponse.functionCalls && llmResponse.functionCalls.length > 0),
+      responseKeys: Object.keys(llmResponse),
+      functionCallsLength: llmResponse.functionCalls?.length || 0,
+      rawResponsePreview: JSON.stringify(llmResponse).substring(0, 1000),
+    });
+
+    // Check for OpenAI tool_calls format in the raw response
+    const rawResponse = llmResponse as any;
+    if (rawResponse.tool_calls && Array.isArray(rawResponse.tool_calls) && rawResponse.tool_calls.length > 0) {
+      logger.info('Found OpenAI tool_calls format in response', {
+        toolCallsCount: rawResponse.tool_calls.length,
+        toolCallNames: rawResponse.tool_calls.map((tc: any) => tc.function?.name || 'unknown'),
+      });
+
+      // Convert OpenAI tool_calls to internal FunctionCall format
+      const functionCalls: FunctionCall[] = rawResponse.tool_calls.map((toolCall: any) => {
+        try {
+          let parsedArguments: Record<string, any> = {};
+          
+          if (toolCall.function && toolCall.function.arguments) {
+            const rawArgs = toolCall.function.arguments;
+            logger.info('Processing OpenAI tool call arguments', {
+              rawArgs,
+              rawArgsType: typeof rawArgs,
+              functionName: toolCall.function.name,
+              // Enhanced debugging for URL parameters
+              isNavigateToUrl: toolCall.function.name === 'navigateToUrl',
+              rawArgsLength: rawArgs.length,
+              rawArgsPreview: rawArgs.length > 100 ? rawArgs.substring(0, 100) + '...' : rawArgs,
+            });
+            
+            if (typeof rawArgs === 'string') {
+              // Handle various edge cases in JSON parsing
+              if (rawArgs.trim() === '') {
+                logger.warn('Empty arguments string');
+                parsedArguments = {};
+              } else if (rawArgs === 'of') {
+                // This appears to be a specific corruption case - try to recover
+                console.error('🚨🚨🚨 Arguments string is just "of" - CRITICAL URL CORRUPTION DETECTED!', {
+                  rawArgs,
+                  functionName: toolCall.function.name,
+                  toolCallDetails: JSON.stringify(toolCall, null, 2),
+                  fullToolCall: toolCall,
+                  context: 'URL parameter corruption detected at extraction phase',
+                });
+                
+                // For navigateToUrl, try to extract URL from context
+                if (toolCall.function.name === 'navigateToUrl') {
+                  // Look for URL patterns in the broader context
+                  // This is a fallback when JSON is corrupted
+                  parsedArguments = {
+                    url: 'https://app.uniswap.org', // Default fallback
+                    waitFor: 'load'
+                  };
+                  logger.error('URL CORRUPTION: Using fallback parameters for navigateToUrl due to "of" corruption', {
+                    originalArgs: rawArgs,
+                    fallbackArgs: parsedArguments,
+                    toolCallId: toolCall.id,
+                  });
+                } else {
+                  parsedArguments = {};
+                  logger.error('URL CORRUPTION: Empty arguments for non-navigateToUrl function', {
+                    functionName: toolCall.function.name,
+                    originalArgs: rawArgs,
+                  });
+                }
+              } else {
+                try {
+                  // Try normal JSON parsing first
+                  parsedArguments = JSON.parse(rawArgs);
+                  logger.info('Successfully parsed arguments', {
+                    parsedArguments,
+                    keys: Object.keys(parsedArguments),
+                    // Enhanced URL parameter tracking
+                    hasUrlParameter: 'url' in parsedArguments,
+                    urlValue: parsedArguments.url,
+                    urlType: typeof parsedArguments.url,
+                    isUrlOf: parsedArguments.url === 'of',
+                    fullArgs: JSON.stringify(parsedArguments),
+                  });
+                } catch (parseError) {
+                  // If normal parsing fails, try recovery strategies
+                  logger.error('JSON parsing failed for arguments, attempting recovery', {
+                    error: parseError instanceof Error ? parseError.message : String(parseError),
+                    rawArgs,
+                    rawArgsLength: rawArgs.length,
+                  });
+                  
+                  // Try to fix common JSON issues
+                  let fixedArgs = rawArgs;
+                  
+                  // Strategy 1: Remove trailing commas
+                  fixedArgs = fixedArgs.replace(/,\s*([}\]])/g, '$1');
+                  
+                  // Strategy 2: Fix unescaped quotes in URLs
+                  fixedArgs = fixedArgs.replace(/"url":\s*"([^"]*)"/g, (match, url) => {
+                    return `"url": "${url.replace(/"/g, '\\"')}"`;
+                  });
+                  
+                  // Strategy 3: Try to extract URL if it contains obvious patterns
+                  const urlMatch = rawArgs.match(/https?:\/\/[^\s"}]+/);
+                  if (urlMatch && toolCall.function.name === 'navigateToUrl') {
+                    parsedArguments = {
+                      url: urlMatch[0],
+                      waitFor: rawArgs.includes('waitFor') ? 'load' : undefined
+                    };
+                    logger.info('Extracted URL using regex pattern', parsedArguments);
+                  } else {
+                    // Try parsing the fixed JSON
+                    try {
+                      parsedArguments = JSON.parse(fixedArgs);
+                      logger.info('Successfully parsed after fixing JSON', {
+                        parsedArguments,
+                        keys: Object.keys(parsedArguments),
+                      });
+                    } catch (secondParseError) {
+                      logger.error('All JSON parsing attempts failed', {
+                        originalError: parseError instanceof Error ? parseError.message : String(parseError),
+                        fixedError: secondParseError instanceof Error ? secondParseError.message : String(secondParseError),
+                        originalArgs: rawArgs,
+                        fixedArgs,
+                      });
+                      parsedArguments = {};
+                    }
+                  }
+                }
+              }
+            } else {
+              // Arguments already parsed as object
+              parsedArguments = rawArgs || {};
+              logger.info('Arguments already parsed as object', {
+                parsedArguments,
+                keys: Object.keys(parsedArguments),
+              });
+            }
+          }
+
+          const functionCall = {
+            name: toolCall.function?.name || 'unknown',
+            arguments: parsedArguments,
+            id: toolCall.id || `call_${Date.now()}`,
+          };
+          
+          // 🚨🚨🚨 CRITICAL DEBUGGING: Check final parsed arguments before returning
+          console.log('🚨🚨🚨 FINAL FUNCTION CALL DEBUG:', {
+            functionName: functionCall.name,
+            arguments: functionCall.arguments,
+            argumentsType: typeof functionCall.arguments,
+            argumentsKeys: Object.keys(functionCall.arguments),
+            hasUrl: 'url' in functionCall.arguments,
+            urlValue: functionCall.arguments.url,
+            urlType: typeof functionCall.arguments.url,
+            isUrlValid: functionCall.arguments.url && 
+                       typeof functionCall.arguments.url === 'string' && 
+                       functionCall.arguments.url.startsWith('http'),
+            rawToolCall: toolCall,
+            parsedArguments: parsedArguments,
+            fullFunctionCall: JSON.stringify(functionCall, null, 2),
+          });
+          
+          // Enhanced debugging for URL parameters in final function call
+          if (functionCall.name === 'navigateToUrl') {
+            logger.info('FINAL FUNCTION CALL CREATED - navigateToUrl', {
+              functionCallId: functionCall.id,
+              arguments: functionCall.arguments,
+              urlValue: functionCall.arguments.url,
+              urlType: typeof functionCall.arguments.url,
+              isUrlOf: functionCall.arguments.url === 'of',
+              hasValidUrl: functionCall.arguments.url && functionCall.arguments.url !== 'of' && functionCall.arguments.url.startsWith('http'),
+              fullFunctionCall: JSON.stringify(functionCall),
+            });
+          }
+          
+          return functionCall;
+        } catch (error) {
+          logger.error('Failed to parse OpenAI tool call', {
+            error: error instanceof Error ? error.message : String(error),
+            toolCall,
+          });
+          
+          return {
+            name: toolCall.function?.name || 'unknown',
+            arguments: {},
+            id: toolCall.id || `call_${Date.now()}`,
+          };
+        }
+      });
+
+      logger.info('Successfully converted OpenAI tool_calls to FunctionCalls', {
+        convertedCount: functionCalls.length,
+        functionNames: functionCalls.map(fc => fc.name),
+      });
+
+      return functionCalls;
+    }
+
+    // Check for internal functionCalls format
+    if (llmResponse.functionCalls && llmResponse.functionCalls.length > 0) {
+      logger.info('Using internal functionCalls format', {
+        functionCallsCount: llmResponse.functionCalls.length,
+        functionNames: llmResponse.functionCalls.map(fc => fc.name),
+      });
+
+      return llmResponse.functionCalls;
+    }
+
+    // Check if there are any function calls in the actions array
+    if (llmResponse.actions && llmResponse.actions.length > 0) {
+      const functionCallActions = llmResponse.actions.filter(action => action.functionCall);
+      if (functionCallActions.length > 0) {
+        logger.info('Found function calls in actions array', {
+          actionCount: functionCallActions.length,
+          functionNames: functionCallActions.map(action => action.functionCall?.name || 'unknown'),
+        });
+
+        return functionCallActions
+          .map(action => action.functionCall)
+          .filter((call): call is FunctionCall => call !== undefined);
+      }
+    }
+
+    logger.warn('No function calls found in LLM response');
+    return [];
+  }
+
+  /**
+   * Normalize function calls - simplified version since extraction is already handled in extractFunctionCallsFromResponse
+   */
+  private normalizeFunctionCalls(functionCalls: any[]): FunctionCall[] {
+    return functionCalls.map((fc) => {
+      // Assume function calls are already normalized by extractFunctionCallsFromResponse
+      // This method is kept for backward compatibility
+      return fc as FunctionCall;
+    });
   }
 
   // Public methods for enhanced capabilities

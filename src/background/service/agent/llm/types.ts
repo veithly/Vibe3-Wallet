@@ -10,6 +10,7 @@ export interface LLMResponse {
   confidence: number;
   thinking: string;
   functionCalls?: FunctionCall[];
+  tool_calls?: any[]; // OpenAI tool_calls format support
 }
 
 // Function call structure for native function calling

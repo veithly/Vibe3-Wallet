@@ -37,13 +37,21 @@ class AgentService {
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
+    console.log('🔥🔥🔥 AGENT SERVICE CONSTRUCTOR CALLED! 🔥🔥🔥', {
+      timestamp: Date.now(),
+      moduleStack: new Error().stack
+    });
+    
     logger.info('AgentService', 'Initializing Agent Service');
     try {
       this.setupPortManagement();
       this.initializeAgents();
       logger.info('AgentService', 'Agent Service initialized successfully');
+      
+      console.log('🚨🚨🚨 AGENT SERVICE INITIALIZATION COMPLETE! 🚨🚨🚨');
     } catch (error) {
       logger.error('AgentService', 'Failed to initialize Agent Service', error);
+      console.error('❌❌❌ AGENT SERVICE INITIALIZATION FAILED:', error);
       throw error;
     }
   }

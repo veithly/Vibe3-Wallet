@@ -45,6 +45,21 @@ import {
   OfflineChainsService,
 } from './service';
 import { agent as agentService } from './service/agent';
+
+// Test that our debugging is working
+console.log('🔥🔥🔥 AGENT SERVICE IMPORTED - TESTING DEBUGGING! 🔥🔥🔥', {
+  timestamp: Date.now(),
+  moduleStack: new Error().stack
+});
+
+// Test the testDebugging function from agent/index
+try {
+  const { testDebugging } = require('./service/agent');
+  const testResult = testDebugging();
+  console.log('🚨🚨🚨 DEBUGGING TEST RESULT:', testResult);
+} catch (e) {
+  console.error('❌❌❌ DEBUGGING TEST FAILED:', e);
+}
 import { customTestnetService } from './service/customTestnet';
 import { GasAccountServiceStore } from './service/gasAccount';
 import { testnetOpenapiService } from './service/openapi';

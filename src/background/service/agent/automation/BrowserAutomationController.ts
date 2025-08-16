@@ -134,7 +134,11 @@ export class BrowserAutomationController {
         this.activeTabs.set('main', activeTab);
         logger.info('Browser automation initialized with active tab', {
           tabId: activeTab.id,
+          url: activeTab.url,
+          title: activeTab.title,
         });
+      } else {
+        logger.warn('No active tab found, will create new tab when needed');
       }
     } catch (error) {
       logger.error('Failed to initialize browser API', error);
@@ -524,36 +528,147 @@ export class BrowserAutomationController {
     waitFor?: string;
     timeout?: number;
   }): Promise<BrowserActionResult> {
+    const startTime = Date.now();
+    logger.info('Starting navigation', {
+      url: params.url,
+      waitFor: params.waitFor,
+      timeout: params.timeout,
+      hasChromeAPI: !!(chrome.tabs && chrome.tabs.update),
+      // Enhanced debugging for URL corruption detection
+      urlType: typeof params.url,
+      isUrlOf: params.url === 'of',
+      urlLength: params.url.length,
+      urlStartsWithHttp: params.url.startsWith('http'),
+      fullParams: JSON.stringify(params),
+    });
+
     try {
       // Chrome extension API navigation
       if (chrome.tabs && chrome.tabs.update) {
-        const tab = await chrome.tabs.update({ url: params.url });
+        // CRITICAL: Check for "of" corruption before calling Chrome API
+        if (params.url === 'of') {
+          logger.error('URL CORRUPTION DETECTED: About to call Chrome API with url="of"', {
+            params,
+            fullParams: JSON.stringify(params),
+            corruptionPoint: 'BrowserAutomationController before Chrome API call',
+            timestamp: Date.now(),
+          });
+          return {
+            success: false,
+            error: 'URL corruption detected: cannot navigate to "of"',
+            timing: Date.now() - startTime,
+          };
+        }
+        
+        let tab: chrome.tabs.Tab;
+        
+        // Get or create a tab for navigation
+        const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTabs.length > 0) {
+          logger.info('Updating existing tab for navigation', { 
+            tabId: activeTabs[0].id, 
+            requestedUrl: params.url,
+            isUrlOf: params.url === 'of',
+            urlLength: params.url.length,
+          });
+          tab = await chrome.tabs.update(activeTabs[0].id!, { url: params.url });
+          logger.info('Chrome tabs.update result', { 
+            tabId: tab.id, 
+            tabUrl: tab.url,
+            originalRequestedUrl: params.url,
+            urlMatches: tab.url === params.url,
+            isTabUrlOf: tab.url === 'of',
+          });
+        } else {
+          // Create new tab if no active tab exists
+          logger.info('Creating new tab for navigation', { 
+            requestedUrl: params.url,
+            isUrlOf: params.url === 'of',
+            urlLength: params.url.length,
+          });
+          tab = await chrome.tabs.create({ url: params.url });
+          logger.info('Chrome tabs.create result', { 
+            tabId: tab.id, 
+            tabUrl: tab.url,
+            originalRequestedUrl: params.url,
+            urlMatches: tab.url === params.url,
+            isTabUrlOf: tab.url === 'of',
+          });
+        }
+
+        // Update active tabs tracking
+        this.activeTabs.set('main', tab);
 
         // Wait for page load if needed
         if (params.waitFor === 'load') {
+          logger.info('Waiting for page load completion', { tabId: tab.id });
           await this.waitForTabLoad(tab.id!);
+        } else if (params.waitFor === 'networkidle') {
+          logger.info('Waiting for network idle (simplified implementation)', { tabId: tab.id });
+          // Simplified network idle wait
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
+
+        const timing = Date.now() - startTime;
+        logger.info('Navigation completed successfully', {
+          tabId: tab.id,
+          requestedUrl: params.url,
+          finalTabUrl: tab.url,
+          timing,
+          urlsMatch: tab.url === params.url,
+          isRequestedUrlOf: params.url === 'of',
+          isFinalUrlOf: tab.url === 'of',
+          method: 'chrome.tabs.update/create',
+        });
+
+        const resultData = { 
+          tabId: tab.id, 
+          url: params.url,
+          finalUrl: tab.url,
+          title: tab.title,
+          method: 'chrome.tabs.update/create'
+        };
+        
+        logger.info('RETURNING NAVIGATION RESULT - FINAL URL CHECK', {
+          resultData,
+          urlInResult: resultData.url,
+          finalUrlInResult: resultData.finalUrl,
+          isUrlOf: resultData.url === 'of',
+          isFinalUrlOf: resultData.finalUrl === 'of',
+          fullResult: JSON.stringify(resultData),
+        });
 
         return {
           success: true,
-          data: { tabId: tab.id, url: params.url },
-          timing: 0,
+          data: resultData,
+          timing,
         };
       } else {
         // Simulation mode
-        logger.info('Simulating navigation to', params.url);
+        logger.warn('Chrome API not available, simulating navigation to', params.url);
+        const timing = Date.now() - startTime;
         return {
           success: true,
-          data: { simulated: true, url: params.url },
-          timing: 1000,
+          data: { 
+            simulated: true, 
+            url: params.url,
+            method: 'simulation'
+          },
+          timing,
         };
       }
     } catch (error) {
-      logger.error('Navigation failed', error);
+      const timing = Date.now() - startTime;
+      logger.error('Navigation failed', {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        params,
+        timing,
+      });
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Navigation failed',
-        timing: 0,
+        timing,
       };
     }
   }

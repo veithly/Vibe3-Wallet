@@ -26,10 +26,19 @@ export class ToolRegistry {
   private categories: Map<string, string[]> = new Map();
 
   constructor() {
+    // 🔥🔥🔥 EXTREMELY AGGRESSIVE DEBUGGING - TOOLREGISTRY CONSTRUCTOR! 🔥🔥🔥
+    console.log('🔥🔥🔥 TOOLREGISTRY CONSTRUCTOR - THIS MUST BE VISIBLE! 🔥🔥🔥', {
+      timestamp: Date.now(),
+      constructorStack: new Error().stack,
+      toolsMapSize: this.tools.size,
+      categoriesMapSize: this.categories.size
+    });
+    
     this.initializeWeb3Tools();
     this.initializeBrowserTools();
     this.initializeUtilityTools();
     this.initializeSystemTools();
+    console.log('🚨🚨🚨 ToolRegistry initialized with debug version! 🚨🚨🚨');
   }
 
   private initializeWeb3Tools(): void {
@@ -644,7 +653,7 @@ export class ToolRegistry {
       parameters: [
         {
           type: 'string',
-          description: 'Array of form fields to fill (JSON format)',
+          description: 'Array of form fields to fill (JSON format string or object array). Each field should have selector/name and value properties.',
         },
         {
           type: 'boolean',
@@ -822,28 +831,131 @@ export class ToolRegistry {
 
   private createBrowserHandler(actionName: string) {
     return async (params: any) => {
+      const startTime = Date.now();
+      const executionId = `browser_${actionName}_${Date.now()}`;
+      
       try {
-        logger.info(`Executing browser automation action: ${actionName}`, params);
+        logger.info(`[${executionId}] Starting browser automation action: ${actionName}`, {
+          params,
+          actionName,
+          executionId,
+          timestamp: startTime,
+        });
+
+        // Validate input parameters
+        if (!params || typeof params !== 'object') {
+          throw new Error(`Invalid parameters received: ${JSON.stringify(params)}`);
+        }
 
         // Create browser automation controller
         const browserController = new BrowserAutomationController();
+        logger.info(`[${executionId}] Browser controller created`, {
+          controllerExists: !!browserController,
+        });
 
-        // Handle special case for fillForm - parse JSON string
+        // Handle special case for fillForm - parse JSON string if needed
         let processedParams = params;
-        if (actionName === 'fillForm' && typeof params.fields === 'string') {
-          try {
-            processedParams = {
-              ...params,
-              fields: JSON.parse(params.fields),
-            };
-          } catch (parseError) {
-            logger.warn('Failed to parse fields JSON, using as-is', parseError);
+        if (actionName === 'fillForm') {
+          let fields = params.fields;
+          
+          // Case 1: fields is already an array (correct format)
+          if (Array.isArray(fields)) {
+            logger.info(`[${executionId}] Fields already in array format`, {
+              fieldsCount: fields.length,
+            });
+          }
+          // Case 2: fields is a string that needs parsing
+          else if (typeof fields === 'string') {
+            try {
+              // Try to parse as JSON first
+              fields = JSON.parse(fields);
+              logger.info(`[${executionId}] Parsed fields JSON string successfully`, {
+                fieldsCount: Array.isArray(fields) ? fields.length : 'not-array',
+              });
+            } catch (parseError) {
+              // If JSON parsing fails, check if it's already a parsed string that was double-encoded
+              try {
+                fields = JSON.parse(JSON.parse(fields));
+                logger.info(`[${executionId}] Parsed double-encoded JSON successfully`, {
+                  fieldsCount: Array.isArray(fields) ? fields.length : 'not-array',
+                });
+              } catch (doubleParseError) {
+                logger.error(`[${executionId}] Failed to parse fields JSON (both attempts)`, {
+                  error: parseError instanceof Error ? parseError.message : String(parseError),
+                  doubleError: doubleParseError instanceof Error ? doubleParseError.message : String(doubleParseError),
+                  rawFields: params.fields,
+                });
+                throw new Error(`Invalid JSON in fields parameter: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
+              }
+            }
+          }
+          // Case 3: fields is neither array nor string
+          else {
+            logger.error(`[${executionId}] Invalid fields parameter type`, {
+              fields: params.fields,
+              fieldType: typeof params.fields,
+            });
+            throw new Error('fields parameter must be a JSON string or array');
+          }
+
+          // Final validation that we have an array
+          if (!Array.isArray(fields)) {
+            logger.error(`[${executionId}] Fields parsing did not result in array`, {
+              finalFields: fields,
+              finalType: typeof fields,
+            });
+            throw new Error('fields parameter must resolve to an array');
+          }
+
+          // Update processed params
+          processedParams = {
+            ...params,
+            fields: fields,
+          };
+        }
+
+        // Validate required parameters for specific actions
+        if (actionName === 'navigateToUrl') {
+          console.log(`🚨🚨🚨 [${executionId}] VALIDATING navigateToUrl PARAMETERS`, {
+            params,
+            hasUrl: !!params.url,
+            urlValue: params.url,
+            urlType: typeof params.url,
+            isUrlOf: params.url === 'of',
+            urlStartsWithHttp: params.url && params.url.startsWith('http'),
+            fullParams: JSON.stringify(params),
+          });
+          
+          if (!params.url) {
+            throw new Error('url parameter is required for navigateToUrl');
+          }
+          
+          // CRITICAL: Check for "of" corruption
+          if (params.url === 'of') {
+            console.error(`🚨🚨🚨 [${executionId}] URL CORRUPTION DETECTED: URL parameter is "of"`, {
+              params,
+              executionId,
+              actionName,
+              corruptionPoint: 'ToolRegistry parameter validation',
+              timestamp: Date.now(),
+            });
+            throw new Error(`URL parameter corruption detected: url is "of" instead of a valid URL`);
+          }
+          
+          // Validate URL format
+          if (!params.url.startsWith('http')) {
+            logger.warn(`[${executionId}] Invalid URL format detected`, {
+              url: params.url,
+              urlType: typeof params.url,
+              executionId,
+            });
+            throw new Error(`Invalid URL format: ${params.url}. URL must start with http:// or https://`);
           }
         }
 
         // Create action step for compatibility
         const actionStep = {
-          id: `browser_${Date.now()}`,
+          id: executionId,
           name: `Execute ${actionName}`,
           type: actionName,
           description: `Browser automation: ${actionName}`,
@@ -853,8 +965,50 @@ export class ToolRegistry {
           riskLevel: 'MEDIUM' as const,
         };
 
+        // Enhanced debugging for navigateToUrl
+        if (actionName === 'navigateToUrl') {
+          logger.info(`[${executionId}] EXECUTING navigateToUrl - FINAL PARAMETER CHECK`, {
+            actionName,
+            processedParams,
+            urlValue: processedParams.url,
+            urlType: typeof processedParams.url,
+            isUrlOf: processedParams.url === 'of',
+            hasValidUrl: processedParams.url && processedParams.url !== 'of' && processedParams.url.startsWith('http'),
+            fullProcessedParams: JSON.stringify(processedParams),
+            actionStepId: actionStep.id,
+          });
+        }
+
         // Execute browser action
         const result = await browserController.executeAction(actionStep);
+
+        const executionTime = Date.now() - startTime;
+        
+        // Enhanced result debugging for navigateToUrl
+        if (actionName === 'navigateToUrl') {
+          logger.info(`[${executionId}] navigateToUrl COMPLETED - RESULT ANALYSIS`, {
+            actionName,
+            success: result.success,
+            hasData: !!result.data,
+            hasError: !!result.error,
+            executionTime,
+            resultData: result.data ? JSON.stringify(result.data) : null,
+            urlInResult: result.data?.url,
+            urlInResultType: typeof result.data?.url,
+            isUrlInResultOf: result.data?.url === 'of',
+            methodUsed: result.data?.method,
+            fullResult: JSON.stringify(result),
+          });
+        }
+        
+        logger.info(`[${executionId}] Browser action completed`, {
+          actionName,
+          success: result.success,
+          hasData: !!result.data,
+          hasError: !!result.error,
+          executionTime,
+          resultData: result.data ? JSON.stringify(result.data).substring(0, 200) : undefined,
+        });
 
         return {
           action: actionName,
@@ -864,10 +1018,18 @@ export class ToolRegistry {
           timestamp: Date.now(),
           error: result.error,
           screenshot: result.screenshot,
-          timing: result.timing,
+          timing: result.timing || executionTime,
+          executionId,
         };
       } catch (error) {
-        logger.error(`Browser automation action failed: ${actionName}`, error);
+        const executionTime = Date.now() - startTime;
+        logger.error(`[${executionId}] Browser automation action failed: ${actionName}`, {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+          params,
+          executionTime,
+          executionId,
+        });
         return {
           action: actionName,
           params,
@@ -875,6 +1037,8 @@ export class ToolRegistry {
           success: false,
           timestamp: Date.now(),
           error: error instanceof Error ? error.message : 'Unknown error',
+          executionId,
+          timing: executionTime,
         };
       }
     };
