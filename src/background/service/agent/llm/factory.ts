@@ -660,6 +660,11 @@ class Web3LLM implements IWeb3LLM {
     return toolRegistry.getFunctionSchemas();
   }
 
+  // Get underlying chat model for agent compatibility
+  getChatModel(): any {
+    return this.model;
+  }
+
   // Internal: attach OpenAI tools for RealChatModel when provider supports it
   private attachToolsForProvider(tools?: FunctionSchema[]) {
     if (!tools || tools.length === 0) return;

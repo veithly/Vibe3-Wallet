@@ -91,4 +91,7 @@ export interface IWeb3LLM {
 
   // Get available tools
   getAvailableTools(): FunctionSchema[];
+
+  // Get underlying chat model for agent compatibility
+  getChatModel(): any;
 }

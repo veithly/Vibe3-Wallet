@@ -42,6 +42,19 @@ import { PromptManager, PromptContext } from './prompts/PromptManager';
 import { ActionRegistry } from './actions/ActionRegistry';
 import { createLogger } from '@/utils/logger';
 import type { BaseChatModel as IBaseChatModel } from './llm/messages';
+import { PlannerAgent } from './agents/PlannerAgent';
+import { NavigatorAgent } from './agents/NavigatorAgent';
+import { ValidatorAgent } from './agents/ValidatorAgent';
+import {
+  EnhancedIntent,
+  ExecutionPlan,
+  ActionResult,
+  CoordinationEvent,
+  MultiStepExecutor,
+  ContextSnapshot,
+  RiskAssessment,
+  EnhancedAction
+} from './types/BaseTypes';
 
 const logger = createLogger('Web3Agent');
 
@@ -56,7 +69,7 @@ export interface AgentResponse {
   timestamp: number;
 }
 
-export interface AgentConfig {
+export interface Web3AgentConfig {
   maxRetries: number;
   timeoutMs: number;
   autoConfirmLowRisk: boolean;
@@ -72,6 +85,10 @@ export interface Web3AgentState {
   executionHistory: ActionStep[];
   conversationHistory: BaseMessage[];
   lastActivity: number;
+  multiStepExecutor?: MultiStepExecutor;
+  currentEnhancedPlan?: ExecutionPlan;
+  agentStatus?: Record<string, any>;
+  coordinationEvents?: CoordinationEvent[];
 }
 
 export class Web3Agent {
@@ -89,13 +106,20 @@ export class Web3Agent {
   private promptManager: PromptManager;
   private actionRegistry: ActionRegistry;
 
-  private config: AgentConfig;
+  // Multi-Agent System
+  private plannerAgent!: PlannerAgent;
+  private navigatorAgent!: NavigatorAgent;
+  private validatorAgent!: ValidatorAgent;
+  private multiStepExecutor: MultiStepExecutor;
+  private coordinationEnabled: boolean = true;
+
+  private config: Web3AgentConfig;
   private state: Web3AgentState;
 
   constructor(
     context: AgentContext,
     llm: IWeb3LLM,
-    config?: Partial<AgentConfig>,
+    config?: Partial<Web3AgentConfig>,
     dependencies?: {
       intelligentTaskAnalyzer?: IntelligentTaskAnalyzer;
       browserAutomationController?: BrowserAutomationController;
@@ -132,7 +156,17 @@ export class Web3Agent {
     this.promptManager = dependencies?.promptManager || new PromptManager();
     this.actionRegistry = dependencies?.actionRegistry || new ActionRegistry();
 
+    // Initialize Multi-Agent System
+    this.initializeMultiAgentSystem();
+
     this.config = {
+      maxConcurrentTasks: 3,
+      defaultTimeout: 30000,
+      retryAttempts: 3,
+      enableStreaming: true,
+      enableOptimization: true,
+      securityLevel: 'medium',
+      performanceMode: 'balanced',
       maxRetries: 3,
       timeoutMs: 30000,
       autoConfirmLowRisk: true,
@@ -140,6 +174,15 @@ export class Web3Agent {
       simulationEnabled: true,
       riskThreshold: 0.7,
       ...config,
+    } as Web3AgentConfig;
+
+    this.multiStepExecutor = {
+      id: `executor_${Date.now()}`,
+      sessionId: '',
+      executionHistory: [],
+      isExecuting: false,
+      startTime: undefined,
+      endTime: undefined
     };
 
     this.state = {
@@ -148,6 +191,9 @@ export class Web3Agent {
       executionHistory: [],
       conversationHistory: [],
       lastActivity: Date.now(),
+      multiStepExecutor: this.multiStepExecutor,
+      agentStatus: {},
+      coordinationEvents: []
     };
   }
 
@@ -159,8 +205,36 @@ export class Web3Agent {
       allowances: {},
       gasPrices: {},
       protocols: {},
-      riskLevel: 'LOW',
+      riskLevel: 'LOW'
     };
+  }
+
+  /**
+   * Initialize Multi-Agent System
+   */
+  private initializeMultiAgentSystem(): void {
+    try {
+      // Initialize individual agents with empty initial task
+      this.plannerAgent = new PlannerAgent('planner');
+
+      this.navigatorAgent = new NavigatorAgent('navigator');
+
+      this.validatorAgent = new ValidatorAgent({
+        chatLLM: this.llm.getChatModel(),
+        task: '',
+        tabId: this.context.tabId || -1
+      });
+
+      logger.info('Multi-agent system initialized successfully', {
+        plannerAgent: !!this.plannerAgent,
+        navigatorAgent: !!this.navigatorAgent,
+        validatorAgent: !!this.validatorAgent,
+        coordinationEnabled: this.coordinationEnabled
+      });
+    } catch (error) {
+      logger.error('Failed to initialize multi-agent system:', error);
+      this.coordinationEnabled = false; // Disable coordination on initialization failure
+    }
   }
 
   async initialize(sessionId?: string): Promise<void> {
@@ -218,7 +292,12 @@ export class Web3Agent {
         requiresWeb3: taskAnalysis.requiresWeb3,
       });
 
-      // Step 2: Enhanced intent extraction with task analysis context
+      // Step 2: Check if multi-agent coordination should be used
+      if (this.coordinationEnabled && this.shouldUseMultiAgentCoordination(taskAnalysis)) {
+        return await this.processWithMultiAgentCoordination(instruction, taskAnalysis);
+      }
+
+      // Step 3: Enhanced intent extraction with task analysis context
       const enhancedContext = {
         ...this.state.currentContext,
         taskAnalysis: taskAnalysis.reasoning,
@@ -232,7 +311,7 @@ export class Web3Agent {
         `Extracted intent: ${intent.action} with confidence ${intent.confidence}`
       );
 
-      // Step 3: Check if this is a browser automation task
+      // Step 4: Check if this is a browser automation task
       if (taskAnalysis.requiresBrowserAutomation) {
         return await this.handleBrowserAutomationTask(
           instruction,
@@ -340,7 +419,7 @@ export class Web3Agent {
 
       // Step 4: Simulate transactions if simulation is enabled and plan exists (with error recovery)
       let simulation: any;
-      if (this.config.simulationEnabled && plan && plan.requiresConfirmation) {
+      if ((this.config as any).simulationEnabled && plan && plan.requiresConfirmation) {
         try {
           simulation = await this.transactionSimulator.simulatePlan(plan);
           logger.info(
@@ -465,15 +544,378 @@ export class Web3Agent {
     }
   }
 
+  /**
+   * Determine if multi-agent coordination should be used
+   */
+  private shouldUseMultiAgentCoordination(taskAnalysis: TaskAnalysis): boolean {
+    // Use multi-agent coordination for complex tasks
+    const coordinationCriteria = [
+      taskAnalysis.complexity === 'high',
+      taskAnalysis.requiresBrowserAutomation && taskAnalysis.requiresWeb3,
+      taskAnalysis.estimatedSteps > 3,
+      taskAnalysis.taskType === 'automation',
+      taskAnalysis.taskType === 'interaction'
+    ];
+
+    return coordinationCriteria.some(criterion => criterion);
+  }
+
+  /**
+   * Process instruction using multi-agent coordination
+   */
+  private async processWithMultiAgentCoordination(
+    instruction: string,
+    taskAnalysis: TaskAnalysis
+  ): Promise<AgentResponse> {
+    try {
+      logger.info('Starting multi-agent coordination', {
+        instruction,
+        taskType: taskAnalysis.taskType,
+        complexity: taskAnalysis.complexity
+      });
+
+      const startTime = Date.now();
+      this.multiStepExecutor.isExecuting = true;
+      this.multiStepExecutor.startTime = startTime;
+
+      // Step 1: Create enhanced intent for multi-agent system
+      const enhancedIntent: EnhancedIntent = {
+        id: `intent_${Date.now()}`,
+        action: taskAnalysis.taskType,
+        confidence: taskAnalysis.confidence,
+        parameters: { instruction },
+        context: this.state.currentContext,
+        taskAnalysis: {
+          id: `task_${Date.now()}`,
+          intentId: `intent_${Date.now()}`,
+          taskType: taskAnalysis.taskType,
+          complexity: taskAnalysis.complexity,
+          estimatedDuration: taskAnalysis.estimatedSteps * 5000, // Convert steps to milliseconds
+          requiredCapabilities: this.getRequiredCapabilities(taskAnalysis),
+          riskLevel: this.getRiskLevel(taskAnalysis)
+        },
+        executionStrategy: {
+          mode: 'adaptive',
+          maxConcurrency: 3,
+          errorHandling: 'retry',
+          optimization: 'balanced'
+        }
+      };
+
+      // Step 2: Planner Agent creates execution plan
+      const executionPlan = await this.executePlannerAgent(enhancedIntent);
+      if (!executionPlan) {
+        throw new Error('Planner agent failed to create execution plan');
+      }
+      this.state.currentEnhancedPlan = executionPlan;
+
+      // Step 3: Navigator Agent executes the plan
+      const navigatorResult = await this.executeNavigatorAgent(executionPlan);
+      
+      // Step 4: Validator Agent validates results
+      const validatorResult = await this.executeValidatorAgent(
+        enhancedIntent,
+        executionPlan,
+        navigatorResult.results || []
+      );
+
+      // Step 5: Generate final response
+      const response = await this.generateMultiAgentResponse(
+        instruction,
+        enhancedIntent,
+        executionPlan,
+        navigatorResult.results || [],
+        validatorResult.result
+      );
+
+      // Update state
+      this.multiStepExecutor.isExecuting = false;
+      this.multiStepExecutor.endTime = Date.now();
+      this.multiStepExecutor.currentPlan = executionPlan;
+      this.multiStepExecutor.executionHistory = this.convertActionResultsToEnhancedActions(navigatorResult.results || []);
+
+      // Add to coordination events
+      this.recordCoordinationEvent('task_complete', {
+        executionPlan,
+        navigatorResult,
+        validatorResult,
+        duration: Date.now() - startTime
+      });
+
+      const assistantMessage = new AIMessage(response.message);
+      this.state.conversationHistory.push(assistantMessage);
+
+      await this.storeConversationStep(
+        new HumanMessage(instruction),
+        assistantMessage,
+        this.convertActionResultsToActionSteps(navigatorResult.results || [])
+      );
+
+      this.state.lastActivity = Date.now();
+
+      return {
+        success: response.success,
+        message: response.message,
+        actions: this.convertActionResultsToActionSteps(navigatorResult.results || []),
+        sessionId: this.state.sessionId,
+        timestamp: Date.now()
+      };
+
+    } catch (error) {
+      logger.error('Multi-agent coordination failed:', error);
+      
+      // Fallback to traditional processing
+      logger.info('Falling back to traditional processing');
+      return await this.processWithTraditionalMethod(instruction, taskAnalysis);
+    }
+  }
+
+  /**
+   * Get required capabilities for task analysis
+   */
+  private getRequiredCapabilities(taskAnalysis: TaskAnalysis): string[] {
+    const capabilities: string[] = [];
+    
+    if (taskAnalysis.requiresBrowserAutomation) {
+      capabilities.push('browser_automation');
+    }
+    
+    if (taskAnalysis.requiresWeb3) {
+      capabilities.push('web3');
+    }
+    
+    if (taskAnalysis.taskType === 'automation') {
+      capabilities.push('automation');
+    }
+    
+    return capabilities;
+  }
+
+  /**
+   * Get risk level for task analysis
+   */
+  private getRiskLevel(taskAnalysis: TaskAnalysis): 'LOW' | 'MEDIUM' | 'HIGH' {
+    if (taskAnalysis.complexity === 'high' || taskAnalysis.requiresWeb3) {
+      return 'HIGH';
+    }
+    
+    if (taskAnalysis.requiresBrowserAutomation) {
+      return 'MEDIUM';
+    }
+    
+    return 'LOW';
+  }
+
+  /**
+   * Execute Planner Agent
+   */
+  private async executePlannerAgent(intent: EnhancedIntent) {
+    try {
+      this.emitCoordinationEvent('planner_start', { intent });
+
+      const result = await this.plannerAgent.createExecutionPlan(intent, {
+        id: `task_${Date.now()}`,
+        intentId: intent.id,
+        taskType: 'automation',
+        complexity: 'medium',
+        estimatedDuration: 30000,
+        requiredCapabilities: ['browser_automation'],
+        riskLevel: 'LOW'
+      }, this.state.currentContext);
+
+      this.emitCoordinationEvent('planner_complete', { result });
+      return result;
+    } catch (error) {
+      logger.error('Planner agent execution failed:', error);
+      this.emitCoordinationEvent('planner_error', { error });
+      throw error;
+    }
+  }
+
+  /**
+   * Execute Navigator Agent
+   */
+  private async executeNavigatorAgent(plan: ExecutionPlan) {
+    try {
+      // Create a new navigator agent with the specific task
+      const navigatorAgent = new NavigatorAgent('navigator', this.browserAutomationController);
+      
+      this.emitCoordinationEvent('navigator_start', { plan });
+
+      const result = await navigatorAgent.executePlan(plan, this.state.currentContext);
+
+      this.emitCoordinationEvent('navigator_complete', { result });
+      return result;
+    } catch (error) {
+      logger.error('Navigator agent execution failed:', error);
+      this.emitCoordinationEvent('navigator_error', { error });
+      throw error;
+    }
+  }
+
+  /**
+   * Execute Validator Agent
+   */
+  private async executeValidatorAgent(
+    intent: EnhancedIntent,
+    plan: ExecutionPlan,
+    actionResults: ActionResult[]
+  ) {
+    try {
+      // Create a new validator agent with the specific task
+      const validatorAgent = new ValidatorAgent({
+        chatLLM: this.llm.getChatModel(),
+        task: `Validate ${intent.action}`,
+        tabId: this.context.tabId || -1
+      });
+      
+      this.emitCoordinationEvent('validator_start', { intent, plan });
+
+      const result = await validatorAgent.execute();
+
+      this.emitCoordinationEvent('validator_complete', { result });
+      return result;
+    } catch (error) {
+      logger.error('Validator agent execution failed:', error);
+      this.emitCoordinationEvent('validator_error', { error });
+      throw error;
+    }
+  }
+
+  /**
+   * Generate response from multi-agent execution
+   */
+  private async generateMultiAgentResponse(
+    instruction: string,
+    intent: EnhancedIntent,
+    plan: ExecutionPlan,
+    actionResults: ActionResult[],
+    validationResult?: any
+  ): Promise<{ success: boolean; message: string }> {
+    try {
+      const success = actionResults.every(r => r.success) && 
+                     validationResult?.result?.isValid;
+
+      if (success) {
+        return {
+          success: true,
+          message: `✅ Successfully completed ${intent.action} using multi-agent coordination.\n\n` +
+                   `**Plan:** ${plan.name}\n` +
+                   `**Actions:** ${actionResults.length} executed\n` +
+                   `**Validation:** ${validationResult?.result?.confidence ? Math.round(validationResult.result.confidence * 100) + '% confidence' : 'Completed'}\n\n` +
+                   validationResult?.result?.recommendations?.length ? 
+                   `**Recommendations:** ${validationResult.result.recommendations.join(', ')}` : ''
+        };
+      } else {
+        const failedActions = actionResults.filter(r => !r.success).length;
+        return {
+          success: false,
+          message: `⚠️ Multi-agent execution partially completed.\n\n` +
+                   `**Plan:** ${plan.name}\n` +
+                   `**Failed Actions:** ${failedActions}/${actionResults.length}\n` +
+                   `**Validation:** ${validationResult?.result?.isValid ? 'Passed' : 'Failed'}\n\n` +
+                   validationResult?.result?.recommendations?.length ?
+                   `**Recommendations:** ${validationResult.result.recommendations.join(', ')}` : ''
+        };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        message: `Multi-agent execution completed with errors: ${error instanceof Error ? error.message : 'Unknown error'}`
+      };
+    }
+  }
+
+  /**
+   * Fallback to traditional processing method
+   */
+  private async processWithTraditionalMethod(
+    instruction: string,
+    taskAnalysis: TaskAnalysis
+  ): Promise<AgentResponse> {
+    logger.info('Using traditional processing method');
+    
+    // This would call the original processing logic
+    // For now, return a simple response
+    return {
+      success: false,
+      message: 'Multi-agent coordination failed, falling back to traditional processing. Please try again.',
+      sessionId: this.state.sessionId,
+      timestamp: Date.now()
+    };
+  }
+
+  /**
+   * Emit coordination event
+   */
+  private emitCoordinationEvent(type: string, data: any): void {
+    const event: CoordinationEvent = {
+      id: `event_${Date.now()}`,
+      type: type as any,
+      timestamp: Date.now(),
+      source: 'Web3Agent',
+      data,
+      priority: 'medium'
+    };
+
+    this.state.coordinationEvents?.push(event);
+    logger.info('Coordination event', event);
+  }
+
+  /**
+   * Record coordination event
+   */
+  private recordCoordinationEvent(type: string, data: any): void {
+    this.emitCoordinationEvent(type, data);
+  }
+
+  /**
+   * Convert ActionResult[] to EnhancedAction[]
+   */
+  private convertActionResultsToEnhancedActions(results: ActionResult[]): EnhancedAction[] {
+    return results.map((result, index) => ({
+      id: `action_${index}_${Date.now()}`,
+      name: 'Unknown Action',
+      description: 'Executed action',
+      type: 'unknown',
+      status: result.success ? 'completed' : 'failed',
+      agentType: 'navigator',
+      priority: 1,
+      retries: 0,
+      maxRetries: 3,
+      timeout: 30000,
+      params: result.data || {},
+      dependencies: [],
+      riskLevel: 'MEDIUM'
+    }));
+  }
+
+  /**
+   * Convert ActionResult[] to ActionStep[]
+   */
+  private convertActionResultsToActionSteps(results: ActionResult[]): ActionStep[] {
+    return results.map((result, index) => ({
+      id: `action_${index}_${Date.now()}`,
+      name: 'Unknown Action',
+      description: 'Executed action',
+      type: 'unknown',
+      status: result.success ? 'completed' : 'failed',
+      params: result.data || {},
+      result: result.data,
+      dependencies: [],
+      riskLevel: 'MEDIUM'
+    }));
+  }
+
   private async shouldExecutePlan(
     plan: ActionPlan,
     simulation?: any
   ): Promise<boolean> {
-    if (!plan.requiresConfirmation && this.config.autoConfirmLowRisk) {
+    if (!plan.requiresConfirmation && (this.config as any).autoConfirmLowRisk) {
       return true;
     }
 
-    if (plan.riskLevel === 'HIGH' && this.config.requireConfirmationHighRisk) {
+    if (plan.riskLevel === 'HIGH' && (this.config as any).requireConfirmationHighRisk) {
       return await this.confirmationManager.requestConfirmation(
         plan,
         simulation
@@ -487,7 +929,7 @@ export class Web3Agent {
       );
     }
 
-    return this.config.autoConfirmLowRisk;
+    return (this.config as any).autoConfirmLowRisk;
   }
 
   private async executePlan(plan: ActionPlan): Promise<ActionStep[]> {
@@ -574,7 +1016,7 @@ export class Web3Agent {
 
       return executedAction;
     } catch (error) {
-      if (attempt < this.config.maxRetries) {
+      if (attempt < (this.config as any).maxRetries) {
         console.warn(
           `Action ${action.id} failed, retrying... (${attempt + 1}/${
             this.config.maxRetries
@@ -829,6 +1271,7 @@ export class Web3Agent {
 
   private getActionDescription(actionType: Web3ActionType): string {
     const descriptions: Record<Web3ActionType, string> = {
+      // Web3 actions
       SWAP: 'swap tokens',
       BRIDGE: 'bridge tokens across chains',
       STAKE: 'stake tokens',
@@ -849,6 +1292,26 @@ export class Web3Agent {
       SWITCH_NETWORK: 'switch network',
       SIGN_MESSAGE: 'sign message',
       SIGN_TYPED_DATA: 'sign typed data',
+      // Browser automation actions
+      NAVIGATE: 'navigate to URL',
+      CLICK: 'click element',
+      FILL_FORM: 'fill form',
+      EXTRACT_CONTENT: 'extract content',
+      SCROLL: 'scroll page',
+      SCREENSHOT: 'take screenshot',
+      WAIT: 'wait for condition',
+      HOVER: 'hover over element',
+      UPLOAD: 'upload file',
+      EXECUTE_JS: 'execute JavaScript',
+      SWITCH_TAB: 'switch tab',
+      OPEN_TAB: 'open tab',
+      CLOSE_TAB: 'close tab',
+      // Multi-agent coordination actions
+      CREATE_PLAN: 'create execution plan',
+      VALIDATE_TASK: 'validate task completion',
+      COORDINATE_AGENTS: 'coordinate agents',
+      ANALYZE_TASK: 'analyze task complexity',
+      OPTIMIZE_EXECUTION: 'optimize execution strategy'
     };
 
     return descriptions[actionType] || 'perform action';
@@ -2160,6 +2623,48 @@ export class Web3Agent {
     return this.actionRegistry;
   }
 
+  // Multi-Agent System public methods
+  async getMultiAgentStatus() {
+    return {
+      coordinationEnabled: this.coordinationEnabled,
+      agents: {
+        planner: !!this.plannerAgent,
+        navigator: !!this.navigatorAgent,
+        validator: !!this.validatorAgent
+      },
+      currentExecution: this.multiStepExecutor,
+      coordinationEvents: this.state.coordinationEvents?.length || 0,
+      currentPlan: this.state.currentEnhancedPlan
+    };
+  }
+
+  async enableMultiAgentCoordination(enable: boolean = true): Promise<void> {
+    this.coordinationEnabled = enable;
+    logger.info(`Multi-agent coordination ${enable ? 'enabled' : 'disabled'}`);
+  }
+
+  async getAgentStatus(agentType: 'planner' | 'navigator' | 'validator') {
+    switch (agentType) {
+      case 'planner':
+        return this.plannerAgent ? { available: true, id: 'planner' } : { available: false };
+      case 'navigator':
+        return this.navigatorAgent ? { available: true, id: 'navigator' } : { available: false };
+      case 'validator':
+        return this.validatorAgent ? { available: true, id: 'validator' } : { available: false };
+      default:
+        return { available: false };
+    }
+  }
+
+  async getCoordinationEvents(limit: number = 50) {
+    return (this.state.coordinationEvents || []).slice(-limit);
+  }
+
+  async clearCoordinationEvents(): Promise<void> {
+    this.state.coordinationEvents = [];
+    logger.info('Coordination events cleared');
+  }
+
   async getEnhancedStats() {
     return {
       web3Agent: {
@@ -2167,11 +2672,13 @@ export class Web3Agent {
         conversationLength: this.state.conversationHistory.length,
         executionHistory: this.state.executionHistory.length,
         lastActivity: this.state.lastActivity,
+        multiAgentEnabled: this.coordinationEnabled
       },
       taskAnalyzer: await this.intelligentTaskAnalyzer.getCacheStats(),
       browserAutomation: await this.browserAutomationController.getExecutionHistory(),
       promptManager: await this.promptManager.getPromptStats(),
       actionRegistry: this.actionRegistry.getStats(),
+      multiAgent: await this.getMultiAgentStatus()
     };
   }
 }

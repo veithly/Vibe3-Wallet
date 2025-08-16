@@ -31,7 +31,27 @@ export type Web3ActionType =
   | 'CONNECT_WALLET'
   | 'SWITCH_NETWORK'
   | 'SIGN_MESSAGE'
-  | 'SIGN_TYPED_DATA';
+  | 'SIGN_TYPED_DATA'
+  // Browser automation actions
+  | 'NAVIGATE'
+  | 'CLICK'
+  | 'FILL_FORM'
+  | 'EXTRACT_CONTENT'
+  | 'SCROLL'
+  | 'SCREENSHOT'
+  | 'WAIT'
+  | 'HOVER'
+  | 'UPLOAD'
+  | 'EXECUTE_JS'
+  | 'SWITCH_TAB'
+  | 'OPEN_TAB'
+  | 'CLOSE_TAB'
+  // Multi-agent coordination actions
+  | 'CREATE_PLAN'
+  | 'VALIDATE_TASK'
+  | 'COORDINATE_AGENTS'
+  | 'ANALYZE_TASK'
+  | 'OPTIMIZE_EXECUTION';
 
 export interface Web3Entities {
   fromToken?: string;
@@ -60,6 +80,29 @@ export interface Web3Entities {
   tokenB?: string;
   amountA?: string;
   amountB?: string;
+  // Browser automation entities
+  url?: string;
+  selector?: string;
+  text?: string;
+  element?: string;
+  direction?: string;
+  condition?: string;
+  fields?: Array<{name?: string; selector?: string; value: string; type?: string}>;
+  submit?: boolean;
+  type?: string;
+  timeout?: number;
+  code?: string;
+  fileContent?: string;
+  fileName?: string;
+  // Multi-agent coordination entities
+  task?: string;
+  complexity?: 'simple' | 'medium' | 'complex';
+  strategy?: string;
+  planName?: string;
+  expectedOutcome?: string;
+  validationMethod?: string;
+  agents?: string[];
+  optimization?: string;
 }
 
 export interface Web3Constraints {
@@ -204,6 +247,146 @@ export class IntentRecognizer {
         optionalEntities: [],
         weight: 0.9,
       },
+      // Browser automation actions
+      {
+        action: 'NAVIGATE',
+        patterns: [
+          /go\s+to\s+(https?:\/\/[^\s]+)/i,
+          /navigate\s+to\s+(https?:\/\/[^\s]+)/i,
+          /open\s+(https?:\/\/[^\s]+)/i,
+          /访问\s+(https?:\/\/[^\s]+)/i,
+          /打开\s+(https?:\/\/[^\s]+)/i,
+        ],
+        requiredEntities: ['url'],
+        optionalEntities: ['timeout'],
+        weight: 0.95,
+      },
+      {
+        action: 'CLICK',
+        patterns: [
+          /click\s+(?:on\s+)?(?:the\s+)?([A-Za-z0-9\s_\-]+)/i,
+          /点击\s+([A-Za-z0-9\s_\-]+)/i,
+          /press\s+(?:the\s+)?([A-Za-z0-9\s_\-]+)\s+button/i,
+          /按一下\s+([A-Za-z0-9\s_\-]+)/i,
+        ],
+        requiredEntities: ['element'],
+        optionalEntities: ['selector', 'text'],
+        weight: 0.9,
+      },
+      {
+        action: 'FILL_FORM',
+        patterns: [
+          /fill\s+(?:out\s+)?(?:the\s+)?form\s+with\s+(.+)/i,
+          /填写\s+表单\s+(.+)/i,
+          /enter\s+(.+)\s+into\s+(?:the\s+)?form/i,
+          /将\s+(.+)\s+输入表单/i,
+        ],
+        requiredEntities: ['fields'],
+        optionalEntities: ['submit'],
+        weight: 0.85,
+      },
+      {
+        action: 'EXTRACT_CONTENT',
+        patterns: [
+          /extract\s+(?:the\s+)?(?:content|text)\s+(?:from\s+)?(.+)/i,
+          /get\s+(?:the\s+)?(?:content|text)\s+(?:from\s+)?(.+)/i,
+          /提取\s+(?:内容|文本)\s+(?:从\s+)?(.+)/i,
+          /获取\s+(?:内容|文本)\s+(?:从\s+)?(.+)/i,
+        ],
+        requiredEntities: ['selector'],
+        optionalEntities: ['type'],
+        weight: 0.8,
+      },
+      {
+        action: 'SCREENSHOT',
+        patterns: [
+          /take\s+a\s+screenshot/i,
+          /screenshot\s+(?:the\s+)?page/i,
+          /capture\s+(?:the\s+)?screen/i,
+          /截图/i,
+          /屏幕截图/i,
+        ],
+        requiredEntities: [],
+        optionalEntities: ['selector'],
+        weight: 0.95,
+      },
+      {
+        action: 'WAIT',
+        patterns: [
+          /wait\s+(?:for\s+)?(.+)/i,
+          /等待\s+(.+)/i,
+          /pause\s+(?:for\s+)?(.+)/i,
+          /暂停\s+(.+)/i,
+        ],
+        requiredEntities: ['condition'],
+        optionalEntities: ['timeout'],
+        weight: 0.9,
+      },
+      {
+        action: 'SCROLL',
+        patterns: [
+          /scroll\s+(up|down|top|bottom)/i,
+          /滚动\s+(向上|向下|顶部|底部)/i,
+          /scroll\s+to\s+(.+)/i,
+          /滚动到\s+(.+)/i,
+        ],
+        requiredEntities: ['direction'],
+        optionalEntities: ['selector'],
+        weight: 0.9,
+      },
+      // Multi-agent coordination actions
+      {
+        action: 'CREATE_PLAN',
+        patterns: [
+          /create\s+(?:a\s+)?(?:execution\s+)?plan\s+for\s+(.+)/i,
+          /plan\s+(?:how\s+to\s+)?(.+)/i,
+          /create\s+a\s+strategy\s+for\s+(.+)/i,
+          /制定\s+(.+)/i,
+          /规划\s+(.+)/i,
+        ],
+        requiredEntities: ['task'],
+        optionalEntities: ['complexity', 'strategy'],
+        weight: 0.85,
+      },
+      {
+        action: 'VALIDATE_TASK',
+        patterns: [
+          /validate\s+(?:the\s+)?(?:task\s+)?completion\s+of\s+(.+)/i,
+          /check\s+if\s+(.+)\s+(?:was\s+)?completed/i,
+          /verify\s+(.+)\s+result/i,
+          /验证\s+(.+)/i,
+          /检查\s+(.+)/i,
+        ],
+        requiredEntities: ['task'],
+        optionalEntities: ['expectedOutcome', 'validationMethod'],
+        weight: 0.8,
+      },
+      {
+        action: 'COORDINATE_AGENTS',
+        patterns: [
+          /coordinate\s+(?:the\s+)?agents\s+to\s+(.+)/i,
+          /use\s+multi-?agent\s+coordination\s+for\s+(.+)/i,
+          /enable\s+multi-?agent\s+system/i,
+          /协调\s+智能体\s+(.+)/i,
+          /启用\s+多智能体/i,
+        ],
+        requiredEntities: ['task'],
+        optionalEntities: ['agents', 'strategy'],
+        weight: 0.9,
+      },
+      {
+        action: 'ANALYZE_TASK',
+        patterns: [
+          /analyze\s+(?:the\s+)?(?:complexity\s+of\s+)?(.+)/i,
+          /analyze\s+how\s+to\s+(.+)/i,
+          /understand\s+(?:the\s+)?requirements\s+for\s+(.+)/i,
+          /分析\s+(.+)/i,
+          /理解\s+(.+)/i,
+        ],
+        requiredEntities: ['task'],
+        optionalEntities: ['complexity'],
+        weight: 0.85,
+      },
     ];
   }
 
@@ -264,19 +447,6 @@ export class IntentRecognizer {
       .map((pattern) => this.tryMatchPattern(pattern, normalizedInstruction))
       .filter((match): match is NonNullable<typeof match> => match !== null)
       .sort((a, b) => b.confidence - a.confidence);
-
-    if (matchedIntents.length === 0) {
-      // Fallback to generic query
-      return {
-        action: 'QUERY',
-        entities: {},
-        chains: [],
-        protocols: [],
-        constraints: {},
-        confidence: 0.3,
-        rawInstruction: instruction,
-      };
-    }
 
     if (matchedIntents.length === 0) {
       // Fallback to generic query
@@ -373,6 +543,35 @@ export class IntentRecognizer {
       entities.tokenAddress = match[1];
     } else if (pattern.action === 'CONNECT_WALLET' && match.length >= 2) {
       entities.dappName = match[1];
+    } else if (pattern.action === 'NAVIGATE' && match.length >= 2) {
+      entities.url = match[1];
+    } else if (pattern.action === 'CLICK' && match.length >= 2) {
+      entities.element = match[1];
+      entities.text = match[1];
+    } else if (pattern.action === 'FILL_FORM' && match.length >= 2) {
+      // Parse form fields from the match
+      try {
+        entities.fields = this.parseFormFields(match[1]);
+      } catch (error) {
+        entities.fields = [{ value: match[1], type: 'text' }];
+      }
+    } else if (pattern.action === 'EXTRACT_CONTENT' && match.length >= 2) {
+      entities.selector = match[1];
+    } else if (pattern.action === 'WAIT' && match.length >= 2) {
+      entities.condition = match[1];
+    } else if (pattern.action === 'SCROLL' && match.length >= 2) {
+      entities.direction = match[1];
+    } else if (pattern.action === 'CREATE_PLAN' && match.length >= 2) {
+      entities.task = match[1];
+      entities.complexity = 'medium'; // Default complexity
+    } else if (pattern.action === 'VALIDATE_TASK' && match.length >= 2) {
+      entities.task = match[1];
+    } else if (pattern.action === 'COORDINATE_AGENTS' && match.length >= 2) {
+      entities.task = match[1];
+      entities.agents = ['planner', 'navigator', 'validator']; // Default agents
+    } else if (pattern.action === 'ANALYZE_TASK' && match.length >= 2) {
+      entities.task = match[1];
+      entities.complexity = 'medium'; // Default complexity
     }
 
     // Convert token symbols to addresses
@@ -399,6 +598,57 @@ export class IntentRecognizer {
         }
       }
     }
+  }
+
+  private parseFormFields(fieldsText: string): Array<{name?: string; selector?: string; value: string; type?: string}> {
+    const fields: Array<{name?: string; selector?: string; value: string; type?: string}> = [];
+    
+    // Simple parsing for common patterns
+    // This could be enhanced with more sophisticated NLP in the future
+    const fieldPatterns = [
+      /([A-Za-z0-9\s_]+)\s*[:=]\s*([A-Za-z0-9\s_.@+-]+)/g,
+      /enter\s+([A-Za-z0-9\s_.@+-]+)\s+(?:as|in|for)\s+([A-Za-z0-9\s_]+)/g,
+      /fill\s+([A-Za-z0-9\s_]+)\s+with\s+([A-Za-z0-9\s_.@+-]+)/g,
+    ];
+
+    for (const pattern of fieldPatterns) {
+      let match;
+      while ((match = pattern.exec(fieldsText)) !== null) {
+        const field = match[1]?.trim();
+        const value = match[2]?.trim();
+        
+        if (field && value) {
+          // Try to determine field type
+          let type = 'text';
+          if (value.includes('@')) type = 'email';
+          else if (/^\d+$/.test(value)) type = 'number';
+          else if (value.toLowerCase().includes('password')) type = 'password';
+          
+          fields.push({
+            name: field,
+            value: value,
+            type: type
+          });
+        }
+      }
+    }
+
+    // If no structured fields found, treat as simple field-value pairs
+    if (fields.length === 0) {
+      const simpleFields = fieldsText.split(/[,，]/).map(f => f.trim()).filter(f => f);
+      simpleFields.forEach(field => {
+        const parts = field.split(/[:=]/).map(p => p.trim());
+        if (parts.length >= 2) {
+          fields.push({
+            name: parts[0],
+            value: parts[1],
+            type: 'text'
+          });
+        }
+      });
+    }
+
+    return fields.length > 0 ? fields : [{ value: fieldsText, type: 'text' }];
   }
 
   private extractChains(instruction: string): number[] {
