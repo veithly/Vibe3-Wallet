@@ -4,8 +4,8 @@ import React from 'react';
 export const Icons = {
   Settings: (props: React.SVGProps<SVGSVGElement>) => (
     <svg
-      width="16"
-      height="16"
+      width="24"
+      height="24"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -21,8 +21,8 @@ export const Icons = {
 
   History: (props: React.SVGProps<SVGSVGElement>) => (
     <svg
-      width="16"
-      height="16"
+      width="24"
+      height="24"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -39,8 +39,8 @@ export const Icons = {
 
   Sun: (props: React.SVGProps<SVGSVGElement>) => (
     <svg
-      width="16"
-      height="16"
+      width="24"
+      height="24"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -56,8 +56,8 @@ export const Icons = {
 
   Moon: (props: React.SVGProps<SVGSVGElement>) => (
     <svg
-      width="16"
-      height="16"
+      width="24"
+      height="24"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -72,8 +72,8 @@ export const Icons = {
 
   Check: (props: React.SVGProps<SVGSVGElement>) => (
     <svg
-      width="16"
-      height="16"
+      width="24"
+      height="24"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -88,8 +88,8 @@ export const Icons = {
 
   X: (props: React.SVGProps<SVGSVGElement>) => (
     <svg
-      width="16"
-      height="16"
+      width="24"
+      height="24"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -105,8 +105,8 @@ export const Icons = {
 
   AlertCircle: (props: React.SVGProps<SVGSVGElement>) => (
     <svg
-      width="16"
-      height="16"
+      width="24"
+      height="24"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -123,15 +123,14 @@ export const Icons = {
 
   Loader: (props: React.SVGProps<SVGSVGElement>) => (
     <svg
-      width="16"
-      height="16"
+      width="24"
+      height="24"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className="icon-spin"
       {...props}
     >
       <path d="M21 12a9 9 0 1 1-6.219-8.56" />
@@ -140,8 +139,8 @@ export const Icons = {
 
   Wifi: (props: React.SVGProps<SVGSVGElement>) => (
     <svg
-      width="16"
-      height="16"
+      width="24"
+      height="24"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -154,6 +153,57 @@ export const Icons = {
       <path d="M1.42 9a16 16 0 0 1 21.16 0" />
       <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
       <path d="M12 20h.01" />
+    </svg>
+  ),
+
+  Plus: (props: React.SVGProps<SVGSVGElement>) => (
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  ),
+
+  Send: (props: React.SVGProps<SVGSVGElement>) => (
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <path d="M22 2L11 13" />
+      <path d="M22 2L15 22l-4-9-9-4 20-7z" />
+    </svg>
+  ),
+
+  Target: (props: React.SVGProps<SVGSVGElement>) => (
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="6" />
+      <circle cx="12" cy="12" r="2" />
     </svg>
   ),
 };
@@ -169,6 +219,9 @@ export const IconMap = {
   'alert-circle': Icons.AlertCircle,
   loader: Icons.Loader,
   wifi: Icons.Wifi,
+  plus: Icons.Plus,
+  target: Icons.Target,
+  send: Icons.Send,
 } as const;
 
 export type IconName = keyof typeof IconMap;

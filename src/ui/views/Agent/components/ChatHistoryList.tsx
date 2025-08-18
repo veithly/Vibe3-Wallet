@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import '../styles/ChatHistoryList.less';
 
 interface ChatSession {
   id: string;
@@ -191,105 +190,114 @@ export default function ChatHistoryList({
       showArchivedOnly;
 
     return (
-      <div className="chat-history-list">
-        <div className="header">
-          <div className="title">Chat History</div>
-          <div className="header-actions">
-            {onExport && (
-              <button
-                className="export-button"
-                onClick={handleExport}
-                title="Export sessions"
-              >
-                📤
-              </button>
-            )}
-            {onImport && (
-              <label className="import-button" title="Import sessions">
-                📥
-                <input
-                  type="file"
-                  accept=".json"
-                  onChange={handleImport}
-                  style={{ display: 'none' }}
-                />
-              </label>
-            )}
-            {onNewChat && (
-              <button className="new-chat-button" onClick={handleNewChat}>
-                New Chat
-              </button>
-            )}
-          </div>
-        </div>
-
-        {(searchable || hasFilters) && (
-          <div className="filters-section">
-            {searchable && (
-              <div className="search-box">
-                <input
-                  type="text"
-                  placeholder="Search sessions..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="search-input"
-                />
-              </div>
-            )}
-
-            {allTags.length > 0 && (
-              <div className="tags-filter">
-                <div className="tags-label">Filter by tags:</div>
-                <div className="tags-list">
-                  {allTags.map((tag) => (
-                    <button
-                      key={tag}
-                      className={`tag-button ${
-                        selectedTags.includes(tag) ? 'selected' : ''
-                      }`}
-                      onClick={() => toggleTag(tag)}
-                    >
-                      {tag}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="filter-toggles">
-              <label className="filter-toggle">
-                <input
-                  type="checkbox"
-                  checked={showBookmarkedOnly}
-                  onChange={(e) => setShowBookmarkedOnly(e.target.checked)}
-                />
-                Bookmarked only
-              </label>
-              <label className="filter-toggle">
-                <input
-                  type="checkbox"
-                  checked={showArchivedOnly}
-                  onChange={(e) => setShowArchivedOnly(e.target.checked)}
-                />
-                Archived only
-              </label>
-              {hasFilters && (
-                <button className="clear-filters" onClick={clearFilters}>
-                  Clear filters
+      <div className="h-full bg-white dark:bg-gray-900">
+        <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+          <div className="flex items-center justify-between mb-4">
+            <div className="text-lg font-semibold text-gray-900 dark:text-white">Chat History</div>
+            <div className="flex gap-2">
+              {onExport && (
+                <button
+                  className="p-2 text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors"
+                  onClick={handleExport}
+                  title="Export sessions"
+                >
+                  📤
+                </button>
+              )}
+              {onImport && (
+                <label className="p-2 text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors cursor-pointer" title="Import sessions">
+                  📥
+                  <input
+                    type="file"
+                    accept=".json"
+                    onChange={handleImport}
+                    className="hidden"
+                  />
+                </label>
+              )}
+              {onNewChat && (
+                <button className="px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors" onClick={handleNewChat}>
+                  New Chat
                 </button>
               )}
             </div>
           </div>
-        )}
 
-        <div className="empty-state">
-          <div className="empty-icon">💬</div>
-          <div className="empty-message">
+          {(searchable || hasFilters) && (
+            <div className="space-y-3">
+              {searchable && (
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="Search sessions..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-9 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <svg className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                </div>
+              )}
+
+              {allTags.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Filter by tags:</div>
+                  <div className="flex flex-wrap gap-2">
+                    {allTags.map((tag) => (
+                      <button
+                        key={tag}
+                        className={`px-2 py-1 text-xs rounded-full transition-colors ${
+                          selectedTags.includes(tag)
+                            ? 'bg-blue-500 text-white'
+                            : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                        }`}
+                        onClick={() => toggleTag(tag)}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-4 flex-wrap">
+                <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={showBookmarkedOnly}
+                    onChange={(e) => setShowBookmarkedOnly(e.target.checked)}
+                    className="rounded border-gray-300 dark:border-gray-600 text-blue-500 focus:ring-blue-500"
+                  />
+                  Bookmarked only
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={showArchivedOnly}
+                    onChange={(e) => setShowArchivedOnly(e.target.checked)}
+                    className="rounded border-gray-300 dark:border-gray-600 text-blue-500 focus:ring-blue-500"
+                  />
+                  Archived only
+                </label>
+                {hasFilters && (
+                  <button className="px-3 py-1 text-sm bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" onClick={clearFilters}>
+                    Clear filters
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <div className="text-4xl mb-4 opacity-50">💬</div>
+          <div className="text-lg font-medium text-gray-900 dark:text-white mb-2">
             {hasFilters
               ? 'No sessions match your filters'
               : 'No chat history yet'}
           </div>
-          <div className="empty-submessage">
+          <div className="text-sm text-gray-500 dark:text-gray-400">
             {hasFilters
               ? 'Try adjusting your search or filters'
               : 'Start a conversation to see your chat sessions here'}
@@ -300,122 +308,165 @@ export default function ChatHistoryList({
   }
 
   return (
-    <div className="chat-history-list">
-      <div className="header">
-        <div className="title">Chat History</div>
-        <div className="header-actions">
-          {onExport && (
-            <button
-              className="export-button"
-              onClick={handleExport}
-              title="Export sessions"
-            >
-              📤
-            </button>
-          )}
-          {onImport && (
-            <label className="import-button" title="Import sessions">
-              📥
-              <input
-                type="file"
-                accept=".json"
-                onChange={handleImport}
-                style={{ display: 'none' }}
-              />
-            </label>
-          )}
-          {onNewChat && (
-            <button className="new-chat-button" onClick={handleNewChat}>
-              New Chat
-            </button>
-          )}
-        </div>
-      </div>
-
-      {(searchable || allTags.length > 0) && (
-        <div className="filters-section">
-          {searchable && (
-            <div className="search-box">
-              <input
-                type="text"
-                placeholder="Search sessions..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="search-input"
-              />
-            </div>
-          )}
-
-          {allTags.length > 0 && (
-            <div className="tags-filter">
-              <div className="tags-label">Filter by tags:</div>
-              <div className="tags-list">
-                {allTags.map((tag) => (
-                  <button
-                    key={tag}
-                    className={`tag-button ${
-                      selectedTags.includes(tag) ? 'selected' : ''
-                    }`}
-                    onClick={() => toggleTag(tag)}
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="filter-toggles">
-            <label className="filter-toggle">
-              <input
-                type="checkbox"
-                checked={showBookmarkedOnly}
-                onChange={(e) => setShowBookmarkedOnly(e.target.checked)}
-              />
-              Bookmarked only
-            </label>
-            <label className="filter-toggle">
-              <input
-                type="checkbox"
-                checked={showArchivedOnly}
-                onChange={(e) => setShowArchivedOnly(e.target.checked)}
-              />
-              Archived only
-            </label>
-            {(searchQuery ||
-              selectedTags.length > 0 ||
-              showBookmarkedOnly ||
-              showArchivedOnly) && (
-              <button className="clear-filters" onClick={clearFilters}>
-                Clear filters
+    <div className="h-full bg-white dark:bg-gray-900">
+      <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+        <div className="flex items-center justify-between mb-4">
+          <div className="text-lg font-semibold text-gray-900 dark:text-white">Chat History</div>
+          <div className="flex gap-2">
+            {onExport && (
+              <button
+                className="p-2 text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors"
+                onClick={handleExport}
+                title="Export sessions"
+              >
+                📤
+              </button>
+            )}
+            {onImport && (
+              <label className="p-2 text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors cursor-pointer" title="Import sessions">
+                📥
+                <input
+                  type="file"
+                  accept=".json"
+                  onChange={handleImport}
+                  className="hidden"
+                />
+              </label>
+            )}
+            {onNewChat && (
+              <button className="px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors" onClick={handleNewChat}>
+                New Chat
               </button>
             )}
           </div>
         </div>
-      )}
 
-      <div className="sessions-container">
+        {(searchable || allTags.length > 0) && (
+          <div className="space-y-3">
+            {searchable && (
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Search sessions..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <svg className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+            )}
+
+            {allTags.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Filter by tags:</div>
+                <div className="flex flex-wrap gap-2">
+                  {allTags.map((tag) => (
+                    <button
+                      key={tag}
+                      className={`px-2 py-1 text-xs rounded-full transition-colors ${
+                        selectedTags.includes(tag)
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                      }`}
+                      onClick={() => toggleTag(tag)}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-4 flex-wrap">
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={showBookmarkedOnly}
+                  onChange={(e) => setShowBookmarkedOnly(e.target.checked)}
+                  className="rounded border-gray-300 dark:border-gray-600 text-blue-500 focus:ring-blue-500"
+                />
+                Bookmarked only
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={showArchivedOnly}
+                  onChange={(e) => setShowArchivedOnly(e.target.checked)}
+                  className="rounded border-gray-300 dark:border-gray-600 text-blue-500 focus:ring-blue-500"
+                />
+                Archived only
+              </label>
+              {(searchQuery ||
+                selectedTags.length > 0 ||
+                showBookmarkedOnly ||
+                showArchivedOnly) && (
+                <button className="px-3 py-1 text-sm bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" onClick={clearFilters}>
+                  Clear filters
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="overflow-y-auto" style={{ maxHeight: 'calc(100% - 200px)' }}>
         {filteredSessions.map((session) => (
           <div
             key={session.id}
-            className={`session-item ${session.isArchived ? 'archived' : ''} ${
-              session.isBookmarked ? 'bookmarked' : ''
-            }`}
+            className={`p-4 border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors ${session.isArchived ? 'opacity-60' : ''} ${session.isBookmarked ? 'bg-yellow-50 dark:bg-yellow-900/10' : ''}`}
             onClick={() => handleSessionClick(session.id)}
           >
-            <div className="session-header">
-              <div className="session-title">
-                {session.isBookmarked && (
-                  <span className="bookmark-icon">⭐</span>
+            <div className="flex items-start justify-between mb-2">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  {session.isBookmarked && (
+                    <span className="text-yellow-500">⭐</span>
+                  )}
+                  <div className="font-medium text-gray-900 dark:text-white truncate">
+                    {session.title || `Session ${session.id.slice(-8)}`}
+                  </div>
+                  {session.isArchived && (
+                    <span className="text-gray-500">📦</span>
+                  )}
+                </div>
+                
+                <div className="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400 mb-2">
+                  <span>
+                    {session.messageCount} message
+                    {session.messageCount !== 1 ? 's' : ''}
+                    {session.stepCount > 0 &&
+                      ` • ${session.stepCount} step${
+                        session.stepCount !== 1 ? 's' : ''
+                      }`}
+                  </span>
+                  <span>
+                    {formatDate(session.lastMessageAt || session.createdAt)}
+                  </span>
+                </div>
+
+                {session.tags && session.tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    {session.tags.map((tag) => (
+                      <span key={tag} className="px-2 py-1 text-xs bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full">
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
                 )}
-                {session.title || `Session ${session.id.slice(-8)}`}
-                {session.isArchived && (
-                  <span className="archived-icon">📦</span>
+
+                {session.firstMessage && (
+                  <div className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">
+                    {session.firstMessage}
+                    {session.firstMessage.length > 100 && '...'}
+                  </div>
                 )}
               </div>
-              <div className="session-menu">
+              
+              <div className="relative ml-2">
                 <button
-                  className="menu-button"
+                  className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
                   onClick={(e) => {
                     e.stopPropagation();
                     setShowMenuForSession(
@@ -426,10 +477,10 @@ export default function ChatHistoryList({
                   ⋮
                 </button>
                 {showMenuForSession === session.id && (
-                  <div className="session-menu-dropdown">
+                  <div className="absolute right-0 top-8 z-10 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg min-w-[150px]">
                     {onBookmark && (
                       <button
-                        className="menu-item"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleBookmark(session.id, !session.isBookmarked);
@@ -440,7 +491,7 @@ export default function ChatHistoryList({
                     )}
                     {onArchive && (
                       <button
-                        className="menu-item"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleArchive(session.id, !session.isArchived);
@@ -451,7 +502,7 @@ export default function ChatHistoryList({
                     )}
                     {onDelete && (
                       <button
-                        className="menu-item delete"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 transition-colors flex items-center gap-2"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDelete(session.id);
@@ -464,37 +515,6 @@ export default function ChatHistoryList({
                 )}
               </div>
             </div>
-
-            <div className="session-meta">
-              <span className="message-count">
-                {session.messageCount} message
-                {session.messageCount !== 1 ? 's' : ''}
-                {session.stepCount > 0 &&
-                  ` • ${session.stepCount} step${
-                    session.stepCount !== 1 ? 's' : ''
-                  }`}
-              </span>
-              <span className="session-date">
-                {formatDate(session.lastMessageAt || session.createdAt)}
-              </span>
-            </div>
-
-            {session.tags && session.tags.length > 0 && (
-              <div className="session-tags">
-                {session.tags.map((tag) => (
-                  <span key={tag} className="session-tag">
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {session.firstMessage && (
-              <div className="session-preview">
-                {session.firstMessage}
-                {session.firstMessage.length > 100 && '...'}
-              </div>
-            )}
           </div>
         ))}
       </div>

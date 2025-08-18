@@ -8,7 +8,7 @@ export const BUILTIN_PROVIDERS = {
     name: 'OpenAI',
     type: 'openai' as ProviderTypeEnum,
     baseUrl: 'https://api.openai.com/v1',
-    modelNames: ['gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'],
+    modelNames: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4', 'gpt-4-0613'],
     apiKey: '',
     validated: false,
     createdAt: Date.now(),

@@ -11,9 +11,6 @@ import { logger } from '../utils/logger';
 interface ChatInputProps {
   onSendMessage: (text: string) => void;
   onStopTask: () => void;
-  onMicClick?: () => void;
-  isRecording?: boolean;
-  isProcessingSpeech?: boolean;
   disabled: boolean;
   showStopButton: boolean;
   setContent?: (setter: (text: string) => void) => void;
@@ -23,20 +20,17 @@ interface ChatInputProps {
 export default function ChatInput({
   onSendMessage,
   onStopTask,
-  onMicClick,
-  isRecording = false,
-  isProcessingSpeech = false,
   disabled,
   showStopButton,
   setContent,
   isDarkMode = false,
 }: ChatInputProps) {
   const [text, setText] = useState('');
-  
+
   const isSendButtonDisabled = useMemo(() => {
     return disabled || text.trim() === '';
   }, [disabled, text]);
-  
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleTextChange = useCallback(
@@ -113,71 +107,36 @@ export default function ChatInput({
     [handleSubmit, disabled]
   );
 
-  
+
   return (
     <form
       onSubmit={handleSubmit}
-      className={`chat-input-form ${disabled ? 'disabled' : ''}`}
+      className={`p-4 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 ${disabled ? 'opacity-50' : ''}`}
       aria-label="Chat input form"
     >
-      <div className="input-container">
+      <div className="relative">
         <textarea
           ref={textareaRef}
           value={text}
           onChange={handleTextChange}
           onKeyDown={handleKeyDown}
           disabled={disabled}
-          aria-disabled={disabled}
-          rows={5}
-          className="textarea"
+          rows={3}
+          className={`
+            w-full p-3 pr-12
+            border border-gray-300 dark:border-gray-600 rounded-lg
+            resize-none
+            focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500
+            bg-white dark:bg-gray-800 text-gray-900 dark:text-white
+            placeholder-gray-500 dark:placeholder-gray-400
+            disabled:bg-gray-100 dark:disabled:bg-gray-700 disabled:text-gray-400 dark:disabled:text-gray-500
+          `}
           placeholder='What can I help you with?'
           aria-label="Message input"
         />
 
-        <div className={`controls-area ${disabled ? 'disabled' : ''}`}>
-          <div className="left-controls">
-            {onMicClick && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  logger.debug('ChatInput', 'Mic button clicked', {
-                    disabled,
-                    isProcessingSpeech,
-                  });
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (!disabled && !isProcessingSpeech) {
-                    try {
-                      onMicClick();
-                    } catch (error) {
-                      logger.error(
-                        'ChatInput',
-                        'Error calling onMicClick',
-                        error
-                      );
-                    }
-                  }
-                }}
-                disabled={disabled || isProcessingSpeech}
-                aria-label={
-                  isProcessingSpeech
-                    ? 'Processing speech...'
-                    : isRecording
-                    ? 'Stop recording'
-                    : 'Start voice input'
-                }
-                className={`mic-button ${isRecording ? 'recording' : ''}`}
-              >
-                {isProcessingSpeech ? (
-                  <div className="mic-icon processing" />
-                ) : (
-                  <div
-                    className={`mic-icon ${isRecording ? 'recording' : ''}`}
-                  />
-                )}
-              </button>
-            )}
-          </div>
+        <div className={`absolute bottom-3 right-3 flex gap-2 ${disabled ? 'opacity-50' : ''}`}>
+
 
           {showStopButton ? (
             <button
@@ -192,7 +151,7 @@ export default function ChatInput({
                   logger.error('ChatInput', 'Error calling onStopTask', error);
                 }
               }}
-              className="action-button stop-button"
+              className="px-3 py-1.5 bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors duration-200"
             >
               Stop
             </button>
@@ -200,8 +159,14 @@ export default function ChatInput({
             <button
               type="submit"
               disabled={isSendButtonDisabled}
-              aria-disabled={isSendButtonDisabled}
-              className="action-button send-button"
+              className={`
+                p-1.5 rounded-md
+                ${isSendButtonDisabled
+                  ? 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
+                  : 'bg-blue-500 text-white hover:bg-blue-600'
+                }
+                transition-colors duration-200
+              `}
               onClick={(e) => {
                 logger.debug('ChatInput', 'Send button clicked', {
                   isSendButtonDisabled,
@@ -215,7 +180,11 @@ export default function ChatInput({
                 e.stopPropagation();
               }}
             >
-              Send
+              {/* Send icon */}
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path d="M22 2L11 13" />
+                <path d="M22 2L15 22l-4-9-9-4 20-7z" />
+              </svg>
             </button>
           )}
         </div>

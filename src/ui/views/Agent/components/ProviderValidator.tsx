@@ -7,7 +7,6 @@ import type {
 } from '@/background/service/agent/storage/llmProviders';
 import { llmProviderStore } from '@/background/service/agent/storage/llmProviders';
 import { logger } from '../utils/logger';
-import '../styles/ProviderValidator.less';
 
 interface ProviderValidatorProps {
   providerId: string;
@@ -101,9 +100,9 @@ const ProviderValidator: React.FC<ProviderValidatorProps> = ({
 
     if (!status && !config.apiKey?.trim() && config.type !== 'ollama') {
       return (
-        <div className="provider-validator__status provider-validator__status--warning">
+        <div className="px-1.5 py-0.5 rounded text-[10px] font-medium inline-block whitespace-nowrap bg-yellow-50 border border-yellow-200 text-yellow-600 dark:bg-yellow-900/20 dark:border-yellow-700 dark:text-yellow-400">
           <Tooltip title="API key required">
-            <span className="provider-validator__status-text">
+            <span className="text-xs">
               Key Required
             </span>
           </Tooltip>
@@ -114,56 +113,28 @@ const ProviderValidator: React.FC<ProviderValidatorProps> = ({
     return null;
   };
 
-  const containerClassName = ['provider-validator', className]
-    .filter(Boolean)
-    .join(' ');
-
   return (
-    <div className={containerClassName}>
-      <div className="provider-validator__content">
-        <Tooltip title={getTooltipContent()} placement="top">
-          <div className="provider-validator__button-wrapper">
-            <IconButton
-              icon="wifi"
-              onClick={handleValidate}
-              loading={isValidating}
-              validationStatus={getValidationStatus()}
-              disabled={!config.apiKey?.trim() && config.type !== 'ollama'}
-              size="small"
-              tooltip=""
-            />
-          </div>
-        </Tooltip>
+    <div className={`flex items-center ${className}`}>
+      <div className="flex items-center gap-2">
+        <div className="flex items-center justify-center">
+          <IconButton
+            icon="wifi"
+            onClick={handleValidate}
+            loading={isValidating}
+            validationStatus={getValidationStatus()}
+            disabled={!config.apiKey?.trim() && config.type !== 'ollama'}
+            size="small"
+            tooltip={getTooltipContent()}
+          />
+        </div>
 
         {getStatusIndicator()}
 
-        {config.validated === true &&
-          lastResult?.modelList &&
-          lastResult.modelList.length > 0 && (
-            <div className="provider-validator__models">
-              <Tooltip
-                title={
-                  <div>
-                    <div style={{ marginBottom: '4px' }}>Available models:</div>
-                    {lastResult.modelList.slice(0, 10).map((model, index) => (
-                      <div key={index} style={{ fontSize: '12px' }}>
-                        • {model}
-                      </div>
-                    ))}
-                    {lastResult.modelList.length > 10 && (
-                      <div style={{ fontSize: '12px', fontStyle: 'italic' }}>
-                        ... and {lastResult.modelList.length - 10} more
-                      </div>
-                    )}
-                  </div>
-                }
-              >
-                <span className="provider-validator__model-count">
-                  {lastResult.modelList.length} models
-                </span>
-              </Tooltip>
-            </div>
-          )}
+        {config.validated === true && lastResult?.modelList && (
+          <div className="text-xs text-gray-500 dark:text-gray-400">
+            <span className="">{lastResult.modelList.length} models detected</span>
+          </div>
+        )}
       </div>
     </div>
   );

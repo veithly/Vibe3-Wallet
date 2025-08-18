@@ -1,10 +1,7 @@
 // Enhanced streaming message component for real-time AI responses
 import React, { useState, useEffect, useCallback } from 'react';
-import { Typography, Spin, Alert } from 'antd';
 import { FunctionCall } from '@/background/service/agent/llm/types';
 import { createLogger } from '@/utils/logger';
-
-const { Text, Paragraph } = Typography;
 const logger = createLogger('StreamingMessage');
 
 interface StreamingMessageProps {
@@ -174,38 +171,39 @@ export const StreamingMessage: React.FC<StreamingMessageProps> = ({
 
   if (error) {
     return (
-      <div className={`streaming-message-error ${className}`}>
-        <Alert
-          message="Streaming Error"
-          description={error}
-          type="error"
-          showIcon
-        />
+      <div className={`p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg ${className}`}>
+        <div className="flex items-start gap-2">
+          <span className="text-red-500">❌</span>
+          <div>
+            <div className="font-medium text-red-800 dark:text-red-300">Streaming Error</div>
+            <div className="text-sm text-red-700 dark:text-red-400">{error}</div>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className={`streaming-message ${className}`}>
+    <div className={`m-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 ${className}`}>
       {/* Content display */}
       {content && (
-        <div className="streaming-content">
-          <Paragraph className="streaming-text">
+        <div className="mb-3">
+          <p className="m-0 leading-relaxed whitespace-pre-wrap">
             {content}
             {isActive && (
-              <span className="streaming-cursor">
-                <Spin size="small" className="inline-spin" />
+              <span className="inline-block align-text-bottom ml-1">
+                <span className="animate-spin">⟳</span>
               </span>
             )}
-          </Paragraph>
+          </p>
         </div>
       )}
 
       {/* Function calls display */}
       {functionCalls.length > 0 && showFunctionCalls && (
-        <div className="function-calls-container">
-          <Text strong>Function Calls:</Text>
-          <div className="function-calls-list">
+        <div className="mt-4 p-3 bg-white dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+          <div className="font-medium text-gray-900 dark:text-white mb-2">Function Calls:</div>
+          <div className="mt-2">
             {functionCalls.map((funcCall, index) => (
               <FunctionCallComponent
                 key={`${funcCall.name}-${index}`}
@@ -221,18 +219,18 @@ export const StreamingMessage: React.FC<StreamingMessageProps> = ({
 
       {/* Streaming indicator */}
       {isActive && (
-        <div className="streaming-indicator">
-          <Spin size="small" />
-          <Text type="secondary" style={{ marginLeft: 8 }}>
+        <div className="flex items-center mt-3 p-2 bg-blue-50 dark:bg-blue-900/20 rounded text-sm">
+          <span className="animate-spin mr-2">⟳</span>
+          <span className="text-gray-600 dark:text-gray-400">
             Thinking... ({chunksReceived} chunks)
-          </Text>
+          </span>
         </div>
       )}
 
       {/* Completion indicator */}
       {isComplete && (
-        <div className="streaming-complete">
-          <Text type="success">✓ Response complete</Text>
+        <div className="mt-3 p-2 bg-green-50 dark:bg-green-900/20 rounded text-sm text-green-700 dark:text-green-400">
+          ✓ Response complete
         </div>
       )}
     </div>
@@ -294,53 +292,50 @@ const FunctionCallComponent: React.FC<FunctionCallComponentProps> = ({
   const getStatusColor = (status: FunctionCallDisplay['status']) => {
     switch (status) {
       case 'pending':
-        return '#faad14';
+        return 'text-yellow-500';
       case 'executing':
-        return '#1890ff';
+        return 'text-blue-500';
       case 'completed':
-        return '#52c41a';
+        return 'text-green-500';
       case 'failed':
-        return '#ff4d4f';
+        return 'text-red-500';
       default:
-        return '#d9d9d9';
+        return 'text-gray-500';
     }
   };
 
   return (
-    <div className="function-call-item">
+    <div className="m-2 p-2 bg-gray-50 dark:bg-gray-700 rounded border-l-3 border-l-gray-200 dark:border-l-gray-600">
       <div
-        className="function-call-header"
+        className="flex items-center text-sm cursor-pointer"
         onClick={() => setIsExpanded(!isExpanded)}
-        style={{ cursor: 'pointer' }}
       >
-        <span
-          style={{ marginRight: 8, color: getStatusColor(functionCall.status) }}
-        >
+        <span className={`mr-2 ${getStatusColor(functionCall.status)}`}>
           {getStatusIcon(functionCall.status)}
         </span>
-        <Text strong>{functionCall.name}</Text>
-        <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+        <span className="font-medium text-gray-900 dark:text-white">{functionCall.name}</span>
+        <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
           ({functionCall.status})
-        </Text>
-        <span style={{ marginLeft: 'auto' }}>{isExpanded ? '▲' : '▼'}</span>
+        </span>
+        <span className="ml-auto">{isExpanded ? '▲' : '▼'}</span>
       </div>
 
       {isExpanded && (
-        <div className="function-call-details">
-          <div className="function-call-arguments">
-            <Text strong>Arguments:</Text>
-            <pre className="arguments-json">
+        <div className="mt-2 pl-6">
+          <div className="m-2">
+            <div className="font-medium text-gray-900 dark:text-white mb-1">Arguments:</div>
+            <pre className="bg-gray-100 dark:bg-gray-600 p-2 rounded text-xs whitespace-pre-wrap overflow-x-auto">
               {JSON.stringify(functionCall.arguments, null, 2)}
             </pre>
           </div>
 
           {(functionCall.status === 'completed' ||
             functionCall.status === 'failed') && (
-            <div className="function-call-result">
-              <Text strong>
+            <div className="m-2">
+              <div className="font-medium text-gray-900 dark:text-white mb-1">
                 {functionCall.status === 'completed' ? 'Result:' : 'Error:'}
-              </Text>
-              <pre className="result-content">
+              </div>
+              <pre className="bg-gray-100 dark:bg-gray-600 p-2 rounded text-xs whitespace-pre-wrap overflow-x-auto">
                 {functionCall.status === 'completed'
                   ? JSON.stringify(functionCall.result, null, 2)
                   : functionCall.error}
@@ -449,101 +444,3 @@ export function useStreamingMessage(initialContent: string = '') {
   };
 }
 
-// CSS-in-JS styles for the streaming message component
-export const streamingMessageStyles = `
-  .streaming-message {
-    margin: 12px 0;
-    padding: 12px;
-    border-radius: 8px;
-    background: #f8f9fa;
-    border: 1px solid #e9ecef;
-  }
-
-  .streaming-content {
-    margin-bottom: 12px;
-  }
-
-  .streaming-text {
-    margin: 0;
-    line-height: 1.6;
-    white-space: pre-wrap;
-  }
-
-  .streaming-cursor {
-    display: inline-block;
-    vertical-align: text-bottom;
-  }
-
-  .inline-spin {
-    display: inline-block;
-    margin-left: 4px;
-  }
-
-  .function-calls-container {
-    margin-top: 16px;
-    padding: 12px;
-    background: white;
-    border-radius: 6px;
-    border: 1px solid #e9ecef;
-  }
-
-  .function-calls-list {
-    margin-top: 8px;
-  }
-
-  .function-call-item {
-    margin: 8px 0;
-    padding: 8px;
-    background: #f8f9fa;
-    border-radius: 4px;
-    border-left: 3px solid #e9ecef;
-  }
-
-  .function-call-header {
-    display: flex;
-    align-items: center;
-    font-size: 14px;
-  }
-
-  .function-call-details {
-    margin-top: 8px;
-    padding-left: 24px;
-  }
-
-  .function-call-arguments,
-  .function-call-result {
-    margin: 8px 0;
-  }
-
-  .arguments-json,
-  .result-content {
-    background: #f1f3f4;
-    padding: 8px;
-    border-radius: 4px;
-    font-size: 12px;
-    white-space: pre-wrap;
-    overflow-x: auto;
-  }
-
-  .streaming-indicator {
-    display: flex;
-    align-items: center;
-    margin-top: 12px;
-    padding: 8px;
-    background: #e6f7ff;
-    border-radius: 4px;
-    font-size: 12px;
-  }
-
-  .streaming-complete {
-    margin-top: 12px;
-    padding: 8px;
-    background: #f6ffed;
-    border-radius: 4px;
-    font-size: 12px;
-  }
-
-  .streaming-message-error {
-    margin: 12px 0;
-  }
-`;

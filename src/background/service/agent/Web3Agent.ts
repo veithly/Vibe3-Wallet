@@ -45,6 +45,7 @@ import type { BaseChatModel as IBaseChatModel } from './llm/messages';
 import { PlannerAgent } from './agents/PlannerAgent';
 import { NavigatorAgent } from './agents/NavigatorAgent';
 import { ValidatorAgent } from './agents/ValidatorAgent';
+import { elementSelectionAgent, ElementSelectionTask } from './element-selection/ElementSelectionAgent';
 import {
   EnhancedIntent,
   ExecutionPlan,
@@ -76,6 +77,7 @@ export interface Web3AgentConfig {
   requireConfirmationHighRisk: boolean;
   simulationEnabled: boolean;
   riskThreshold: number;
+  enableStreaming?: boolean;
 }
 
 export interface Web3AgentState {
@@ -91,7 +93,9 @@ export interface Web3AgentState {
   coordinationEvents?: CoordinationEvent[];
 }
 
-export class Web3Agent {
+import { EventEmitter } from 'events';
+
+export class Web3Agent extends EventEmitter {
   private context: AgentContext;
   private llm: IWeb3LLM;
   public intentRecognizer: IntentRecognizer;
@@ -110,6 +114,7 @@ export class Web3Agent {
   private plannerAgent!: PlannerAgent;
   private navigatorAgent!: NavigatorAgent;
   private validatorAgent!: ValidatorAgent;
+  private elementSelectionAgent = elementSelectionAgent;
   private multiStepExecutor: MultiStepExecutor;
   private coordinationEnabled: boolean = true;
 
@@ -127,6 +132,7 @@ export class Web3Agent {
       actionRegistry?: ActionRegistry;
     }
   ) {
+    super();
     // 🔥🔥🔥 EXTREMELY AGGRESSIVE DEBUGGING - WEB3AGENT CONSTRUCTOR CALLED! 🔥🔥🔥
     console.log('🔥🔥🔥 WEB3AGENT CONSTRUCTOR INITIALIZED - THIS MUST APPEAR IN CONSOLE! 🔥🔥🔥', {
       timestamp: Date.now(),
@@ -778,6 +784,27 @@ export class Web3Agent {
     } catch (error) {
       logger.error('Validator agent execution failed:', error);
       this.emitCoordinationEvent('validator_error', { error });
+      throw error;
+    }
+  }
+
+  /**
+   * Execute Element Selection Agent
+   */
+  private async executeElementSelectionAgent(task: ElementSelectionTask) {
+    try {
+      this.emitCoordinationEvent('element_selection_start', { task });
+      const result = await this.elementSelectionAgent.executeTask(
+        task,
+        this.context,
+        this.config.enableStreaming,
+        this.handleStreamingChunk.bind(this)
+      );
+      this.emitCoordinationEvent('element_selection_complete', { result });
+      return result;
+    } catch (error) {
+      logger.error('Element selection agent execution failed', error);
+      this.emitCoordinationEvent('element_selection_error', { error });
       throw error;
     }
   }
@@ -2231,6 +2258,23 @@ export class Web3Agent {
     return toolRegistry.getToolInfo();
   }
 
+  /**
+   * Get the current LLM instance
+   */
+  getLLM(): IWeb3LLM {
+    return this.llm;
+  }
+
+  /**
+   * Set the LLM instance (for dynamic model updates)
+   */
+  setLLM(llm: IWeb3LLM): void {
+    this.llm = llm;
+    logger.info('Web3Agent', 'LLM instance updated', {
+      message: 'LLM instance updated successfully'
+    });
+  }
+
   // Fallback response generation methods
   private async generateFallbackResponse(
     error: any,
@@ -2344,6 +2388,20 @@ export class Web3Agent {
 
   public async resetCircuitBreakers() {
     errorRecoveryManager.resetCircuitBreakers();
+  }
+
+  /**
+   * Public method to execute element selection tasks
+   */
+  public async executeElementSelection(task: ElementSelectionTask) {
+    return await this.executeElementSelectionAgent(task);
+  }
+
+  /**
+   * Get element selection agent status
+   */
+  public getElementSelectionStatus() {
+    return this.elementSelectionAgent.getStatus();
   }
 
   private async getCurrentAddress(): Promise<string> {
@@ -2680,5 +2738,10 @@ export class Web3Agent {
       actionRegistry: this.actionRegistry.getStats(),
       multiAgent: await this.getMultiAgentStatus()
     };
+  }
+
+  private handleStreamingChunk(chunk: any): void {
+    // Handle streaming chunks from LLM responses
+    this.emit('streaming_chunk', chunk);
   }
 }

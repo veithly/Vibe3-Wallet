@@ -1,0 +1,230 @@
+/* Agent-specific Tailwind CSS utilities and custom styles */
+
+/* Import base Tailwind styles */
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+/* Import project-specific CSS variables */
+@import './cssvars.css';
+@import './cssvars-custom.css';
+@import './var.less';
+@import './antd-overwrite.less';
+
+@layer components {
+  /* Agent-specific utility classes */
+  .agent-container {
+    @apply bg-white dark:bg-gray-title text-gray-900 dark:text-white;
+  }
+
+  .agent-card {
+    @apply bg-white dark:bg-gray-title border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm;
+  }
+
+  .agent-header {
+    @apply flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700;
+  }
+
+  .agent-content {
+    @apply p-4;
+  }
+
+  .agent-button {
+    @apply px-3 py-2 font-medium rounded-md transition-colors;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+
+  .agent-button-primary {
+    @apply bg-blue-500 text-white hover:bg-blue-600 disabled:bg-blue-300 disabled:cursor-not-allowed;
+  }
+
+  .agent-button-secondary {
+    @apply bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-content dark:text-gray-300 dark:hover:bg-gray-subTitle;
+  }
+
+  .agent-button-danger {
+    @apply bg-red-500 text-white hover:bg-red-600 disabled:bg-red-300 disabled:cursor-not-allowed;
+  }
+
+  .agent-input {
+    @apply w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-title text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500;
+  }
+
+  .agent-status {
+    @apply inline-flex items-center px-3 py-1 rounded-full font-medium;
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+
+  .agent-status-success {
+    @apply bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400;
+  }
+
+  .agent-status-warning {
+    @apply bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400;
+  }
+
+  .agent-status-error {
+    @apply bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400;
+  }
+
+  .agent-status-info {
+    @apply bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400;
+  }
+
+  .agent-tooltip {
+    @apply absolute z-50 bg-gray-800 text-white rounded py-1 px-2 whitespace-nowrap;
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+
+  .agent-icon {
+    @apply w-4 h-4;
+  }
+
+  .agent-icon-button {
+    @apply p-2 text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-content rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+}
+
+/* Custom animations */
+@keyframes agent-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.agent-spin {
+  animation: agent-spin 1s linear infinite;
+}
+
+/* Layout utilities */
+.agent-flex {
+  @apply flex;
+}
+
+.agent-flex-col {
+  @apply flex flex-col;
+}
+
+.agent-flex-center {
+  @apply flex items-center justify-center;
+}
+
+.agent-flex-between {
+  @apply flex items-center justify-between;
+}
+
+.agent-flex-1 {
+  @apply flex-1;
+}
+
+.agent-gap-2 {
+  @apply gap-2;
+}
+
+.agent-gap-4 {
+  @apply gap-4;
+}
+
+/* Spacing utilities */
+.agent-p-2 {
+  @apply p-2;
+}
+
+.agent-p-3 {
+  @apply p-3;
+}
+
+.agent-p-4 {
+  @apply p-4;
+}
+
+.agent-m-2 {
+  @apply m-2;
+}
+
+.agent-mb-2 {
+  @apply mb-2;
+}
+
+.agent-mb-4 {
+  @apply mb-4;
+}
+
+/* Text utilities */
+.agent-text-sm {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.agent-text-base {
+  font-size: 1rem;
+  line-height: 1.5rem;
+}
+
+.agent-text-lg {
+  font-size: 1.125rem;
+  line-height: 1.75rem;
+}
+
+.agent-font-medium {
+  font-weight: 500;
+}
+
+.agent-font-semibold {
+  font-weight: 600;
+}
+
+.agent-text-title {
+  @apply text-gray-900 dark:text-white;
+}
+
+.agent-text-body {
+  @apply text-gray-700 dark:text-gray-300;
+}
+
+.agent-text-muted {
+  @apply text-gray-500 dark:text-gray-400;
+}
+
+/* Border utilities */
+.agent-border {
+  @apply border border-gray-200 dark:border-gray-700;
+}
+
+.agent-border-b {
+  @apply border-b border-gray-200 dark:border-gray-700;
+}
+
+.agent-border-t {
+  @apply border-t border-gray-200 dark:border-gray-700;
+}
+
+/* Background utilities */
+.agent-bg-card {
+  @apply bg-white dark:bg-gray-title;
+}
+
+.agent-bg-secondary {
+  @apply bg-gray-50 dark:bg-gray-content;
+}
+
+.agent-bg-hover {
+  @apply bg-gray-50 dark:bg-gray-content hover:bg-gray-100 dark:hover:bg-gray-subTitle;
+}
+
+/* Responsive utilities */
+@media (max-width: 640px) {
+  .agent-sm-full {
+    @apply w-full;
+  }
+
+  .agent-sm-flex-col {
+    @apply flex-col;
+  }
+}

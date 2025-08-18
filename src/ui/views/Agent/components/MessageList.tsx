@@ -2,6 +2,8 @@ import type { Message } from '../types/message';
 import { ACTOR_PROFILES, Actors, getActorProfile } from '../types/message';
 import { memo } from 'react';
 import React from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import '../styles/MessageList.less';
 import { logger } from '../utils/logger';
 
@@ -60,11 +62,11 @@ export default memo(function MessageList({
   }, [messages, validMessages]);
 
   return (
-    <div className="message-list">
+    <div className="p-4 space-y-4 max-w-full">
       {sortedMessages.length === 0 ? (
-        <div className="empty-message-list">
-          <div className="empty-state-icon">💬</div>
-          <div className="empty-state-text">No messages yet</div>
+        <div className="flex flex-col justify-center items-center py-16 text-center">
+          <div className="mb-4 text-4xl opacity-50">💬</div>
+          <div className="text-gray-500 dark:text-gray-400">No messages yet</div>
         </div>
       ) : (
         sortedMessages.map((message, index) => (
@@ -107,9 +109,9 @@ function MessageBlock({
       totalMessages,
     });
     return (
-      <div className="message-error">
-        <div className="error-icon">⚠️</div>
-        <div className="error-text">Invalid message</div>
+      <div className="flex gap-2 items-center p-3 bg-red-50 rounded-lg border border-red-200">
+        <div className="text-red-500">⚠️</div>
+        <div className="text-sm text-red-700">Invalid message</div>
       </div>
     );
   }
@@ -135,7 +137,8 @@ function MessageBlock({
   // Enhanced message type detection with fallbacks
   const isProgress = message.content === 'Showing progress...';
   const isThinking = message.messageType === 'thinking';
-  const isReActStatus = message.messageType === 'react_status';
+  // Only render ReAct status if it came from model output (thinking content was included by model)
+  const isReActStatus = message.messageType === 'react_status' && !!message.reactStatus?.thinkingContent;
   const isStreaming = message.messageType === 'streaming_chunk' || message.isStreaming;
   const isStreamingComplete = message.messageType === 'streaming_complete';
   const isStreamingError = message.messageType === 'streaming_error';
@@ -164,15 +167,16 @@ function MessageBlock({
   }, [message, messageIndex, totalMessages, content]);
 
   return (
-    <div className={`message-block ${!isSameActor ? 'with-separator' : ''} ${isThinking ? 'thinking-message' : ''} ${isReActStatus ? 'react-status-message' : ''} ${isStreaming ? 'streaming-message' : ''} ${isStreamingComplete ? 'streaming-complete' : ''} ${isStreamingError ? 'streaming-error' : ''}`}>
+    <div className={`flex gap-3 max-w-full ${!isSameActor ? 'pt-4 mt-4 border-t border-gray-100 dark:border-gray-800' : ''} ${isThinking ? 'p-2 bg-purple-50 rounded-lg opacity-80 dark:bg-purple-900/10' : ''} ${isReActStatus ? 'p-2 bg-green-50 rounded-lg opacity-90 dark:bg-green-900/10 border-l-3 border-l-green-300' : ''} ${isStreamingError ? 'p-2 bg-red-50 rounded-lg dark:bg-red-900/10' : ''}`}>
       {!isSameActor && (
         <div
-          className="avatar-container"
+          className="flex flex-shrink-0 justify-center items-center w-24 h-24 rounded-full shadow-md"
           style={{ backgroundColor: actor.iconBackground }}
         >
-          <img 
-            src={actor.icon} 
+          <img
+            src={actor.icon}
             alt={actor.name}
+            className="w-16 h-16"
             onError={(e) => {
               logger.warn('MessageList', 'Failed to load actor icon', {
                 actor: actor.name,
@@ -183,76 +187,50 @@ function MessageBlock({
           />
         </div>
       )}
-      {isSameActor && <div className="avatar-spacer" />}
+      {isSameActor && <div className="flex-shrink-0 w-10" />}
 
-      <div className="message-content">
-        {!isSameActor && (
-          <div className="actor-name">
-            {actor.name}
-            {isThinking && (
-              <span className="thinking-indicator">Thinking...</span>
-            )}
-            {isReActStatus && message.reactStatus && (
-              <span className="react-indicator">
-                {message.reactStatus.isThinking ? '🤔 Thinking...' : 
-                 message.reactStatus.isActing ? '🔧 Executing...' : 
-                 '⚡ Processing...'}
-                {message.reactStatus.isActive && (
-                  <span className="step-info">
-                    (Step {message.reactStatus.currentStep}/{message.reactStatus.maxSteps})
-                  </span>
-                )}
-              </span>
-            )}
-            {isStreaming && (
-              <span className="streaming-indicator">📡 Streaming...</span>
-            )}
-            {isStreamingComplete && (
-              <span className="streaming-complete-indicator">✅ Complete</span>
-            )}
-            {isStreamingError && (
-              <span className="streaming-error-indicator">❌ Error</span>
-            )}
-          </div>
-        )}
-
+      <div className="flex-1 min-w-0">
         <div>
-          <div className={`message-text ${isThinking ? 'thinking-text' : ''} ${isReActStatus ? 'react-status-text' : ''} ${isStreaming ? 'streaming-text' : ''} ${isStreamingComplete ? 'streaming-complete-text' : ''} ${isStreamingError ? 'streaming-error-text' : ''}`}>
+          <div className={`text-sm ${isThinking ? 'italic text-gray-600 dark:text-gray-300' : ''} ${isReActStatus ? 'text-gray-700 dark:text-gray-300' : ''} ${isStreamingError ? 'text-red-700 dark:text-red-300' : ''}`}>
             {isProgress ? (
-              <div className="progress-indicator">
-                <div className="progress-bar" />
+              <div className="overflow-hidden h-1 bg-gray-200 rounded-full dark:bg-gray-700">
+                <div className="h-full bg-blue-500 animate-pulse" style={{ animation: 'progress-animation 2s linear infinite' }} />
               </div>
             ) : isThinking ? (
-              <div className="thinking-content">
-                <div className="thinking-icon">🤔</div>
-                <div className="thinking-message-content">{content}</div>
+              <div className="flex gap-2 items-start">
+                <div className="text-lg opacity-70">🤔</div>
+                <div className="flex-1">{content}</div>
               </div>
             ) : isReActStatus && message.reactStatus ? (
-              <div className="react-status-content">
+              <div className="space-y-2">
                 {message.reactStatus.thinkingContent && (
-                  <div className="thinking-content">
-                    <div className="thinking-icon">💭</div>
-                    <div className="thinking-message-content">{message.reactStatus.thinkingContent}</div>
+                  <div className="flex gap-2 items-start">
+                    <div className="text-lg opacity-70">💭</div>
+                    <div className="flex-1 italic text-gray-600 dark:text-gray-300">{message.reactStatus.thinkingContent}</div>
                   </div>
                 )}
                 {message.reactStatus.currentAction && (
-                  <div className="current-action">
-                    <div className="action-icon">⚡</div>
-                    <div className="action-content">{message.reactStatus.currentAction}</div>
+                  <div className="flex gap-2 items-start">
+                    <div className="text-lg opacity-70">⚡</div>
+                    <div className="flex-1 text-sm text-gray-700 opacity-80 dark:text-gray-300">{message.reactStatus.currentAction}</div>
                   </div>
                 )}
               </div>
             ) : isStreamingError ? (
-              <div className="streaming-error-content">
-                <div className="error-icon">❌</div>
-                <div className="error-message">{content}</div>
+              <div className="flex gap-2 items-start">
+                <div className="text-lg">❌</div>
+                <div className="flex-1 text-red-700 dark:text-red-300">{content}</div>
               </div>
             ) : (
-              <div className="message-content-text">{content}</div>
+              <div className="max-w-none prose prose-sm dark:prose-invert">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {content}
+                </ReactMarkdown>
+              </div>
             )}
           </div>
           {!isProgress && (
-            <div className="timestamp">
+            <div className="mt-1 text-xs text-right text-gray-400 dark:text-gray-500">
               {formatTimestamp(message.timestamp)}
             </div>
           )}

@@ -703,11 +703,11 @@ class Web3LLM implements IWeb3LLM {
   ): Promise<LLMResponse> {
     // Check if ReAct pattern is enabled
     const enableReAct = this.shouldUseReActPattern(tools, intent);
-    
+
     if (enableReAct) {
       return await this.generateReActResponse(messages, context, tools, intent);
     }
-    
+
     // Use existing single-turn function calling
     return await this.generateSingleTurnFunctionCallingResponse(messages, context, tools, intent);
   }
@@ -718,12 +718,12 @@ class Web3LLM implements IWeb3LLM {
       'swap', 'bridge', 'stake', 'unstake', 'defi', 'liquidity',
       'compound', 'yield', 'farm', 'protocol', 'strategy'
     ];
-    
-    const isComplexTask = intent?.action && 
+
+    const isComplexTask = intent?.action &&
       complexTasks.some(task => intent.action.toLowerCase().includes(task));
-    
+
     const hasMultipleTools = tools.length > 1;
-    
+
     // Enable ReAct for complex tasks or when multiple tools are available
     return isComplexTask || hasMultipleTools;
   }
@@ -739,16 +739,16 @@ class Web3LLM implements IWeb3LLM {
     let finalResponse = '';
     let allActions: LLMAction[] = [];
     let allFunctionCalls: FunctionCall[] = [];
-    
+
     logger.info('Starting ReAct reasoning loop', {
       maxSteps,
       toolsCount: tools.length,
       intent: intent?.action
     });
-    
+
     for (let step = 0; step < maxSteps; step++) {
       logger.debug(`ReAct Step ${step + 1}/${maxSteps}`);
-      
+
       // Step 1: Reasoning - What should I do next?
       const reasoningResult = await this.performReActReasoning(
         currentMessages,
@@ -758,20 +758,20 @@ class Web3LLM implements IWeb3LLM {
         step,
         maxSteps
       );
-      
+
       // Add reasoning to conversation
       currentMessages.push(new AIMessage(reasoningResult.content));
-      
+
       // Step 2: Action - Execute function calls if any
       // Use tool calls from structured response first, fallback to parsing from text
       const functionCalls = reasoningResult.toolCalls || this.parseFunctionCalls(reasoningResult.content, tools);
-      
+
       if (functionCalls.length > 0) {
         logger.debug(`Executing ${functionCalls.length} function calls in step ${step + 1}`);
-        
+
         // Execute tools and get results
         const toolResults = await this.executeToolCalls(functionCalls);
-        
+
         // Add action and results to conversation
         currentMessages.push(new AIMessage(
           `Executing ${functionCalls.length} actions: ${functionCalls.map(fc => fc.name).join(', ')}`,
@@ -784,15 +784,15 @@ class Web3LLM implements IWeb3LLM {
             }
           })) }
         ));
-        
+
         // Add tool results as ToolMessage objects
         currentMessages.push(...toolResults);
-        
+
         // Convert to actions and function calls
         const actions = this.convertFunctionCallsToActions(functionCalls);
         allActions.push(...actions);
         allFunctionCalls.push(...functionCalls);
-        
+
         // Check if we should continue (tool results might indicate we need more steps)
         const shouldContinue = this.shouldContinueReActLoop(toolResults, step, maxSteps);
         if (!shouldContinue) {
@@ -806,21 +806,21 @@ class Web3LLM implements IWeb3LLM {
         break;
       }
     }
-    
+
     // If we exhausted all steps, generate a summary response
     if (!finalResponse) {
       finalResponse = `I've completed ${allActions.length} actions across ${maxSteps} steps. ${allActions.map(a => a.type).join(', ')}`;
     }
-    
+
     const confidence = this.calculateConfidence(allActions, finalResponse);
-    
+
     logger.info('ReAct response generated successfully', {
       steps: Math.min(maxSteps, allFunctionCalls.length > 0 ? Math.min(maxSteps, allFunctionCalls.length) : 1),
       totalActions: allActions.length,
       totalFunctionCalls: allFunctionCalls.length,
       confidence
     });
-    
+
     return {
       response: finalResponse,
       actions: allActions,
@@ -840,14 +840,14 @@ class Web3LLM implements IWeb3LLM {
   ): Promise<{ content: string; toolCalls?: FunctionCall[] }> {
     const systemPrompt = this.createReActSystemPrompt(context, tools, intent, currentStep, maxSteps);
     const userPrompt = this.createReActUserPrompt(messages, context, currentStep, maxSteps);
-    
+
     // Create proper message array with system prompt
     const reasoningMessages: BaseMessage[] = [
       new (await import('../llm/messages')).SystemMessage(systemPrompt),
       ...messages.slice(-10), // Include recent conversation history
       new (await import('../llm/messages')).HumanMessage(userPrompt)
     ];
-    
+
     // Attach tools for OpenAI function calling
     if (this._supportsFunctionCalling && tools.length > 0) {
       const openaiTools = tools.map(tool => ({
@@ -858,16 +858,16 @@ class Web3LLM implements IWeb3LLM {
           parameters: tool.parameters
         }
       }));
-      
+
       // Set tools on the model if it supports it
       if ((this.model as any).bind) {
         this.model = (this.model as any).bind({ tools: openaiTools, tool_choice: 'auto' });
       }
       (this.model as any)._pending_tools = openaiTools;
     }
-    
+
     const result = await this.model.invoke(reasoningMessages);
-    
+
     // Extract tool calls from OpenAI response
     let toolCalls: FunctionCall[] = [];
     if (result.tool_calls && Array.isArray(result.tool_calls) && result.tool_calls.length > 0) {
@@ -875,12 +875,12 @@ class Web3LLM implements IWeb3LLM {
         toolCallsCount: result.tool_calls.length,
         toolCallNames: result.tool_calls.map((tc: any) => tc.function?.name || 'unknown'),
       });
-      
+
       // Convert OpenAI tool_calls to FunctionCall format
       toolCalls = result.tool_calls.map((toolCall: any) => {
         try {
           let parsedArguments: Record<string, any> = {};
-          
+
           if (toolCall.function && toolCall.function.arguments) {
             const rawArgs = toolCall.function.arguments;
             console.log('🚨🚨🚨 CRITICAL DEBUGGING: ReAct tool call arguments parsing:', {
@@ -889,7 +889,7 @@ class Web3LLM implements IWeb3LLM {
               functionName: toolCall.function.name,
               toolCallId: toolCall.id,
             });
-            
+
             if (typeof rawArgs === 'string') {
               try {
                 parsedArguments = JSON.parse(rawArgs);
@@ -928,26 +928,26 @@ class Web3LLM implements IWeb3LLM {
             arguments: parsedArguments,
             id: toolCall.id || `call_${currentStep}_${Date.now()}`,
           };
-          
+
           console.log('🚨🚨🚨 FINAL ReAct FUNCTION CALL CREATED:', {
             functionName: finalFunctionCall.name,
             arguments: finalFunctionCall.arguments,
             argumentsKeys: Object.keys(finalFunctionCall.arguments),
             hasUrl: 'url' in finalFunctionCall.arguments,
             urlValue: finalFunctionCall.arguments.url,
-            isUrlValid: finalFunctionCall.arguments.url && 
-                       typeof finalFunctionCall.arguments.url === 'string' && 
+            isUrlValid: finalFunctionCall.arguments.url &&
+                       typeof finalFunctionCall.arguments.url === 'string' &&
                        finalFunctionCall.arguments.url.startsWith('http'),
             fullFunctionCall: JSON.stringify(finalFunctionCall, null, 2),
           });
-          
+
           return finalFunctionCall;
         } catch (error) {
           logger.error('Failed to parse OpenAI tool call in ReAct', {
             error: error instanceof Error ? error.message : String(error),
             toolCall,
           });
-          
+
           return {
             name: toolCall.function?.name || 'unknown',
             arguments: {},
@@ -956,7 +956,7 @@ class Web3LLM implements IWeb3LLM {
         }
       });
     }
-    
+
     return {
       content: result.content as string,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined
@@ -1009,7 +1009,7 @@ If no more actions are needed, respond with "COMPLETE" and provide your final an
       const role = msg.type === 'human' ? 'User' : 'Assistant';
       return `${role}: ${msg.content}`;
     }).join('\n');
-    
+
     return `Step ${currentStep + 1}/${maxSteps}
 
 Recent Conversation:
@@ -1020,29 +1020,29 @@ What action should I take next? If I need to use tools, specify which ones and w
 
   private async executeToolCalls(functionCalls: FunctionCall[]): Promise<BaseMessage[]> {
     const results: BaseMessage[] = [];
-    
+
     for (const call of functionCalls) {
       try {
         const tool = toolRegistry.getTool(call.name);
         if (!tool) {
           throw new Error(`Tool ${call.name} not found`);
         }
-        
+
         logger.debug(`Executing tool: ${call.name}`, call.arguments);
-        
+
         const result = await tool.handler(call.arguments);
-        
+
         results.push(new ToolMessage({
           content: JSON.stringify(result),
           name: call.name,
           tool_call_id: call.id || `call_${Date.now()}`
         }));
-        
+
         logger.debug(`Tool ${call.name} executed successfully`);
-        
+
       } catch (error) {
         logger.error(`Tool ${call.name} execution failed:`, error);
-        
+
         results.push(new (await import('../llm/messages')).ToolMessage({
           content: JSON.stringify({ error: error.message }),
           name: call.name,
@@ -1050,7 +1050,7 @@ What action should I take next? If I need to use tools, specify which ones and w
         }));
       }
     }
-    
+
     return results;
   }
 
@@ -1063,28 +1063,28 @@ What action should I take next? If I need to use tools, specify which ones and w
     if (currentStep >= maxSteps - 1) {
       return false;
     }
-    
+
     // Check if any tool results indicate we should continue
     for (const result of toolResults) {
       try {
         const content = JSON.parse(result.content);
-        
+
         // Continue if we got incomplete data or need more information
         if (content.requiresMoreInfo || content.incomplete || content.needsFollowUp) {
           return true;
         }
-        
+
         // Stop if we got a definitive result
         if (content.complete || content.success || content.final) {
           return false;
         }
-        
+
       } catch (error) {
         // If we can't parse the result, continue to be safe
         return true;
       }
     }
-    
+
     // Default: continue if we have more steps available
     return currentStep < maxSteps - 1;
   }
@@ -1102,12 +1102,12 @@ Context:
 - Task: ${intent?.action || 'General assistance'}
 
 Summarize what you've accomplished and provide any additional insights or recommendations.`;
-    
+
     const finalMessages: BaseMessage[] = [
       ...messages.slice(-10),
       new (await import('../llm/messages')).HumanMessage(finalPrompt)
     ];
-    
+
     const result = await this.model.invoke(finalMessages);
     return result.content as string;
   }

@@ -39,20 +39,24 @@ class AgentService {
   private connectionStatus: Map<string, { lastSeen: number; status: 'connected' | 'disconnected' | 'reconnecting' }> = new Map();
   private recoveryAttempts: Map<string, number> = new Map();
   private maxRecoveryAttempts: number = 3;
+  private llmInstanceCache: Map<string, IWeb3LLM> = new Map();
+  private configVersion: number = 0;
+  private configCache: Map<string, { config: any; version: number }> = new Map();
 
   constructor() {
     console.log('🔥🔥🔥 AGENT SERVICE CONSTRUCTOR CALLED! 🔥🔥🔥', {
       timestamp: Date.now(),
       moduleStack: new Error().stack
     });
-    
+
     logger.info('AgentService', 'Initializing Agent Service');
     try {
       this.setupPortManagement();
       this.initializeAgents();
       this.setupConnectionMonitoring();
+      this.setupConfigChangeListeners();
       logger.info('AgentService', 'Agent Service initialized successfully');
-      
+
       console.log('🚨🚨🚨 AGENT SERVICE INITIALIZATION COMPLETE! 🚨🚨🚨');
     } catch (error) {
       logger.error('AgentService', 'Failed to initialize Agent Service', error);
@@ -110,18 +114,194 @@ class AgentService {
     }
   }
 
+  /**
+   * Get configuration version for cache invalidation
+   */
+  private getConfigVersion(): number {
+    return this.configVersion;
+  }
+
+  /**
+   * Increment configuration version to invalidate cache
+   */
+  private incrementConfigVersion(): void {
+    this.configVersion++;
+    logger.info('AgentService', `Configuration version incremented to ${this.configVersion}`);
+  }
+
+  /**
+   * Validate cached configuration against current version
+   */
+  private isConfigValid(cacheKey: string, cachedVersion: number): boolean {
+    return cachedVersion === this.getConfigVersion();
+  }
+
+  /**
+   * Cache configuration with version tracking
+   */
+  private cacheConfig(cacheKey: string, config: any): void {
+    this.configCache.set(cacheKey, {
+      config,
+      version: this.getConfigVersion()
+    });
+  }
+
+  /**
+   * Get cached configuration if version matches
+   */
+  private getCachedConfig(cacheKey: string): any | null {
+    const cached = this.configCache.get(cacheKey);
+    if (!cached || !this.isConfigValid(cacheKey, cached.version)) {
+      return null;
+    }
+    return cached.config;
+  }
+
+  /**
+   * Get Web3LLM instance with caching support
+   */
+  private async getWeb3LLM(agentName: AgentNameEnum): Promise<IWeb3LLM> {
+    const cacheKey = `${agentName}_${this.getConfigVersion()}`;
+    
+    // Check if we have a cached instance for this agent with current config
+    if (this.llmInstanceCache.has(cacheKey)) {
+      logger.debug('AgentService', `Using cached LLM instance for ${agentName} (version ${this.getConfigVersion()})`);
+      return this.llmInstanceCache.get(cacheKey)!;
+    }
+
+    try {
+      // Get agent-specific model configuration
+      const agentModel = await agentModelStore.getAgentModel(agentName);
+      if (!agentModel) {
+        throw new Error(`No model configuration found for ${agentName}`);
+      }
+
+      // Get provider configuration
+      const providerConfig = await llmProviderStore.getProvider(agentModel.provider);
+      if (!providerConfig) {
+        throw new Error(`Provider configuration not found for ${agentModel.provider}`);
+      }
+
+      // Create LLM instance
+      const { createLLMInstance } = await import('./agent/llm/factory');
+      const llm = await createLLMInstance(providerConfig, agentModel);
+      
+      // Wrap with Web3LLM if needed
+      let web3LLM: IWeb3LLM;
+      if ('generateResponse' in llm) {
+        web3LLM = llm as IWeb3LLM;
+      } else {
+        web3LLM = new Web3LLM(
+          llm,
+          providerConfig.type || 'unknown',
+          agentModel.modelName
+        );
+      }
+
+      // Cache the instance with version key
+      this.llmInstanceCache.set(cacheKey, web3LLM);
+      
+      // Clean up old cached instances
+      this.cleanupOldCacheEntries(agentName);
+      
+      logger.info('AgentService', `Created and cached LLM instance for ${agentName}`, {
+        provider: providerConfig.type,
+        model: agentModel.modelName,
+        version: this.getConfigVersion()
+      });
+
+      return web3LLM;
+    } catch (error) {
+      logger.error('AgentService', `Failed to create LLM instance for ${agentName}`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Clean up old cache entries for an agent
+   */
+  private cleanupOldCacheEntries(agentName: string): void {
+    const keysToDelete: string[] = [];
+    for (const key of this.llmInstanceCache.keys()) {
+      if (key.startsWith(`${agentName}_`) && !key.endsWith(`_${this.getConfigVersion()}`)) {
+        keysToDelete.push(key);
+      }
+    }
+    for (const key of keysToDelete) {
+      this.llmInstanceCache.delete(key);
+    }
+    if (keysToDelete.length > 0) {
+      logger.debug('AgentService', `Cleaned up ${keysToDelete.length} old cache entries for ${agentName}`);
+    }
+  }
+
+  /**
+   * Clear LLM instance cache
+   */
+  private clearLLMCache(): void {
+    this.llmInstanceCache.clear();
+    this.configCache.clear();
+    logger.info('AgentService', 'LLM instance cache and config cache cleared');
+  }
+
+  /**
+   * Reload agent model by clearing cache and recreating LLM instance
+   */
+  public async reloadAgentModel(agentName: AgentNameEnum): Promise<void> {
+    try {
+      logger.info('AgentService', `Reloading model for ${agentName}`);
+      
+      // Increment configuration version to invalidate cache
+      this.incrementConfigVersion();
+      
+      // Clear all cached instances for this agent
+      this.cleanupOldCacheEntries(agentName);
+      
+      // If this is the current Web3Agent's LLM, refresh it
+      if (this.web3Agent) {
+        await this.refreshLLM();
+      }
+      
+      logger.info('AgentService', `Successfully reloaded model for ${agentName} (version ${this.getConfigVersion()})`);
+    } catch (error) {
+      logger.error('AgentService', `Failed to reload model for ${agentName}`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Reload all agent models
+   */
+  public async reloadAllAgentModels(): Promise<void> {
+    try {
+      logger.info('AgentService', 'Reloading all agent models');
+      
+      // Increment configuration version to invalidate all cache
+      this.incrementConfigVersion();
+      
+      // Clear all cached instances
+      this.clearLLMCache();
+      
+      // Refresh LLM and Web3Agent
+      await this.refreshLLM();
+      
+      logger.info('AgentService', `Successfully reloaded all agent models (version ${this.getConfigVersion()})`);
+    } catch (error) {
+      logger.error('AgentService', 'Failed to reload all agent models', error);
+      throw error;
+    }
+  }
+
   private async initializeLLM() {
     try {
-      // Get current LLM provider configuration
+      // Get current LLM provider configuration (for fallback)
       const providers = await llmProviderStore.getAllProviders();
-
-      // Get the first available provider as default
-      const currentProvider =
+      const defaultProvider =
         providers['openai'] ||
         providers['anthropic'] ||
         Object.values(providers)[0];
 
-      if (!currentProvider) {
+      if (!defaultProvider) {
         logger.warn('AgentService', 'No LLM provider found, using fallback');
         // Use a simple fallback that works
         const { RealChatModel } = await import('./agent/llm/factory');
@@ -133,18 +313,33 @@ class AgentService {
         );
       }
 
-      // Initialize LLM based on provider type
+      // Initialize LLM based on user-selected provider/model when available
       const { createLLMInstance } = await import('./agent/llm/factory');
-      const modelConfig: ModelConfig = {
-        provider: 'default',
-        modelName: currentProvider.modelNames?.[0] || 'gpt-3.5-turbo',
+      const { agentModelStore } = await import('./agent/storage/agentModels');
+      const { AgentNameEnum } = await import('./agent/storage/types');
+
+      const plannerModel = await agentModelStore.getAgentModel(AgentNameEnum.Planner);
+
+      // Resolve provider config: prefer the one selected in Agent Models
+      let selectedProviderConfig: ProviderConfig | undefined;
+      if (plannerModel?.provider) {
+        selectedProviderConfig = await llmProviderStore.getProvider(plannerModel.provider);
+      }
+      if (!selectedProviderConfig) {
+        selectedProviderConfig = defaultProvider;
+      }
+
+      // Resolve model config: prefer the user-selected model
+      const selectedModelConfig: ModelConfig = plannerModel ?? {
+        provider: (selectedProviderConfig.type || 'openai').toLowerCase(),
+        modelName: selectedProviderConfig.modelNames?.[0] || 'gpt-4o-mini',
         parameters: { temperature: 0.7 },
       };
 
-      const web3LLM = await createLLMInstance(currentProvider, modelConfig);
+      const web3LLM = await createLLMInstance(selectedProviderConfig, selectedModelConfig);
       logger.info(
         'AgentService',
-        `Initialized real LLM for provider: ${currentProvider.type}`
+        `Initialized real LLM. Provider: ${selectedProviderConfig.type}, Model: ${selectedModelConfig.modelName}`
       );
       return web3LLM;
     } catch (error) {
@@ -167,6 +362,47 @@ class AgentService {
     }, 30000);
   }
 
+  // Reinitialize LLM and Web3Agent to apply latest Provider/Model configuration
+  private async refreshLLM(): Promise<void> {
+    try {
+      // Clear LLM cache before refresh
+      this.clearLLMCache();
+      
+      const llm = await this.initializeLLM();
+
+      // Wrap to Web3LLM if needed
+      let web3LLM: IWeb3LLM;
+      if ('generateResponse' in llm) {
+        web3LLM = llm as IWeb3LLM;
+      } else {
+        const providers = await llmProviderStore.getAllProviders();
+        const currentProvider =
+          providers['openai'] || providers['anthropic'] || Object.values(providers)[0];
+        web3LLM = new Web3LLM(
+          llm,
+          currentProvider?.type || 'unknown',
+          currentProvider?.modelNames?.[0] || 'default'
+        );
+      }
+
+      // Recreate Web3Agent with the new LLM while keeping minimal context
+      if (!this.agentContext) {
+        this.agentContext = {
+          tabId: 0,
+          sessionId: 'refreshed_session',
+          eventHandler: (event) => {
+            logger.info('AgentContext event', event);
+          },
+        } as AgentContext;
+      }
+
+      this.web3Agent = new Web3Agent(this.agentContext, web3LLM);
+      logger.info('AgentService', 'LLM refreshed and Web3Agent reinitialized');
+    } catch (error) {
+      logger.error('AgentService', 'Failed to refresh LLM', error);
+    }
+  }
+
   private setupConnectionMonitoring() {
     // Monitor connection status and attempt recovery
     this.connectionMonitorInterval = setInterval(() => {
@@ -174,6 +410,23 @@ class AgentService {
     }, 10000); // Check every 10 seconds
 
     logger.info('AgentService', 'Connection monitoring initialized');
+  }
+
+  private setupConfigChangeListeners() {
+    try {
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName !== 'local') return;
+        const changedKeys = Object.keys(changes || {});
+        if (changedKeys.some((k) => k === 'agent-models' || k === 'llm-providers')) {
+          logger.info('AgentService', 'Detected model/provider config change, refreshing LLM');
+          this.incrementConfigVersion();
+          this.refreshLLM();
+        }
+      });
+      logger.info('AgentService', 'Config change listener initialized');
+    } catch (error) {
+      logger.warn('AgentService', 'Failed to setup config change listeners', error);
+    }
   }
 
   private monitorConnections() {
@@ -225,7 +478,7 @@ class AgentService {
 
   private async attemptConnectionRecovery(portName: string) {
     const currentAttempts = this.recoveryAttempts.get(portName) || 0;
-    
+
     if (currentAttempts >= this.maxRecoveryAttempts) {
       logger.error('AgentService', 'Max recovery attempts reached', {
         portName,
@@ -335,8 +588,8 @@ class AgentService {
 
     // Send initial connection confirmation
     try {
-      port.postMessage({ 
-        type: 'connected', 
+      port.postMessage({
+        type: 'connected',
         status: 'ready',
         timestamp: Date.now(),
         connectionId: portName,
@@ -357,11 +610,11 @@ class AgentService {
     if (agentPort) {
       agentPort.connected = false;
       this.ports.delete(portName);
-      
+
       // Clean up connection status and recovery attempts
       this.connectionStatus.delete(portName);
       this.recoveryAttempts.delete(portName);
-      
+
       logger.info('AgentService', 'Port removed and cleanup completed', {
         portName,
         remainingConnections: this.ports.size,
@@ -403,7 +656,7 @@ class AgentService {
     ) {
       const errorMsg = 'No agents available. Please try again later.';
       logger.error('AgentService', errorMsg);
-      
+
       // Send immediate error response
       await this.sendWithFallback(port, {
         type: 'error',
@@ -521,6 +774,8 @@ class AgentService {
         case 'set_agent_model':
           await agentModelStore.setAgentModel(message.agent, message.config);
           port.postMessage({ type: 'agent_model_set' });
+          // Apply updated model immediately
+          await this.reloadAgentModel(message.agent);
           break;
 
         default:
@@ -567,7 +822,7 @@ class AgentService {
     while (attempt < maxRetries) {
       try {
         attempt++;
-        
+
         // Check if port is still connected
         if (!port.sender) {
           throw new Error('Port is no longer connected');
@@ -575,13 +830,13 @@ class AgentService {
 
         // Send the message
         port.postMessage(message);
-        
+
         logger.debug('AgentService', 'Message sent successfully', {
           attempt,
           type: message.type,
           port: port.name,
         });
-        
+
         return true;
       } catch (error) {
         lastError = error as Error;
@@ -635,7 +890,7 @@ class AgentService {
   ): Promise<void> {
     // Strategy 1: Send to original port
     const originalSuccess = await this.sendWithFallback(originalPort, message);
-    
+
     if (originalSuccess) {
       logger.info('AgentService', 'Message sent successfully to original port', { context });
       return;
@@ -766,6 +1021,9 @@ class AgentService {
 
     logger.info('AgentService', `Routing to Web3 Agent: ${task}`);
 
+    // Ensure Web3Agent uses current model configuration for new conversations
+    await this.ensureCurrentModelConfiguration();
+
     // Initialize or switch Web3 Agent session when needed
     const desiredSessionId = sessionId || undefined;
     const currentSessionId = this.web3Agent['state']?.sessionId;
@@ -802,6 +1060,7 @@ class AgentService {
               details: thinking.content,
               thinkingType: thinking.type,
               functionCalling: true,
+              fromModel: true,
             },
           });
         },
@@ -868,6 +1127,9 @@ class AgentService {
 
     logger.info('AgentService', `Starting streaming task: ${task}`);
 
+    // Ensure Web3Agent uses current model configuration for new conversations
+    await this.ensureCurrentModelConfiguration();
+
     // Initialize or switch Web3 Agent session when needed
     const desiredSessionId = historySessionId || undefined;
     const currentSessionId = this.web3Agent['state']?.sessionId;
@@ -919,7 +1181,7 @@ class AgentService {
         true, // enable streaming
         (chunk) => {
           if (isCompleted) return; // Ignore chunks after completion
-          
+
           chunkCount++;
           logger.debug('AgentService', `Streaming chunk ${chunkCount}`, {
             taskId: message.taskId,
@@ -1194,7 +1456,10 @@ class AgentService {
   }
 
   public async setAgentModel(agent: AgentNameEnum, config: ModelConfig) {
-    return agentModelStore.setAgentModel(agent, config);
+    const result = await agentModelStore.setAgentModel(agent, config);
+    // Reload the agent model after setting
+    await this.reloadAgentModel(agent);
+    return result;
   }
 
   public async setReActConfig(config: any) {
@@ -1348,6 +1613,47 @@ class AgentService {
   }
 
   /**
+   * Ensure Web3Agent uses current model configuration
+   */
+  private async ensureCurrentModelConfiguration(): Promise<void> {
+    try {
+      // Get the current Planner model configuration
+      const currentModelConfig = await agentModelStore.getAgentModel(AgentNameEnum.Planner);
+      if (!currentModelConfig) {
+        logger.warn('AgentService', 'No current model configuration found');
+        return;
+      }
+
+      // Get the provider configuration
+      const providerConfig = await llmProviderStore.getProvider(currentModelConfig.provider);
+      if (!providerConfig) {
+        logger.warn('AgentService', `No provider configuration found for ${currentModelConfig.provider}`);
+        return;
+      }
+
+      // Check if Web3Agent needs to be updated with current configuration
+      const currentLLM = this.web3Agent?.getLLM?.();
+      if (currentLLM) {
+        // Get current LLM instance with latest configuration
+        const latestLLM = await this.getWeb3LLM(AgentNameEnum.Planner);
+        
+        // Update Web3Agent with the latest LLM if needed
+        if (currentLLM !== latestLLM) {
+          this.web3Agent?.setLLM(latestLLM);
+          logger.info('AgentService', 'Web3Agent updated with current model configuration', {
+            provider: providerConfig.type,
+            model: currentModelConfig.modelName,
+            version: this.getConfigVersion()
+          });
+        }
+      }
+    } catch (error) {
+      logger.error('AgentService', 'Failed to ensure current model configuration', error);
+      // Don't throw - this is a best-effort operation
+    }
+  }
+
+  /**
    * Find the best provider from available providers
    */
   private findBestProvider(providerEntries: [string, ProviderConfig][]) {
@@ -1476,7 +1782,7 @@ class AgentService {
     });
 
     this.ports.clear();
-    
+
     // Clean up connection status and recovery attempts
     this.connectionStatus.clear();
     this.recoveryAttempts.clear();

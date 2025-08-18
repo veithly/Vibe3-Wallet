@@ -69,6 +69,26 @@ export const ExtractContentSchema = {
   },
 };
 
+export const ElementSelectionSchema = {
+  type: 'object',
+  properties: {
+    mode: { type: 'string', enum: ['highlight', 'select', 'analyze'] },
+    filter: { type: 'string' },
+    visibleOnly: { type: 'boolean' },
+  },
+  required: ['mode'],
+};
+
+export const ElementAnalysisSchema = {
+  type: 'object',
+  properties: {
+    selector: { type: 'string' },
+    includeAccessibility: { type: 'boolean' },
+    includeEvents: { type: 'boolean' },
+  },
+  required: ['selector'],
+};
+
 // Browser automation action types
 export type BrowserActionType =
   | 'navigate'
@@ -79,7 +99,11 @@ export type BrowserActionType =
   | 'scroll'
   | 'screenshot'
   | 'switch_tab'
-  | 'close_tab';
+  | 'close_tab'
+  | 'element_selection'
+  | 'element_analysis'
+  | 'find_elements'
+  | 'highlight_element';
 
 // Browser automation result
 export interface BrowserActionResult {
@@ -507,6 +531,14 @@ export class BrowserAutomationController {
           return await this.switchTab(task.params);
         case 'close_tab':
           return await this.closeTab(task.params);
+        case 'element_selection':
+          return await this.activateElementSelection(task.params);
+        case 'element_analysis':
+          return await this.analyzeElement(task.params);
+        case 'find_elements':
+          return await this.findElements(task.params);
+        case 'highlight_element':
+          return await this.highlightElement(task.params);
         default:
           throw new Error(`Unsupported task type: ${task.type}`);
       }
@@ -1070,6 +1102,142 @@ export class BrowserAutomationController {
     });
   }
 
+  // Element selection methods
+  private async activateElementSelection(params: any): Promise<BrowserActionResult> {
+    try {
+      const [activeTab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      if (!activeTab || !activeTab.id) {
+        throw new Error('No active tab found');
+      }
+
+      const response = await chrome.tabs.sendMessage(activeTab.id, {
+        type: 'ELEMENT_SELECTOR_ACTIVATE',
+        options: {
+          mode: params.mode,
+          filter: params.filter,
+          visibleOnly: params.visibleOnly,
+        },
+      });
+
+      return {
+        success: true,
+        data: response,
+        timing: 0,
+      };
+    } catch (error) {
+      logger.error('Element selection activation failed', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Element selection failed',
+        timing: 0,
+      };
+    }
+  }
+
+  private async analyzeElement(params: any): Promise<BrowserActionResult> {
+    try {
+      const [activeTab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      if (!activeTab || !activeTab.id) {
+        throw new Error('No active tab found');
+      }
+
+      const response = await chrome.tabs.sendMessage(activeTab.id, {
+        type: 'ELEMENT_ANALYZE',
+        selector: params.selector,
+        includeAccessibility: params.includeAccessibility,
+        includeEvents: params.includeEvents,
+      });
+
+      return {
+        success: true,
+        data: response,
+        timing: 0,
+      };
+    } catch (error) {
+      logger.error('Element analysis failed', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Element analysis failed',
+        timing: 0,
+      };
+    }
+  }
+
+  private async findElements(params: any): Promise<BrowserActionResult> {
+    try {
+      const [activeTab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      if (!activeTab || !activeTab.id) {
+        throw new Error('No active tab found');
+      }
+
+      const response = await chrome.tabs.sendMessage(activeTab.id, {
+        type: 'ELEMENT_FIND_BY_TEXT',
+        text: params.text,
+        elementType: params.elementType,
+        caseSensitive: params.caseSensitive,
+        visibleOnly: params.visibleOnly,
+      });
+
+      return {
+        success: true,
+        data: response,
+        timing: 0,
+      };
+    } catch (error) {
+      logger.error('Find elements failed', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Find elements failed',
+        timing: 0,
+      };
+    }
+  }
+
+  private async highlightElement(params: any): Promise<BrowserActionResult> {
+    try {
+      const [activeTab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      if (!activeTab || !activeTab.id) {
+        throw new Error('No active tab found');
+      }
+
+      const response = await chrome.tabs.sendMessage(activeTab.id, {
+        type: 'ELEMENT_HIGHLIGHT',
+        selector: params.selector,
+        color: params.color,
+        duration: params.duration,
+      });
+
+      return {
+        success: true,
+        data: response,
+        timing: 0,
+      };
+    } catch (error) {
+      logger.error('Element highlighting failed', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Element highlighting failed',
+        timing: 0,
+      };
+    }
+  }
+
   // Utility methods
   private extractFormFields(
     instruction: string
@@ -1193,6 +1361,10 @@ export class BrowserAutomationController {
       screenshot: 'screenshot',
       switch_tab: 'switch_tab',
       close_tab: 'close_tab',
+      element_selection: 'element_selection',
+      element_analysis: 'element_analysis',
+      find_elements: 'find_elements',
+      highlight_element: 'highlight_element',
     };
 
     return mapping[actionType] || 'extract_content'; // Default to content extraction

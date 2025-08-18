@@ -1,25 +1,5 @@
 // Enhanced agent status component showing real-time capabilities and system status
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-  Card,
-  Row,
-  Col,
-  Tag,
-  Progress,
-  Button,
-  Space,
-  Tooltip,
-  Alert,
-} from 'antd';
-import {
-  ApiOutlined,
-  ThunderboltOutlined,
-  CheckCircleOutlined,
-  ExclamationCircleOutlined,
-  SyncOutlined,
-  SettingOutlined,
-  InfoCircleOutlined,
-} from '@ant-design/icons';
 import { createLogger } from './utils/logger';
 
 const logger = createLogger('AgentStatus');
@@ -167,20 +147,24 @@ export const AgentStatus: React.FC<AgentStatusProps> = ({
     switch (status) {
       case 'online':
       case 'connected':
-        return 'success';
+        return 'agent-status-success';
       case 'degraded':
       case 'slow':
-        return 'warning';
+        return 'agent-status-warning';
       case 'offline':
       case 'disconnected':
-        return 'error';
+        return 'agent-status-error';
       default:
-        return 'default';
+        return 'agent-status-info';
     }
   };
 
   const getCapabilityIcon = (enabled: boolean) => {
-    return enabled ? <CheckCircleOutlined /> : <ExclamationCircleOutlined />;
+    return enabled ? (
+      <span className="text-green-500">✓</span>
+    ) : (
+      <span className="text-yellow-500">⚠</span>
+    );
   };
 
   const handleManualRefresh = () => {
@@ -189,246 +173,257 @@ export const AgentStatus: React.FC<AgentStatusProps> = ({
   };
 
   return (
-    <div className={`agent-status ${className}`}>
+    <div className={`agent-card agent-p-4 ${className}`}>
       {error && (
-        <Alert
-          message="Status Update Failed"
-          description={error}
-          type="warning"
-          showIcon
-          style={{ marginBottom: 16 }}
-          action={
-            <Button size="small" onClick={handleManualRefresh}>
+        <div className="agent-mb-4 agent-p-3 agent-border agent-status-warning">
+          <div className="agent-flex agent-gap-2">
+            <span className="text-yellow-600 dark:text-yellow-400">⚠</span>
+            <div className="agent-flex-1">
+              <div className="agent-font-medium agent-text-title">Status Update Failed</div>
+              <div className="agent-text-sm agent-text-body">{error}</div>
+            </div>
+            <button 
+              onClick={handleManualRefresh}
+              className="agent-button agent-button-secondary"
+            >
               Retry
-            </Button>
-          }
-        />
+            </button>
+          </div>
+        </div>
       )}
 
-      <Card
-        title={
-          <Space>
-            <ThunderboltOutlined />
-            <span>Agent Status</span>
-            {isLoading && <SyncOutlined spin />}
-          </Space>
-        }
-        extra={
-          <Space>
-            <Tooltip title="Refresh Status">
-              <Button
-                icon={<SyncOutlined />}
-                size="small"
-                onClick={handleManualRefresh}
-                loading={isLoading}
-              />
-            </Tooltip>
-            <Tooltip title="Settings">
-              <Button
-                icon={<SettingOutlined />}
-                size="small"
-                onClick={onSettings}
-              />
-            </Tooltip>
-          </Space>
-        }
-        size="small"
-      >
-        {/* System Status Overview */}
-        <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-          <Col span={8}>
-            <div className="status-card">
-              <div className="status-header">
-                <ApiOutlined />
-                <span>LLM Status</span>
-              </div>
-              <Tag color={getStatusColor(systemStatus.llmStatus)}>
-                {systemStatus.llmStatus.toUpperCase()}
-              </Tag>
-            </div>
-          </Col>
-          <Col span={8}>
-            <div className="status-card">
-              <div className="status-header">
-                <ThunderboltOutlined />
-                <span>Network</span>
-              </div>
-              <Tag color={getStatusColor(systemStatus.networkStatus)}>
-                {systemStatus.networkStatus.toUpperCase()}
-              </Tag>
-            </div>
-          </Col>
-          <Col span={8}>
-            <div className="status-card">
-              <div className="status-header">
-                <InfoCircleOutlined />
-                <span>Uptime</span>
-              </div>
-              <span className="status-value">
-                {formatUptime(metrics.uptime)}
-              </span>
-            </div>
-          </Col>
-        </Row>
-
-        {/* Capabilities */}
-        <div style={{ marginBottom: 24 }}>
-          <h4>Capabilities</h4>
-          <Row gutter={[16, 16]}>
-            <Col span={12}>
-              <div className="capability-item">
-                <Space>
-                  {getCapabilityIcon(capabilities.functionCalling)}
-                  <span>Function Calling</span>
-                  <Tag
-                    color={capabilities.functionCalling ? 'success' : 'default'}
-                  >
-                    {capabilities.functionCalling ? 'Enabled' : 'Disabled'}
-                  </Tag>
-                </Space>
-              </div>
-            </Col>
-            <Col span={12}>
-              <div className="capability-item">
-                <Space>
-                  {getCapabilityIcon(capabilities.streaming)}
-                  <span>Streaming Responses</span>
-                  <Tag color={capabilities.streaming ? 'success' : 'default'}>
-                    {capabilities.streaming ? 'Enabled' : 'Disabled'}
-                  </Tag>
-                </Space>
-              </div>
-            </Col>
-            <Col span={12}>
-              <div className="capability-item">
-                <Space>
-                  {getCapabilityIcon(capabilities.parallelExecution)}
-                  <span>Parallel Execution</span>
-                  <Tag
-                    color={
-                      capabilities.parallelExecution ? 'success' : 'default'
-                    }
-                  >
-                    {capabilities.parallelExecution ? 'Enabled' : 'Disabled'}
-                  </Tag>
-                </Space>
-              </div>
-            </Col>
-            <Col span={12}>
-              <div className="capability-item">
-                <Space>
-                  {getCapabilityIcon(capabilities.errorRecovery)}
-                  <span>Error Recovery</span>
-                  <Tag
-                    color={capabilities.errorRecovery ? 'success' : 'default'}
-                  >
-                    {capabilities.errorRecovery ? 'Enabled' : 'Disabled'}
-                  </Tag>
-                </Space>
-              </div>
-            </Col>
-          </Row>
-          <div style={{ marginTop: 16 }}>
-            <div className="capability-item">
-              <Space>
-                <ThunderboltOutlined />
-                <span>Available Tools</span>
-                <Tag color="blue">{capabilities.toolCount}</Tag>
-              </Space>
-            </div>
+      <div className="agent-card">
+        {/* Header */}
+        <div className="agent-header">
+          <div className="agent-flex agent-gap-2">
+            <span className="text-blue-500">⚡</span>
+            <span className="agent-font-semibold agent-text-title">Agent Status</span>
+            {isLoading && (
+              <span className="agent-spin">⟳</span>
+            )}
+          </div>
+          <div className="agent-flex agent-gap-2">
+            <button
+              onClick={handleManualRefresh}
+              disabled={isLoading}
+              className="agent-icon-button"
+              title="Refresh Status"
+            >
+              {isLoading ? (
+                <span className="agent-spin">⟳</span>
+              ) : (
+                <span>⟳</span>
+              )}
+            </button>
+            <button
+              onClick={onSettings}
+              className="agent-icon-button"
+              title="Settings"
+            >
+              ⚙️
+            </button>
           </div>
         </div>
 
-        {/* Performance Metrics */}
-        <div>
-          <h4>Performance Metrics</h4>
-          <Row gutter={[16, 16]}>
-            <Col span={12}>
-              <div className="metric-card">
-                <div className="metric-label">Requests Processed</div>
-                <div className="metric-value">
+        <div className="agent-content">
+          {/* System Status Overview */}
+          <div className="grid grid-cols-3 gap-4 agent-mb-6">
+            <div className="agent-p-3 agent-bg-secondary agent-border agent-flex-center">
+              <div className="agent-flex agent-gap-1 agent-mb-2 agent-text-sm agent-font-medium agent-text-muted">
+                <span>🌐</span>
+                <span>LLM Status</span>
+              </div>
+              <span className={`agent-status ${getStatusColor(systemStatus.llmStatus)}`}>
+                {systemStatus.llmStatus.toUpperCase()}
+              </span>
+            </div>
+            <div className="agent-p-3 agent-bg-secondary agent-border agent-flex-center">
+              <div className="agent-flex agent-gap-1 agent-mb-2 agent-text-sm agent-font-medium agent-text-muted">
+                <span>⚡</span>
+                <span>Network</span>
+              </div>
+              <span className={`agent-status ${getStatusColor(systemStatus.networkStatus)}`}>
+                {systemStatus.networkStatus.toUpperCase()}
+              </span>
+            </div>
+            <div className="agent-p-3 agent-bg-secondary agent-border agent-flex-center">
+              <div className="agent-flex agent-gap-1 agent-mb-2 agent-text-sm agent-font-medium agent-text-muted">
+                <span>ℹ️</span>
+                <span>Uptime</span>
+              </div>
+              <div className="agent-text-base agent-font-semibold agent-text-title">
+                {formatUptime(metrics.uptime)}
+              </div>
+            </div>
+          </div>
+
+          {/* Capabilities */}
+          <div className="mb-6">
+            <h4 className="text-base font-medium text-gray-900 dark:text-white mb-4">Capabilities</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-2 bg-gray-50 dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {getCapabilityIcon(capabilities.functionCalling)}
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Function Calling</span>
+                </div>
+                <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${
+                  capabilities.functionCalling 
+                    ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400' 
+                    : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                }`}>
+                  {capabilities.functionCalling ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+              <div className="p-2 bg-gray-50 dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {getCapabilityIcon(capabilities.streaming)}
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Streaming Responses</span>
+                </div>
+                <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${
+                  capabilities.streaming 
+                    ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400' 
+                    : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                }`}>
+                  {capabilities.streaming ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+              <div className="p-2 bg-gray-50 dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {getCapabilityIcon(capabilities.parallelExecution)}
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Parallel Execution</span>
+                </div>
+                <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${
+                  capabilities.parallelExecution 
+                    ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400' 
+                    : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                }`}>
+                  {capabilities.parallelExecution ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+              <div className="p-2 bg-gray-50 dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {getCapabilityIcon(capabilities.errorRecovery)}
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Error Recovery</span>
+                </div>
+                <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${
+                  capabilities.errorRecovery 
+                    ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400' 
+                    : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                }`}>
+                  {capabilities.errorRecovery ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+            </div>
+            <div className="mt-4">
+              <div className="p-2 bg-gray-50 dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-blue-500">⚡</span>
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Available Tools</span>
+                </div>
+                <span className="inline-block px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400 rounded-full">
+                  {capabilities.toolCount}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Performance Metrics */}
+          <div className="mb-6">
+            <h4 className="text-base font-medium text-gray-900 dark:text-white mb-4">Performance Metrics</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 text-center">
+                <div className="text-xs text-gray-600 dark:text-gray-400 mb-2">Requests Processed</div>
+                <div className="text-lg font-semibold text-gray-900 dark:text-white">
                   {metrics.requestsProcessed.toLocaleString()}
                 </div>
               </div>
-            </Col>
-            <Col span={12}>
-              <div className="metric-card">
-                <div className="metric-label">Avg Response Time</div>
-                <div className="metric-value">
+              <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 text-center">
+                <div className="text-xs text-gray-600 dark:text-gray-400 mb-2">Avg Response Time</div>
+                <div className="text-lg font-semibold text-gray-900 dark:text-white">
                   {formatResponseTime(metrics.averageResponseTime)}
                 </div>
               </div>
-            </Col>
-            <Col span={12}>
-              <div className="metric-card">
-                <div className="metric-label">Error Rate</div>
-                <div className="metric-value">
-                  <Progress
-                    type="circle"
-                    percent={metrics.errorRate * 100}
-                    width={40}
-                    strokeColor={
-                      metrics.errorRate > 0.05 ? '#ff4d4f' : '#52c41a'
-                    }
-                    format={() => `${(metrics.errorRate * 100).toFixed(1)}%`}
-                  />
+              <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 text-center">
+                <div className="text-xs text-gray-600 dark:text-gray-400 mb-2">Error Rate</div>
+                <div className="flex items-center justify-center">
+                  <div className="relative w-10 h-10">
+                    <svg className="w-10 h-10 transform -rotate-90" viewBox="0 0 36 36">
+                      <path
+                        d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                        fill="none"
+                        stroke="#e5e7eb"
+                        strokeWidth="3"
+                      />
+                      <path
+                        d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                        fill="none"
+                        stroke={metrics.errorRate > 0.05 ? '#ef4444' : '#10b981'}
+                        strokeWidth="3"
+                        strokeDasharray={`${metrics.errorRate * 100}, 100`}
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-xs font-medium text-gray-900 dark:text-white">
+                        {(metrics.errorRate * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </Col>
-            <Col span={12}>
-              <div className="metric-card">
-                <div className="metric-label">Active Connections</div>
-                <div className="metric-value">{metrics.activeConnections}</div>
+              <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 text-center">
+                <div className="text-xs text-gray-600 dark:text-gray-400 mb-2">Active Connections</div>
+                <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                  {metrics.activeConnections}
+                </div>
               </div>
-            </Col>
-          </Row>
-        </div>
+            </div>
+          </div>
 
-        {/* System Resources */}
-        <div style={{ marginTop: 24 }}>
-          <h4>System Resources</h4>
-          <Row gutter={[16, 16]}>
-            <Col span={12}>
-              <div className="resource-card">
-                <div className="resource-label">Memory Usage</div>
-                <Progress
-                  percent={systemStatus.memoryUsage}
-                  size="small"
-                  status={
-                    systemStatus.memoryUsage > 80 ? 'exception' : 'normal'
-                  }
-                />
-                <div className="resource-value">
+          {/* System Resources */}
+          <div>
+            <h4 className="text-base font-medium text-gray-900 dark:text-white mb-4">System Resources</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+                <div className="text-xs text-gray-600 dark:text-gray-400 mb-2">Memory Usage</div>
+                <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2 mb-2">
+                  <div 
+                    className={`h-2 rounded-full ${
+                      systemStatus.memoryUsage > 80 
+                        ? 'bg-red-500' 
+                        : 'bg-green-500'
+                    }`}
+                    style={{ width: `${systemStatus.memoryUsage}%` }}
+                  />
+                </div>
+                <div className="text-sm font-medium text-gray-900 dark:text-white text-center">
                   {systemStatus.memoryUsage}%
                 </div>
               </div>
-            </Col>
-            <Col span={12}>
-              <div className="resource-card">
-                <div className="resource-label">CPU Usage</div>
-                <Progress
-                  percent={systemStatus.cpuUsage}
-                  size="small"
-                  status={systemStatus.cpuUsage > 80 ? 'exception' : 'normal'}
-                />
-                <div className="resource-value">{systemStatus.cpuUsage}%</div>
+              <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+                <div className="text-xs text-gray-600 dark:text-gray-400 mb-2">CPU Usage</div>
+                <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2 mb-2">
+                  <div 
+                    className={`h-2 rounded-full ${
+                      systemStatus.cpuUsage > 80 
+                        ? 'bg-red-500' 
+                        : 'bg-green-500'
+                    }`}
+                    style={{ width: `${systemStatus.cpuUsage}%` }}
+                  />
+                </div>
+                <div className="text-sm font-medium text-gray-900 dark:text-white text-center">
+                  {systemStatus.cpuUsage}%
+                </div>
               </div>
-            </Col>
-          </Row>
-        </div>
+            </div>
+          </div>
 
-        {/* Last Update Info */}
-        <div
-          style={{
-            marginTop: 16,
-            textAlign: 'center',
-            color: '#666',
-            fontSize: 12,
-          }}
-        >
-          Last updated: {new Date(lastUpdate).toLocaleTimeString()}
+          {/* Last Update Info */}
+          <div className="mt-4 text-center text-xs text-gray-500 dark:text-gray-400">
+            Last updated: {new Date(lastUpdate).toLocaleTimeString()}
+          </div>
         </div>
-      </Card>
+      </div>
     </div>
   );
 };
@@ -499,84 +494,3 @@ export function useAgentStatus(autoRefresh: boolean = true) {
   };
 }
 
-// CSS-in-JS styles for the agent status component
-export const agentStatusStyles = `
-  .agent-status {
-    margin: 16px 0;
-  }
-
-  .status-card {
-    padding: 12px;
-    background: #fafafa;
-    border-radius: 6px;
-    border: 1px solid #f0f0f0;
-    text-align: center;
-  }
-
-  .status-header {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    margin-bottom: 8px;
-    font-weight: 500;
-    color: #666;
-  }
-
-  .status-value {
-    font-size: 16px;
-    font-weight: 600;
-    color: #262626;
-  }
-
-  .capability-item {
-    padding: 8px 12px;
-    background: #f8f9fa;
-    border-radius: 4px;
-    border: 1px solid #e9ecef;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .metric-card {
-    padding: 16px;
-    background: #f8f9fa;
-    border-radius: 6px;
-    border: 1px solid #e9ecef;
-    text-align: center;
-  }
-
-  .metric-label {
-    font-size: 12px;
-    color: #666;
-    margin-bottom: 8px;
-  }
-
-  .metric-value {
-    font-size: 18px;
-    font-weight: 600;
-    color: #262626;
-  }
-
-  .resource-card {
-    padding: 12px;
-    background: #f8f9fa;
-    border-radius: 6px;
-    border: 1px solid #e9ecef;
-  }
-
-  .resource-label {
-    font-size: 12px;
-    color: #666;
-    margin-bottom: 4px;
-  }
-
-  .resource-value {
-    font-size: 14px;
-    font-weight: 500;
-    color: #262626;
-    text-align: center;
-    margin-top: 4px;
-  }
-`;

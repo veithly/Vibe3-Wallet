@@ -969,6 +969,195 @@ export class ToolRegistry {
       requiresConfirmation: false,
     });
 
+    // Element selection tools
+    this.registerTool({
+      name: 'activateElementSelector',
+      description: 'Activate element selection mode to highlight interactive elements on the page',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Selection mode (highlight, select, analyze)',
+          enum: ['highlight', 'select', 'analyze'],
+        },
+        {
+          type: 'string',
+          description: 'Optional: CSS filter to limit which elements are highlighted',
+        },
+        {
+          type: 'boolean',
+          description: 'Optional: Only highlight visible elements',
+        },
+      ],
+      required: ['mode'],
+      handler: this.createElementSelectionHandler('activateElementSelector'),
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'deactivateElementSelector',
+      description: 'Deactivate element selection mode and remove highlights',
+      parameters: [],
+      required: [],
+      handler: this.createElementSelectionHandler('deactivateElementSelector'),
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'getHighlightedElements',
+      description: 'Get information about currently highlighted elements on the page',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Optional: Filter elements by CSS selector',
+        },
+        {
+          type: 'boolean',
+          description: 'Optional: Include element attributes in response',
+        },
+      ],
+      required: [],
+      handler: this.createElementSelectionHandler('getHighlightedElements'),
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'analyzeElement',
+      description: 'Analyze a specific web element to understand its properties and interactions',
+      parameters: [
+        {
+          type: 'string',
+          description: 'CSS selector for the element to analyze',
+        },
+        {
+          type: 'boolean',
+          description: 'Optional: Include detailed accessibility information',
+        },
+        {
+          type: 'boolean',
+          description: 'Optional: Include event listeners and interactions',
+        },
+      ],
+      required: ['selector'],
+      handler: this.createElementSelectionHandler('analyzeElement'),
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'findElementsByText',
+      description: 'Find elements containing specific text content',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Text content to search for',
+        },
+        {
+          type: 'string',
+          description: 'Optional: Limit search to specific element type',
+        },
+        {
+          type: 'boolean',
+          description: 'Optional: Use case-sensitive search',
+        },
+        {
+          type: 'boolean',
+          description: 'Optional: Return only visible elements',
+        },
+      ],
+      required: ['text'],
+      handler: this.createElementSelectionHandler('findElementsByText'),
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'getInteractiveElements',
+      description: 'Get all interactive elements on the page (buttons, links, inputs, etc.)',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Optional: Filter by element type (button, link, input, etc.)',
+        },
+        {
+          type: 'string',
+          description: 'Optional: Filter by containing text',
+        },
+        {
+          type: 'boolean',
+          description: 'Optional: Include element attributes',
+        },
+      ],
+      required: [],
+      handler: this.createElementSelectionHandler('getInteractiveElements'),
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'highlightElement',
+      description: 'Highlight a specific element with visual overlay',
+      parameters: [
+        {
+          type: 'string',
+          description: 'CSS selector for the element to highlight',
+        },
+        {
+          type: 'string',
+          description: 'Highlight color (red, blue, green, yellow, purple)',
+          enum: ['red', 'blue', 'green', 'yellow', 'purple'],
+        },
+        {
+          type: 'number',
+          description: 'Optional: Duration in milliseconds (0 for permanent)',
+        },
+      ],
+      required: ['selector'],
+      handler: this.createElementSelectionHandler('highlightElement'),
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'captureElementScreenshot',
+      description: 'Take a screenshot of a specific element',
+      parameters: [
+        {
+          type: 'string',
+          description: 'CSS selector for the element',
+        },
+        {
+          type: 'boolean',
+          description: 'Optional: Include element highlights in screenshot',
+        },
+      ],
+      required: ['selector'],
+      handler: this.createElementSelectionHandler('captureElementScreenshot'),
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'highlightDeFiElements',
+      description: 'Highlight DeFi-specific elements (wallet connections, swaps, approvals, etc.)',
+      parameters: [],
+      required: [],
+      handler: this.createElementSelectionHandler('highlightDeFiElements'),
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
     // Multi-agent coordination tools
     this.registerTool({
       name: 'createExecutionPlan',
@@ -1393,6 +1582,67 @@ export class ToolRegistry {
     };
   }
 
+  private createElementSelectionHandler(actionName: string) {
+    return async (params: any) => {
+      try {
+        logger.info(`Executing element selection action: ${actionName}`, params);
+
+        // Get active tab
+        const [activeTab] = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+
+        if (!activeTab || !activeTab.id) {
+          throw new Error('No active tab found');
+        }
+
+        // Map action names to message types
+        const messageTypes: Record<string, string> = {
+          activateElementSelector: 'ELEMENT_SELECTOR_ACTIVATE',
+          deactivateElementSelector: 'ELEMENT_SELECTOR_DEACTIVATE',
+          getHighlightedElements: 'ELEMENT_SELECTOR_GET_HIGHLIGHTS',
+          analyzeElement: 'ELEMENT_ANALYZE',
+          findElementsByText: 'ELEMENT_FIND_BY_TEXT',
+          getInteractiveElements: 'ELEMENT_GET_INTERACTIVE',
+          highlightElement: 'ELEMENT_HIGHLIGHT',
+          captureElementScreenshot: 'ELEMENT_SCREENSHOT',
+          highlightDeFiElements: 'ELEMENT_HIGHLIGHT_DEFIELEMENTS',
+        };
+
+        const messageType = messageTypes[actionName] || actionName.toUpperCase();
+
+        // Send message to content script
+        const response = await chrome.tabs.sendMessage(activeTab.id, {
+          type: messageType,
+          params,
+        });
+
+        if (!response || !response.success) {
+          throw new Error(response?.error || 'Element selection action failed');
+        }
+
+        return {
+          action: actionName,
+          params,
+          result: response.data,
+          success: true,
+          timestamp: Date.now(),
+        };
+      } catch (error) {
+        logger.error(`Element selection action failed: ${actionName}`, error);
+        return {
+          action: actionName,
+          params,
+          result: null,
+          success: false,
+          timestamp: Date.now(),
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
+    };
+  }
+
   private createMultiAgentHandler(actionName: string) {
     return async (params: any) => {
       try {
@@ -1657,6 +1907,16 @@ export class ToolRegistry {
       uploadFile: ['selector', 'fileContent', 'fileName'],
       executeJavaScript: ['code', 'returnResult'],
       waitForElement: ['selector', 'condition', 'timeout'],
+      // Element selection tools
+      activateElementSelector: ['mode', 'filter', 'visibleOnly'],
+      deactivateElementSelector: [],
+      getHighlightedElements: ['filter', 'includeAttributes'],
+      analyzeElement: ['selector', 'includeAccessibility', 'includeEvents'],
+      findElementsByText: ['text', 'elementType', 'caseSensitive', 'visibleOnly'],
+      getInteractiveElements: ['elementType', 'textFilter', 'includeAttributes'],
+      highlightElement: ['selector', 'color', 'duration'],
+      captureElementScreenshot: ['selector', 'includeHighlights'],
+      highlightDeFiElements: [],
       // Utility tools
       getCurrentTime: [],
       formatNumber: ['number', 'decimals', 'unit'],

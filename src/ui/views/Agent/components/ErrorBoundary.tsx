@@ -63,44 +63,19 @@ export class ErrorBoundary extends Component<
 
       // Default error UI
       return (
-        <div
-          style={{
-            padding: '20px',
-            border: '1px solid #ff4d4f',
-            borderRadius: '4px',
-            backgroundColor: '#fff2f0',
-            color: '#a8071a',
-            textAlign: 'center',
-          }}
-        >
-          <h3>Something went wrong</h3>
-          <p>{this.state.error?.message || 'An unexpected error occurred'}</p>
+        <div className="p-5 border border-red-500 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-300 text-center">
+          <h3 className="text-lg font-medium mb-2">Something went wrong</h3>
+          <p className="text-sm mb-4">{this.state.error?.message || 'An unexpected error occurred'}</p>
           <button
             onClick={this.handleRetry}
-            style={{
-              marginTop: '12px',
-              padding: '8px 16px',
-              backgroundColor: '#1890ff',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-            }}
+            className="mt-3 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors cursor-pointer border-none"
           >
             Try Again
           </button>
           {process.env.NODE_ENV === 'development' && this.state.error && (
-            <details style={{ marginTop: '16px', textAlign: 'left' }}>
-              <summary>Error Details (Development)</summary>
-              <pre
-                style={{
-                  marginTop: '8px',
-                  padding: '8px',
-                  backgroundColor: '#f5f5f5',
-                  fontSize: '12px',
-                  overflow: 'auto',
-                }}
-              >
+            <details className="mt-4 text-left">
+              <summary className="cursor-pointer text-sm font-medium">Error Details (Development)</summary>
+              <pre className="mt-2 p-2 bg-gray-100 dark:bg-gray-700 text-xs overflow-auto rounded">
                 {this.state.error.stack}
               </pre>
             </details>

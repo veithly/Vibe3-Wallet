@@ -169,9 +169,7 @@ const config = {
       {
         test: /\.css$/,
         use: [
-          {
-            loader: 'style-loader',
-          },
+          MiniCssExtractPlugin.loader,
           {
             loader: 'css-loader',
             options: {

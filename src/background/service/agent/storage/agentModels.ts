@@ -2,6 +2,7 @@ import { createLogger } from '@/utils/logger';
 import { createStorage } from './storage';
 import { AgentNameEnum } from './types';
 import { llmProviderParameters } from './types';
+import { llmProviderStore } from './llmProviders';
 
 const logger = createLogger('AgentModelStore');
 
@@ -60,6 +61,29 @@ function getModelParameters(
 }
 
 /**
+ * Get user's preferred model for a specific agent and provider
+ */
+async function getUserPreferredModel(
+  agent: AgentNameEnum,
+  provider: string
+): Promise<string | null> {
+  try {
+    const userConfig = await agentModelStore.getAgentModel(agent);
+    if (userConfig && userConfig.provider === provider && userConfig.modelName) {
+      return userConfig.modelName;
+    }
+    return null;
+  } catch (error) {
+    logger.warn(
+      'AgentModelStore',
+      `Failed to get user preferred model for ${agent}`,
+      error
+    );
+    return null;
+  }
+}
+
+/**
  * Enhanced agent model store with production-ready features
  */
 export const agentModelStore: AgentModelStorage = {
@@ -105,6 +129,17 @@ export const agentModelStore: AgentModelStorage = {
         provider: config.provider,
         modelName: config.modelName,
       });
+
+      // Trigger agent model reload after successful save
+      try {
+        // Import agent service dynamically to avoid circular dependency
+        const { agent: agentService } = await import('../../agent');
+        await agentService.reloadAgentModel(agent);
+        logger.info('AgentModelStore', `Successfully triggered reload for ${agent}`);
+      } catch (reloadError) {
+        logger.warn('AgentModelStore', `Failed to trigger reload for ${agent}`, reloadError);
+        // Don't throw - the save was successful, reload is best-effort
+      }
     } catch (error) {
       logger.error(
         'AgentModelStore',
@@ -298,13 +333,24 @@ export const agentModelStore: AgentModelStorage = {
         if (availableProviders.includes(provider)) {
           const defaultParams = getModelParameters(agent, provider);
 
+          // Check for user preferred model first
+          const userPreferredModel = await getUserPreferredModel(agent, provider);
+          
           // Select best model for this provider
-          let modelName = 'gpt-4o-mini'; // fallback
+          let modelName = userPreferredModel || 'gpt-4o-mini'; // respect user preference
           if (provider === 'anthropic') {
-            modelName = 'claude-3-5-sonnet-latest';
+            modelName = userPreferredModel || 'claude-3-5-sonnet-latest';
           } else if (provider === 'gemini') {
-            modelName = 'gemini-2.5-flash';
+            modelName = userPreferredModel || 'gemini-2.5-flash';
           }
+
+          // Log the model selection process
+          logger.info('AgentModelStore', `Model selection for ${agent}:`, {
+            userPreferredModel,
+            availableProviders,
+            selectedProvider: provider,
+            finalModelName: modelName
+          });
 
           return {
             provider,
@@ -318,12 +364,27 @@ export const agentModelStore: AgentModelStorage = {
       if (availableProviders.length > 0) {
         const provider = availableProviders[0];
         const defaultParams = getModelParameters(agent, provider);
+        
+        // Check for user preferred model even for fallback providers
+        const userPreferredModel = await getUserPreferredModel(agent, provider);
+        const modelName = userPreferredModel || 'default';
+        
+        logger.info('AgentModelStore', `Fallback model selection for ${agent}:`, {
+          userPreferredModel,
+          fallbackProvider: provider,
+          finalModelName: modelName
+        });
+
         return {
           provider,
-          modelName: 'default',
+          modelName,
           parameters: defaultParams,
         };
       }
+
+      logger.warn('AgentModelStore', `No available providers for ${agent}`, {
+        availableProviders
+      });
 
       return null;
     } catch (error) {

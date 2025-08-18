@@ -1,4 +1,4 @@
-import { Button } from 'antd';
+import { Typography } from 'antd';
 import React, {
   useState,
   useEffect,
@@ -19,22 +19,20 @@ import {
 } from './components/StreamingMessage';
 import { AgentStatus, useAgentStatus } from './components/AgentStatus';
 import { Message, Actors, ReActStatusMessage } from './types/message';
+
 import { EventType, AgentEvent, ExecutionState } from './types/event';
 import { chatHistoryStore } from '@/background/service/agent/chatHistory';
 import favoritesStorage from '@/background/service/agent/storage/favorites';
 import type { FavoritePrompt } from '@/background/service/agent/storage/favorites';
 import './styles/SidePanelApp.less';
-import './styles/MessageList.less';
-import './styles/ChatInput.less';
-import './styles/ChatHistoryList.less';
-import './styles/BookmarkList.less';
-import './styles/IconButton.less';
 import {
   connectionMonitor,
   generateMessageId,
 } from './utils/connectionMonitor';
 import { logger } from './utils/logger';
 import { DelayUtil, TIMING_CONSTANTS } from './utils/timing';
+
+const { Paragraph } = Typography;
 
 // Connection states for better tracking
 enum ConnectionState {
@@ -63,8 +61,7 @@ export const SidePanelApp = () => {
   const [showHistory, setShowHistory] = useState(false);
   const [chatSessions, setChatSessions] = useState<any[]>([]);
   const [isHistoricalSession, setIsHistoricalSession] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isProcessingSpeech, setIsProcessingSpeech] = useState(false);
+
   const [showSettings, setShowSettings] = useState(false);
   const [favoritePrompts, setFavoritePrompts] = useState<FavoritePrompt[]>([]);
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -72,18 +69,19 @@ export const SidePanelApp = () => {
   const [isReplaying, setIsReplaying] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [hasError, setHasError] = useState<string | null>(null);
-  const [showAgentStatus, setShowAgentStatus] = useState(false);
   const [agentCapabilities, setAgentCapabilities] = useState<any>(null);
+
+  const [showAgentStatus, setShowAgentStatus] = useState(false);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(
     null
   );
   const [reactStatus, setReactStatus] = useState<ReActStatusMessage | null>(null);
+  const [showNewChatConfirm, setShowNewChatConfirm] = useState(false);
   const portRef = useRef<chrome.runtime.Port | null>(null);
   const heartbeatIntervalRef = useRef<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const setInputTextRef = useRef<((text: string) => void) | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+
   const isConnectingRef = useRef(false);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const connectionRetryCount = useRef(0);
@@ -161,15 +159,6 @@ export const SidePanelApp = () => {
       ...newStatus
     };
     setReactStatus(updatedStatus);
-    
-    // Also add ReAct status as a message to the message list
-    appendMessage({
-      actor: Actors.SYSTEM,
-      content: updatedStatus.thinkingContent || 'Processing...',
-      timestamp: Date.now(),
-      messageType: 'react_status',
-      reactStatus: updatedStatus
-    });
   }, [reactStatus, appendMessage]);
 
   const resetReActStatus = useCallback(() => {
@@ -216,15 +205,15 @@ export const SidePanelApp = () => {
 
       if (content) {
         // Check if this is actually a streaming response that wasn't properly handled
-        const isStreamingResponse = content.includes('streaming') || 
+        const isStreamingResponse = content.includes('streaming') ||
                                   (data && data.isStreaming);
-        
+
         if (isStreamingResponse && streamingMessageId) {
           logger.debug(COMPONENT_NAME, 'Updating existing streaming message', {
             streamingMessageId,
             contentLength: content.length,
           });
-          
+
           // If we have an active streaming message, update it instead of creating a new one
           setMessages((prev) => {
             const updatedMessages = prev.map((msg) =>
@@ -237,12 +226,12 @@ export const SidePanelApp = () => {
                   }
                 : msg
             );
-            
+
             logger.debug(COMPONENT_NAME, 'Streaming message updated via execution', {
               wasStreaming: true,
               newContentLength: content.length,
             });
-            
+
             return updatedMessages;
           });
           setStreamingMessageId(null);
@@ -252,7 +241,7 @@ export const SidePanelApp = () => {
             contentLength: content.length,
             state,
           });
-          
+
           // Regular message handling
           appendMessage({
             actor: actor as Actors,
@@ -364,7 +353,7 @@ export const SidePanelApp = () => {
           logger.info(COMPONENT_NAME, 'Starting streaming response', {
             taskId: message.taskId,
           });
-          
+
           // Start streaming response
           const messageId = `streaming_${Date.now()}_${Math.random()
             .toString(36)
@@ -390,7 +379,7 @@ export const SidePanelApp = () => {
             hasContent: !!message.chunk?.content,
             streamingMessageId,
           });
-          
+
           // Handle streaming chunk
           if (streamingMessageId && message.chunk) {
             setMessages((prev) => {
@@ -405,7 +394,7 @@ export const SidePanelApp = () => {
                     }
                   : msg
               );
-              
+
               // Log the update
               const streamingMsg = updatedMessages.find(m => m.messageId === streamingMessageId);
               if (streamingMsg) {
@@ -414,7 +403,7 @@ export const SidePanelApp = () => {
                   functionCallsCount: streamingMsg.functionCalls?.length || 0,
                 });
               }
-              
+
               return updatedMessages;
             });
           } else {
@@ -434,16 +423,16 @@ export const SidePanelApp = () => {
             hasData: !!message.data,
             streamingMessageId,
           });
-          
+
           // Complete streaming response
           if (streamingMessageId) {
             let finalContent = '';
             let finalFunctionCalls: any[] = [];
-            
+
             if (message.data) {
               finalContent = message.data.details || message.data.content || '';
               finalFunctionCalls = message.data.functionCalls || [];
-              
+
               logger.debug(COMPONENT_NAME, 'Streaming complete with data', {
                 streamingMessageId,
                 contentLength: finalContent.length,
@@ -456,13 +445,13 @@ export const SidePanelApp = () => {
                 streamingMessageId,
                 hasData: !!message.data,
               });
-              
+
               // Fallback: Get current content from the streaming message
               const currentMsg = messages.find(m => m.messageId === streamingMessageId);
               finalContent = currentMsg?.content || '';
               finalFunctionCalls = currentMsg?.functionCalls || [];
             }
-            
+
             setMessages((prev) => {
               const updatedMessages = prev.map((msg) =>
                 msg.messageId === streamingMessageId
@@ -475,19 +464,19 @@ export const SidePanelApp = () => {
                     }
                   : msg
               );
-              
+
               logger.debug(COMPONENT_NAME, 'Streaming message finalized', {
                 finalContentLength: finalContent.length,
                 wasEmpty: finalContent.length === 0,
               });
-              
+
               return updatedMessages;
             });
           } else {
             logger.error(COMPONENT_NAME, 'Streaming complete but no streaming message ID', {
               hasStreamingMessageId: !!streamingMessageId,
             });
-            
+
             // Fallback: Create a new message with the response
             if (message.data) {
               appendMessage({
@@ -499,7 +488,7 @@ export const SidePanelApp = () => {
               });
             }
           }
-          
+
           setStreamingMessageId(null);
           setInputEnabled(true);
           setShowStopButton(false);
@@ -513,7 +502,7 @@ export const SidePanelApp = () => {
             error: message.error,
             streamingMessageId,
           });
-          
+
           // Handle streaming error
           if (streamingMessageId) {
             setMessages((prev) =>
@@ -537,7 +526,7 @@ export const SidePanelApp = () => {
               messageType: 'streaming_error',
             });
           }
-          
+
           setStreamingMessageId(null);
           setInputEnabled(true);
           setShowStopButton(false);
@@ -552,20 +541,22 @@ export const SidePanelApp = () => {
             thinkingType: message.data.thinkingType,
             contentLength: message.data.details?.length || 0,
           });
-          
-          // Handle thinking/ReAct messages
-          appendMessage({
-            actor: Actors.SYSTEM,
-            content: message.data.details,
-            timestamp: Date.now(),
-            messageType: 'thinking',
-            thinking: [{
-              step: 1,
+
+          // Only append thinking if it's explicitly provided by model responses
+          if (message.data?.fromModel === true) {
+            appendMessage({
+              actor: Actors.SYSTEM,
               content: message.data.details,
-              type: message.data.thinkingType || 'thinking',
               timestamp: Date.now(),
-            }],
-          });
+              messageType: 'thinking',
+              thinking: [{
+                step: 1,
+                content: message.data.details,
+                type: message.data.thinkingType || 'thinking',
+                timestamp: Date.now(),
+              }],
+            });
+          }
         } else if (message && message.type === 'react_status') {
           logger.debug(COMPONENT_NAME, 'Processing ReAct status message', {
             isThinking: message.data.isThinking,
@@ -573,7 +564,7 @@ export const SidePanelApp = () => {
             currentStep: message.data.currentStep,
             maxSteps: message.data.maxSteps,
           });
-          
+
           // Handle ReAct status messages
           const reactStatusData: ReActStatusMessage = {
             isThinking: message.data.isThinking || false,
@@ -586,15 +577,8 @@ export const SidePanelApp = () => {
             timestamp: Date.now(),
           };
           setReactStatus(reactStatusData);
-          
-          // Also add as a message to the message list
-          appendMessage({
-            actor: Actors.SYSTEM,
-            content: reactStatusData.thinkingContent || 'Processing...',
-            timestamp: Date.now(),
-            messageType: 'react_status',
-            reactStatus: reactStatusData
-          });
+
+          // Do not auto-add react status messages to chat; only show if model includes them
         } else if (message && message.type === 'agent_capabilities') {
           logger.debug(COMPONENT_NAME, 'Agent capabilities updated', {
             capabilities: message.capabilities,
@@ -608,28 +592,6 @@ export const SidePanelApp = () => {
             `${message.tools?.length || 0} tools available`
           );
           logEvent('available_tools', { count: message.tools?.length || 0 });
-        } else if (message && message.type === 'speech_to_text_result') {
-          logger.debug(COMPONENT_NAME, 'Speech recognition successful', {
-            textLength: message.text.length,
-          });
-          if (message.text && setInputTextRef.current) {
-            setInputTextRef.current(message.text);
-          }
-          setIsProcessingSpeech(false);
-        } else if (message && message.type === 'speech_to_text_error') {
-          logger.error(COMPONENT_NAME, 'Speech recognition failed', {
-            error: message.error,
-          });
-          logEvent('error', {
-            error: message.error || 'Speech recognition failed',
-          });
-          appendMessage({
-            actor: Actors.SYSTEM,
-            content: message.error || 'Speech recognition failed',
-            timestamp: Date.now(),
-            messageType: 'speech_to_text_error',
-          });
-          setIsProcessingSpeech(false);
         } else {
           logger.warn(COMPONENT_NAME, 'Unknown message type received', {
             type: message.type,
@@ -660,7 +622,7 @@ export const SidePanelApp = () => {
             currentContent: streamingMsg.content,
             newContent: content,
           });
-          
+
           return prev.map((msg) =>
             msg.messageId === streamingMessageId
               ? {
@@ -1152,7 +1114,7 @@ export const SidePanelApp = () => {
           isActing: false,
           currentStep: 1,
           maxSteps: 5,
-          thinkingContent: 'Analyzing your request...'
+          thinkingContent: ''
         });
 
         // Create session and message
@@ -1306,9 +1268,12 @@ export const SidePanelApp = () => {
   const handleLoadHistory = useCallback(async () => {
     logger.debug(COMPONENT_NAME, 'HandleLoadHistory called');
     try {
-      await loadChatSessions();
-      setShowHistory(true);
-      logger.info(COMPONENT_NAME, 'History loaded and shown');
+      if (!showHistory) {
+        await loadChatSessions();
+      }
+      setShowHistory(prev => !prev);
+      setShowSettings(false);
+      logger.info(COMPONENT_NAME, 'History toggled');
     } catch (error) {
       logger.error(COMPONENT_NAME, 'Error loading history', { error });
       appendMessage({
@@ -1341,7 +1306,13 @@ export const SidePanelApp = () => {
   };
 
   const handleNewChat = useCallback(() => {
+    setShowNewChatConfirm(true);
+  }, []);
+
+  const confirmNewChat = useCallback(() => {
     logger.debug(COMPONENT_NAME, 'HandleNewChat called');
+
+    // Clear all messages and reset state
     setMessages([]);
     setCurrentSessionId(null);
     setIsHistoricalSession(false);
@@ -1349,102 +1320,33 @@ export const SidePanelApp = () => {
     setIsFollowUpMode(false);
     setInputEnabled(true);
     setShowStopButton(false);
-    logger.info(COMPONENT_NAME, 'New chat initialized');
+    setShowNewChatConfirm(false);
+    resetReActStatus();
+
+    // Clear any streaming state
+    setStreamingMessageId(null);
+
+    logger.info(COMPONENT_NAME, 'New chat initialized successfully');
+  }, [resetReActStatus]);
+
+  const cancelNewChat = useCallback(() => {
+    setShowNewChatConfirm(false);
   }, []);
 
-  const handleMicClick = async () => {
-    if (isRecording) {
-      if (
-        mediaRecorderRef.current &&
-        mediaRecorderRef.current.state === 'recording'
-      ) {
-        mediaRecorderRef.current.stop();
-      }
-      setIsRecording(false);
-      return;
-    }
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioChunksRef.current = [];
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
-        if (audioChunksRef.current.length > 0) {
-          const audioBlob = new Blob(audioChunksRef.current, {
-            type: 'audio/webm',
-          });
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64Audio = reader.result as string;
-            if (!portRef.current) {
-              setupConnection();
-            }
-            try {
-              setIsProcessingSpeech(true);
-              portRef.current?.postMessage({
-                type: 'speech_to_text',
-                audio: base64Audio,
-              });
-            } catch (error) {
-              logger.error(
-                COMPONENT_NAME,
-                'Failed to send audio for speech-to-text',
-                { error }
-              );
-              appendMessage({
-                actor: Actors.SYSTEM,
-                content: 'Failed to process speech recording',
-                timestamp: Date.now(),
-              });
-              setIsRecording(false);
-              setIsProcessingSpeech(false);
-            }
-          };
-          reader.readAsDataURL(audioBlob);
-        }
-      };
-      mediaRecorder.start();
-      setIsRecording(true);
-    } catch (error) {
-      logger.error(COMPONENT_NAME, 'Error accessing microphone', { error });
-      let errorMessage = 'Failed to access microphone. ';
-      if (error instanceof Error) {
-        if (error.name === 'NotAllowedError') {
-          errorMessage += 'Please grant microphone permission.';
-        } else if (error.name === 'NotFoundError') {
-          errorMessage += 'No microphone found.';
-        } else {
-          errorMessage += error.message;
-        }
-      }
-
-      appendMessage({
-        actor: Actors.SYSTEM,
-        content: errorMessage,
-        timestamp: Date.now(),
-      });
-      setIsRecording(false);
-    }
-  };
 
   const handleOpenSettings = useCallback(() => {
     logger.debug(COMPONENT_NAME, 'HandleOpenSettings called');
-    setShowSettings(true);
+    setShowSettings(prev => !prev);
+    setShowHistory(false);
   }, []);
 
   const handleCloseSettings = useCallback(() => {
     logger.debug(COMPONENT_NAME, 'HandleCloseSettings called');
     setShowSettings(false);
   }, []);
+
+
 
   useEffect(() => {
     const loadFavorites = async () => {
@@ -1568,12 +1470,6 @@ export const SidePanelApp = () => {
   }, [portRef]);
 
   // Toggle agent status panel
-  const toggleAgentStatus = useCallback(() => {
-    setShowAgentStatus(!showAgentStatus);
-    if (!showAgentStatus) {
-      requestAgentCapabilities();
-    }
-  }, [showAgentStatus, requestAgentCapabilities]);
 
   // Request capabilities when connection is established
   useEffect(() => {
@@ -1658,6 +1554,70 @@ export const SidePanelApp = () => {
       }}
     >
       <div className={`side-panel-app ${isDarkMode ? 'dark' : ''}`}>
+        {/* New Chat Confirmation Modal */}
+        {showNewChatConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            {/* Backdrop */}
+            <div
+              className="absolute inset-0 bg-black bg-opacity-50"
+              onClick={cancelNewChat}
+            />
+
+            {/* Modal */}
+            <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+              {/* Header */}
+              <div className="flex items-center justify-between p-6 border-b">
+                <div className="flex items-center space-x-2">
+                  <div className="w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center">
+                    <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900">Start New Conversation</h3>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div className="p-6">
+                <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                  <div className="flex">
+                    <div className="flex-shrink-0">
+                      <svg className="w-5 h-5 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                    <div className="ml-3">
+                      <h3 className="text-sm font-medium text-amber-800">Clear Current Conversation</h3>
+                      <div className="mt-2 text-sm text-amber-700">
+                        <p>This will clear the current chat history and start fresh. Any unsaved information will be lost.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-sm text-gray-600">
+                  Are you sure you want to start a new conversation?
+                </p>
+              </div>
+
+              {/* Footer */}
+              <div className="flex justify-end space-x-3 p-6 border-t bg-gray-50 rounded-b-lg">
+                <button
+                  onClick={cancelNewChat}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmNewChat}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  Start New Chat
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="header">
           <div className="header-left">
             <h3 className="header-title">AI Agent</h3>
@@ -1666,50 +1626,36 @@ export const SidePanelApp = () => {
             <IconButton
               icon={isDarkMode ? 'sun' : 'moon'}
               onClick={handleToggleDarkMode}
-              tooltip={
-                isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'
-              }
               data-testid="dark-mode-button"
               active={isDarkMode}
             />
             <IconButton
               icon="history"
               onClick={handleLoadHistory}
-              tooltip="View Chat History"
               data-testid="history-button"
               active={showHistory}
             />
-            <IconButton
-              icon="settings"
-              onClick={toggleAgentStatus}
-              tooltip="Agent Status & Capabilities"
-              data-testid="agent-status-button"
-              active={showAgentStatus}
-              className={
-                agentCapabilities?.streaming ? 'streaming-capable' : ''
-              }
+              <IconButton
+              icon="plus"
+              onClick={handleNewChat}
+              data-testid="new-chat-button"
             />
             <IconButton
               icon="settings"
               onClick={handleOpenSettings}
-              tooltip="Open Settings"
               data-testid="settings-button"
               active={showSettings}
             />
+
           </div>
         </div>
         <div className="content-area">
-          {showAgentStatus ? (
-            <ErrorBoundary componentName="AgentStatus">
-              <AgentStatus
-                onRefresh={requestAgentCapabilities}
-                onSettings={handleOpenSettings}
-              />
-            </ErrorBoundary>
-          ) : showSettings ? (
-            <ErrorBoundary componentName="Settings">
-              <Settings onClose={handleCloseSettings} />
-            </ErrorBoundary>
+          {showSettings ? (
+            <div className="settings-overlay">
+              <ErrorBoundary componentName="Settings">
+                <Settings onClose={handleCloseSettings} />
+              </ErrorBoundary>
+            </div>
           ) : showHistory ? (
             <ErrorBoundary componentName="ChatHistoryList">
               <ChatHistoryList
@@ -1758,9 +1704,6 @@ export const SidePanelApp = () => {
             <ChatInput
               onSendMessage={handleSendMessage}
               onStopTask={handleStopTask}
-              onMicClick={handleMicClick}
-              isRecording={isRecording}
-              isProcessingSpeech={isProcessingSpeech}
               disabled={!inputEnabled || (isHistoricalSession && !isReplaying)}
               showStopButton={showStopButton}
               setContent={(setter) => (setInputTextRef.current = setter)}

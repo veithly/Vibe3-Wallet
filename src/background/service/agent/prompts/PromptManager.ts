@@ -9,6 +9,7 @@ import { Web3Context, FunctionSchema, LLMResponse } from '../llm/types';
 import { Web3Intent } from '../intent/IntentRecognizer';
 import { TaskAnalysis } from '../task-analysis/IntelligentTaskAnalyzer';
 import { createLogger } from '@/utils/logger';
+import { defiElementSelectionTemplates } from './defi-interactions';
 
 const logger = createLogger('PromptManager');
 
@@ -319,14 +320,127 @@ Guidelines:
       contexts: ['function_calling', 'web3', 'automation'],
     };
 
+    // Element selection template
+    const elementSelectionTemplate: PromptTemplate = {
+      id: 'element_selection',
+      name: 'Element Selection',
+      description: 'Interactive element selection and analysis for web automation',
+      systemPrompt: `You are an AI assistant specialized in element selection and analysis for web automation. Your capabilities include:
+
+1. Interactive element highlighting and selection
+2. Element analysis and property extraction
+3. DOM traversal and element discovery
+4. Accessibility and interaction analysis
+5. Visual element identification and targeting
+
+You have access to element selection tools that can highlight, analyze, and interact with web page elements. Always:
+
+- Use visual highlighting to guide users to relevant elements
+- Provide clear element descriptions and selectors
+- Analyze element properties for optimal interaction
+- Consider accessibility and user experience
+- Suggest the most reliable selectors for automation
+
+Current element selection context:
+- Selection mode: {{selectionMode}}
+- Current page: {{currentUrl}}
+- Available elements: {{availableElements}}
+- User intent: {{userIntent}}
+
+Available element selection tools:
+- activateElementSelector: Activate element highlighting mode
+- getHighlightedElements: Get information about highlighted elements
+- analyzeElement: Analyze specific element properties
+- findElementsByText: Find elements by text content
+- getInteractiveElements: Get all interactive elements
+- highlightElement: Highlight specific elements
+- captureElementScreenshot: Take screenshots of elements
+
+When working with elements:
+1. First activate element selection to show available options
+2. Use element analysis to understand properties and interactions
+3. Provide reliable CSS selectors for automation
+4. Consider element visibility and accessibility
+5. Give clear guidance for user interaction`,
+      userPromptTemplate: `User: {{userInput}}
+
+Element Selection Context:
+- Mode: {{selectionMode}}
+- Page: {{currentUrl}}
+- Available Elements: {{availableElements}}
+- User Intent: {{userIntent}}
+
+Please help with element selection and analysis. {{additionalContext}}`,
+      variables: [
+        {
+          name: 'userInput',
+          type: 'string',
+          description: 'User input text',
+          required: true,
+        },
+        {
+          name: 'selectionMode',
+          type: 'string',
+          description: 'Current element selection mode',
+          required: false,
+        },
+        {
+          name: 'currentUrl',
+          type: 'string',
+          description: 'Current page URL',
+          required: false,
+        },
+        {
+          name: 'availableElements',
+          type: 'array',
+          description: 'Available interactive elements',
+          required: false,
+        },
+        {
+          name: 'userIntent',
+          type: 'string',
+          description: 'User intent for element selection',
+          required: false,
+        },
+        {
+          name: 'additionalContext',
+          type: 'string',
+          description: 'Additional context information',
+          required: false,
+        },
+      ],
+      tools: [
+        'activateElementSelector',
+        'getHighlightedElements',
+        'analyzeElement',
+        'findElementsByText',
+        'getInteractiveElements',
+        'highlightElement',
+        'captureElementScreenshot',
+      ],
+      contexts: ['element_selection', 'browser_automation', 'ui_interaction'],
+    };
+
     // Register default templates
     this.registerTemplate(web3AssistantTemplate);
     this.registerTemplate(browserAutomationTemplate);
     this.registerTemplate(functionCallingTemplate);
+    this.registerTemplate(elementSelectionTemplate);
+
+    // Register DeFi-specific templates
+    defiElementSelectionTemplates.forEach(template => {
+      try {
+        this.registerTemplate(template);
+      } catch (error) {
+        logger.warn('Failed to register DeFi template', { template: template.id, error });
+      }
+    });
+
+    const defiTemplateNames = defiElementSelectionTemplates.map(t => t.id);
 
     logger.info('Default prompt templates initialized', {
-      count: 3,
-      templates: ['web3_assistant', 'browser_automation', 'function_calling'],
+      count: 4 + defiElementSelectionTemplates.length,
+      templates: ['web3_assistant', 'browser_automation', 'function_calling', 'element_selection', ...defiTemplateNames],
     });
   }
 
@@ -411,10 +525,66 @@ Guidelines:
    * Select appropriate template based on context
    */
   private selectTemplate(promptContext: PromptContext): PromptTemplate {
-    const { intent, tools, taskAnalysis } = promptContext;
+    const { intent, tools, taskAnalysis, context } = promptContext;
 
     // Check if this is a function calling scenario
     if (tools && tools.length > 0) {
+      // Check for DeFi-specific contexts first
+      if (intent && intent.action) {
+        const action = intent.action.toLowerCase();
+        if (action.includes('connect') || action.includes('wallet')) {
+          return (
+            this.getTemplate('defi_wallet_connection') ||
+            this.getTemplate('function_calling') ||
+            this.getTemplate('web3_assistant')!
+          );
+        }
+        if (action.includes('swap') || action.includes('exchange')) {
+          return (
+            this.getTemplate('defi_token_swap') ||
+            this.getTemplate('function_calling') ||
+            this.getTemplate('web3_assistant')!
+          );
+        }
+        if (action.includes('approve') || action.includes('enable')) {
+          return (
+            this.getTemplate('defi_token_approval') ||
+            this.getTemplate('function_calling') ||
+            this.getTemplate('web3_assistant')!
+          );
+        }
+        if (action.includes('liquidity') || action.includes('pool')) {
+          return (
+            this.getTemplate('defi_liquidity_provision') ||
+            this.getTemplate('function_calling') ||
+            this.getTemplate('web3_assistant')!
+          );
+        }
+        if (action.includes('stake') || action.includes('farm') || action.includes('yield')) {
+          return (
+            this.getTemplate('defi_staking_yield') ||
+            this.getTemplate('function_calling') ||
+            this.getTemplate('web3_assistant')!
+          );
+        }
+      }
+
+      // Check for element selection tools
+      const elementSelectionTools = tools.filter(tool => 
+        tool.name.includes('Element') || 
+        tool.name.includes('element') ||
+        tool.name.includes('highlight') ||
+        tool.name.includes('analyze')
+      );
+      
+      if (elementSelectionTools.length > 0) {
+        return (
+          this.getTemplate('element_selection') ||
+          this.getTemplate('function_calling') ||
+          this.getTemplate('web3_assistant')!
+        );
+      }
+
       return (
         this.getTemplate('function_calling') ||
         this.getTemplate('web3_assistant')!
@@ -425,8 +595,28 @@ Guidelines:
     if (taskAnalysis && taskAnalysis.requiresBrowserAutomation) {
       return (
         this.getTemplate('browser_automation') ||
+        this.getTemplate('element_selection') ||
         this.getTemplate('web3_assistant')!
       );
+    }
+
+    // Check for DeFi context based on conversation or available actions
+    if (context && context.conversationHistory) {
+      const recentMessages = context.conversationHistory.slice(-3);
+      const hasDeFiKeywords = recentMessages.some(msg => {
+        const content = (msg.content || '').toLowerCase();
+        return content.includes('defi') || 
+               content.includes('swap') || 
+               content.includes('stake') ||
+               content.includes('liquidity') ||
+               content.includes('approve') ||
+               content.includes('wallet') ||
+               content.includes('connect');
+      });
+
+      if (hasDeFiKeywords) {
+        return this.getTemplate('web3_assistant')!;
+      }
     }
 
     // Default to Web3 assistant
@@ -469,13 +659,66 @@ Guidelines:
       context: JSON.stringify(context, null, 2),
     };
 
+    // Add DeFi-specific variables if applicable
+    if (intent && intent.action) {
+      const action = intent.action.toLowerCase();
+      variables.userIntent = action;
+      
+      if (action.includes('connect') || action.includes('wallet')) {
+        variables.dappType = this.detectDAppType(context.currentUrl) || 'Unknown';
+        variables.requiredNetwork = this.getNetworkName(context.currentChain);
+      }
+      
+      if (action.includes('swap') || action.includes('exchange')) {
+        variables.dexType = this.detectDEXType(context.currentUrl) || 'Unknown';
+        variables.fromToken = this.extractTokenFromIntent(intent, 'from');
+        variables.toToken = this.extractTokenFromIntent(intent, 'to');
+        variables.swapAmount = this.extractAmountFromIntent(intent);
+      }
+      
+      if (action.includes('approve')) {
+        variables.token = this.extractTokenFromIntent(intent, 'token');
+        variables.spender = this.extractContractFromIntent(intent);
+        variables.amount = this.extractAmountFromIntent(intent);
+        variables.purpose = this.extractPurposeFromIntent(intent);
+      }
+      
+      if (action.includes('liquidity')) {
+        variables.actionType = action.includes('add') || action.includes('provide') ? 'add' : 'remove';
+        variables.tokenPair = this.extractTokenPairFromIntent(intent);
+        variables.amount = this.extractAmountFromIntent(intent);
+      }
+      
+      if (action.includes('stake') || action.includes('farm')) {
+        variables.actionType = action.includes('unstake') || action.includes('withdraw') ? 'unstake' : 'stake';
+        variables.token = this.extractTokenFromIntent(intent, 'token');
+        variables.amount = this.extractAmountFromIntent(intent);
+        variables.apy = this.extractAPYFromContext(context);
+        variables.lockPeriod = this.extractLockPeriodFromIntent(intent);
+      }
+    }
+
     // Add browser-specific variables if needed
     if (taskAnalysis && taskAnalysis.requiresBrowserAutomation) {
       variables.activeTabs = '1'; // Would get from browser context
-      variables.currentUrl = 'about:blank'; // Would get from browser context
+      variables.currentUrl = context.currentUrl || 'about:blank';
       variables.pageTitle = 'New Tab'; // Would get from browser context
       variables.taskAnalysis = JSON.stringify(taskAnalysis, null, 2);
       variables.browserContext = JSON.stringify(context, null, 2);
+    }
+
+    // Add element selection variables if needed
+    const elementSelectionTools = promptContext.tools?.filter(tool => 
+      tool.name.includes('Element') || 
+      tool.name.includes('element') ||
+      tool.name.includes('highlight') ||
+      tool.name.includes('analyze')
+    );
+    
+    if (elementSelectionTools && elementSelectionTools.length > 0) {
+      variables.selectionMode = 'highlight';
+      variables.availableElements = 'Interactive elements will be identified';
+      variables.additionalContext = 'Element selection tools are available for DeFi interface interaction';
     }
 
     // Add tools for function calling
@@ -699,6 +942,120 @@ Guidelines:
         return `${role}: ${msg.content}`;
       })
       .join('\n');
+  }
+
+  /**
+   * DeFi context extraction helper methods
+   */
+  private detectDAppType(url: string): string {
+    if (!url) return 'Unknown';
+    
+    const lowerUrl = url.toLowerCase();
+    if (lowerUrl.includes('uniswap') || lowerUrl.includes('sushi')) return 'DEX';
+    if (lowerUrl.includes('aave') || lowerUrl.includes('compound')) return 'Lending';
+    if (lowerUrl.includes('curve') || lowerUrl.includes('balancer')) return 'Liquidity Pool';
+    if (lowerUrl.includes('lido') || lowerUrl.includes('rocket')) return 'Staking';
+    if (lowerUrl.includes('opensea') || lowerUrl.includes('rarible')) return 'NFT Marketplace';
+    return 'Generic dApp';
+  }
+
+  private detectDEXType(url: string): string {
+    if (!url) return 'Unknown';
+    
+    const lowerUrl = url.toLowerCase();
+    if (lowerUrl.includes('uniswap')) return 'Uniswap';
+    if (lowerUrl.includes('sushi')) return 'SushiSwap';
+    if (lowerUrl.includes('pancake')) return 'PancakeSwap';
+    if (lowerUrl.includes('curve')) return 'Curve';
+    if (lowerUrl.includes('balancer')) return 'Balancer';
+    return 'Generic DEX';
+  }
+
+  private extractTokenFromIntent(intent: Web3Intent, type: 'from' | 'to' | 'token'): string {
+    if (intent.entities) {
+      if (type === 'from' && intent.entities.fromToken) {
+        return intent.entities.fromToken;
+      }
+      if (type === 'to' && intent.entities.toToken) {
+        return intent.entities.toToken;
+      }
+      if (type === 'token' && intent.entities.tokenA) {
+        return intent.entities.tokenA;
+      }
+    }
+    
+    // Fallback to text extraction from intent
+    const text = intent.action.toLowerCase();
+    if (type === 'from' && text.includes('from')) {
+      const match = text.match(/from\s+([a-zA-Z0-9]+)/);
+      return match ? match[1] : 'Unknown';
+    }
+    if (type === 'to' && text.includes('to')) {
+      const match = text.match(/to\s+([a-zA-Z0-9]+)/);
+      return match ? match[1] : 'Unknown';
+    }
+    
+    return 'Unknown';
+  }
+
+  private extractAmountFromIntent(intent: Web3Intent): string {
+    if (intent.entities && intent.entities.amount) {
+      return intent.entities.amount;
+    }
+    
+    // Extract amount from action text
+    const text = intent.action.toLowerCase();
+    const amountMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:eth|usdc|usdt|dai|btc|matic)/);
+    return amountMatch ? amountMatch[1] : 'Unknown amount';
+  }
+
+  private extractContractFromIntent(intent: Web3Intent): string {
+    if (intent.entities) {
+      if (intent.entities.contract) {
+        return intent.entities.contract;
+      }
+      if (intent.entities.spender) {
+        return intent.entities.spender;
+      }
+      if (intent.entities.stakingContract) {
+        return intent.entities.stakingContract;
+      }
+      if (intent.entities.governanceContract) {
+        return intent.entities.governanceContract;
+      }
+    }
+    return 'Unknown contract';
+  }
+
+  private extractPurposeFromIntent(intent: Web3Intent): string {
+    const text = intent.action.toLowerCase();
+    if (text.includes('swap')) return 'Token swap';
+    if (text.includes('liquidity')) return 'Liquidity provision';
+    if (text.includes('stake')) return 'Staking';
+    if (text.includes('farm')) return 'Yield farming';
+    if (text.includes('approve')) return 'Token approval';
+    if (text.includes('send')) return 'Token transfer';
+    if (text.includes('bridge')) return 'Cross-chain bridge';
+    return 'Unknown purpose';
+  }
+
+  private extractTokenPairFromIntent(intent: Web3Intent): string {
+    const fromToken = this.extractTokenFromIntent(intent, 'from');
+    const toToken = this.extractTokenFromIntent(intent, 'to');
+    return `${fromToken}/${toToken}`;
+  }
+
+  private extractAPYFromContext(context: Web3Context): string {
+    // This would normally extract APY from context or external data
+    return 'Variable APY';
+  }
+
+  private extractLockPeriodFromIntent(intent: Web3Intent): string {
+    const text = intent.action.toLowerCase();
+    if (text.includes('30') || text.includes('month')) return '30 days';
+    if (text.includes('90') || text.includes('quarter')) return '90 days';
+    if (text.includes('365') || text.includes('year')) return '1 year';
+    return 'Flexible';
   }
 
   /**

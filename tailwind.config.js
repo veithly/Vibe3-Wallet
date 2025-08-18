@@ -10,9 +10,9 @@ const rabbyColors = ['light', 'dark'].reduce((accu, theme) => {
     // const suffix = cssvarKey.slice(splitorIdx + 1);
     const tinyColor = tinycolor2(colorValue);
     const alpha = tinyColor.getAlpha();
-  
+
     const hexValue = alpha === 1 ? tinyColor.toHexString() : tinyColor.toHex8String();
-    
+
     if (!accu.auto[cssvarKey]) {
       accu.auto[cssvarKey] = `var(--${rabbyCssPrefix}${cssvarKey}, ${hexValue})`;
     }
@@ -30,12 +30,13 @@ const rabbyColors = ['light', 'dark'].reduce((accu, theme) => {
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   mode: 'jit',
-  purge: ['./src/ui/**/*.{ts,tsx,html}'],
+  purge: ['./src/ui/**/*.{ts,tsx,html,css,less}'],
   theme: {
     spacing: [
       0,
       1,
       2,
+      3,
       4,
       6,
       8,
@@ -63,6 +64,7 @@ module.exports = {
       transparent: 'transparent',
       current: 'currentColor',
       blue: {
+        ...colors.blue,
         from: '#8A78FD',
         to: '#796BFD',
         light: rabbyColors.light['blue-default'],
@@ -70,17 +72,31 @@ module.exports = {
         purple: '#5F75FF',
       },
       black: '#707280',
-      green: '#27C193',
+      green: {
+        ...colors.green,
+        DEFAULT: '#27C193',
+      },
       white: colors.white,
-      yellow: '#F29C1B',
-      orange: '#FFB020',
-      pink: '#F24822',
+      yellow: {
+        ...colors.yellow,
+        DEFAULT: '#F29C1B',
+      },
+      orange: {
+        ...colors.orange,
+        DEFAULT: '#FFB020',
+      },
+      pink: {
+        ...colors.pink,
+        DEFAULT: '#F24822',
+      },
       red: {
+        ...colors.red,
         light: '#F24822',
         DEFAULT: '#AF160E',
         forbidden: '#EC5151',
       },
       gray: {
+        ...colors.gray,
         bg2: '#F5F6FA',
         bg: '#F5F6FA',
         divider: '#E5E9EF',
@@ -138,7 +154,6 @@ module.exports = {
         [`${rabbyCssPrefix.replace(/\-$/, '')}`]: rabbyColors.auto,
         [`${'rabby-'.replace(/\-$/, '')}`]: rabbyColors.auto,
         [`${'-r-'.replace(/\-$/, '')}`]: rabbyColors.auto,
-        
         [`light-${rabbyCssPrefix.replace(/\-$/, '')}`]: rabbyColors.light,
         [`dark-${rabbyCssPrefix.replace(/\-$/, '')}`]: rabbyColors.dark,
       }
