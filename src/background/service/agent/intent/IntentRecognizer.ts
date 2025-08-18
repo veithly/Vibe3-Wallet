@@ -581,20 +581,18 @@ export class IntentRecognizer {
   }
 
   private normalizeTokenAddresses(entities: Web3Entities): void {
-    const tokenFields = [
+    const tokenFields: (keyof Web3Entities)[] = [
       'fromToken',
       'toToken',
       'tokenAddress',
-      'tokenA',
-      'tokenB',
     ];
 
     for (const field of tokenFields) {
-      const value = entities[field as keyof Web3Entities] as string | undefined;
+      const value = entities[field] as string | undefined;
       if (value && !value.startsWith('0x')) {
         const address = this.tokenMap.get(value.toLowerCase());
         if (address) {
-          entities[field as keyof Web3Entities] = address as any;
+          (entities as any)[field] = address;
         }
       }
     }
@@ -654,13 +652,13 @@ export class IntentRecognizer {
   private extractChains(instruction: string): number[] {
     const chains: number[] = [];
 
-    for (const [chainName, chainId] of this.chainMap) {
+    for (const [chainName, chainId] of Array.from(this.chainMap.entries())) {
       if (instruction.includes(chainName)) {
         chains.push(chainId);
       }
     }
 
-    return [...new Set(chains)]; // Remove duplicates
+    return Array.from(new Set(chains)); // Remove duplicates
   }
 
   private extractProtocols(instruction: string): string[] {
@@ -687,7 +685,7 @@ export class IntentRecognizer {
       }
     }
 
-    return [...new Set(protocols)];
+    return Array.from(new Set(protocols));
   }
 
   private extractConstraints(instruction: string): Web3Constraints {

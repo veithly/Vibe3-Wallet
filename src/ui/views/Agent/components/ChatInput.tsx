@@ -152,6 +152,12 @@ export default function ChatInput({
                 }
               }}
               className="px-3 py-1.5 bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors duration-200"
+              style={{
+                padding: '4px 8px',
+                minWidth: '40px',
+                minHeight: '28px',
+                marginBottom: '4px'
+              }}
             >
               Stop
             </button>
@@ -167,6 +173,12 @@ export default function ChatInput({
                 }
                 transition-colors duration-200
               `}
+              style={{
+                padding: '4px',
+                minWidth: '28px',
+                minHeight: '28px',
+                marginBottom: '4px'
+              }}
               onClick={(e) => {
                 logger.debug('ChatInput', 'Send button clicked', {
                   isSendButtonDisabled,
@@ -181,7 +193,7 @@ export default function ChatInput({
               }}
             >
               {/* Send icon */}
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg style={{ width: '18px', height: '18px' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path d="M22 2L11 13" />
                 <path d="M22 2L15 22l-4-9-9-4 20-7z" />
               </svg>

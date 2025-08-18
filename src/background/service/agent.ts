@@ -1512,6 +1512,13 @@ class AgentService {
   }
 
   /**
+   * Get the current Web3Agent instance for agent coordination
+   */
+  public getWeb3Agent(): Web3Agent | null {
+    return this.web3Agent;
+  }
+
+  /**
    * Auto-assign a newly configured provider to agents that don't have one
    */
   private async autoAssignProviderToAgents(

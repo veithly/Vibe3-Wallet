@@ -163,11 +163,25 @@ async function restoreAppState() {
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'getBackgroundReady') {
-      sendResponse({
-        data: {
-          ready: true,
-        },
-      });
+      sendResponse({ data: { ready: true } });
+      return; // synchronous response
+    }
+
+    // Route UI actions through ToolRegistry for consistency with Agent Tool
+    if (message.type === 'AGENT_EXECUTE_TOOL') {
+      // Lazy import to avoid circular deps and reduce startup cost
+      (async () => {
+        try {
+          const { toolRegistry } = await import('./service/agent/tools/ToolRegistry');
+          const { name, params } = message;
+          const result = await toolRegistry.executeTool(name, params || {});
+          sendResponse({ success: true, result });
+        } catch (e) {
+          const err = e instanceof Error ? e.message : String(e);
+          sendResponse({ success: false, error: err });
+        }
+      })();
+      return true; // keep the channel open for async sendResponse
     }
   });
 

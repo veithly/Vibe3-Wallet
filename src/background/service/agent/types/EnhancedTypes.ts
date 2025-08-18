@@ -321,6 +321,7 @@ export interface ToolDefinition {
   timeout: number;
   dependencies: string[];
   retryable: boolean;
+  requiredPermissions?: string[];
 }
 
 // Error Handling Types

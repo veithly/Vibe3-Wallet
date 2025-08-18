@@ -67,6 +67,7 @@ export interface Web3Context {
   gasPrices: Record<number, string>;
   protocols: Record<string, any>;
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
+  currentUrl?: string;
 }
 
 export interface IWeb3LLM {

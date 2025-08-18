@@ -18,6 +18,8 @@ import {
   StreamingHandler,
   createStreamingChunk,
 } from '../streaming/StreamingHandler';
+import { MultiAgentIntegration } from '../agents/MultiAgentIntegration';
+import { TaskAnalysis } from '../task-analysis/IntelligentTaskAnalyzer';
 
 const logger = createLogger('LLMFactory');
 
@@ -534,21 +536,39 @@ class Web3LLM implements IWeb3LLM {
   private modelName: string;
   private _supportsFunctionCalling: boolean;
   private supportsStreaming: boolean;
+  private multiAgentIntegration: MultiAgentIntegration | null;
+  private enableMultiAgent: boolean;
 
   constructor(
     model: IBaseChatModel,
     providerType: string = 'enhanced',
-    modelName: string = 'web3-llm'
+    modelName: string = 'web3-llm',
+    options: { enableMultiAgent?: boolean; context?: Web3Context } = {}
   ) {
     this.model = model;
     this.providerType = providerType;
     this.modelName = modelName;
     this._supportsFunctionCalling = this.detectFunctionCallingSupport();
     this.supportsStreaming = this.detectStreamingSupport();
+    this.enableMultiAgent = options.enableMultiAgent ?? false;
+    this.multiAgentIntegration = null;
+
+    // Initialize multi-agent integration if enabled
+    if (this.enableMultiAgent && options.context) {
+      try {
+        this.multiAgentIntegration = new MultiAgentIntegration(this, options.context);
+        logger.info('Multi-agent integration enabled for Web3LLM');
+      } catch (error) {
+        logger.warn('Failed to initialize multi-agent integration:', error);
+        this.enableMultiAgent = false;
+      }
+    }
 
     logger.info(`Initialized Web3LLM with ${providerType}/${modelName}`, {
       functionCalling: this._supportsFunctionCalling,
       streaming: this.supportsStreaming,
+      multiAgentEnabled: this.enableMultiAgent,
+      multiAgentAvailable: !!this.multiAgentIntegration,
     });
   }
 
@@ -565,9 +585,17 @@ class Web3LLM implements IWeb3LLM {
       hasIntent: !!intent,
       hasTools: !!tools && tools.length > 0,
       functionCallingSupported: this.supportsFunctionCalling,
+      multiAgentEnabled: this.enableMultiAgent,
+      multiAgentAvailable: !!this.multiAgentIntegration,
     });
 
     try {
+      // Check if we should use multi-agent system for complex tasks
+      if (this.shouldUseMultiAgent(messages, context, intent)) {
+        logger.info('Using multi-agent system for complex task');
+        return await this.generateMultiAgentResponse(messages, context, intent);
+      }
+
       // Prefer function calling whenever model supports it. If caller didn't provide tools,
       // fall back to all available tool schemas from the registry.
       const effectiveTools = (tools && tools.length > 0) ? tools : this.getAvailableTools();
@@ -663,6 +691,131 @@ class Web3LLM implements IWeb3LLM {
   // Get underlying chat model for agent compatibility
   getChatModel(): any {
     return this.model;
+  }
+
+  // Multi-agent support methods
+  private shouldUseMultiAgent(
+    messages: BaseMessage[],
+    context: Web3Context,
+    intent?: Web3Intent
+  ): boolean {
+    if (!this.enableMultiAgent || !this.multiAgentIntegration) {
+      return false;
+    }
+
+    // Use multi-agent for complex Web3 tasks
+    const complexTasks = [
+      'swap', 'bridge', 'stake', 'unstake', 'defi', 'liquidity',
+      'compound', 'yield', 'farm', 'protocol', 'strategy',
+      'automation', 'navigate', 'browse', 'follow'
+    ];
+
+    const isComplexTask = intent?.action &&
+      complexTasks.some(task => intent.action.toLowerCase().includes(task));
+
+    // Check if the user message indicates complex automation
+    const lastMessage = messages[messages.length - 1]?.content as string || '';
+    const hasAutomationKeywords = [
+      'open', 'navigate', 'browse', 'click', 'follow', 'automate',
+      'multi-step', 'complex', 'website', 'twitter', 'discord'
+    ].some(keyword => lastMessage.toLowerCase().includes(keyword));
+
+    return isComplexTask || hasAutomationKeywords;
+  }
+
+  private async generateMultiAgentResponse(
+    messages: BaseMessage[],
+    context: Web3Context,
+    intent?: Web3Intent
+  ): Promise<LLMResponse> {
+    if (!this.multiAgentIntegration) {
+      throw new Error('Multi-agent integration not available');
+    }
+
+    try {
+      const lastMessage = messages[messages.length - 1]?.content as string || '';
+
+      // Create basic task analysis for multi-agent system
+      const taskAnalysis: TaskAnalysis = {
+        taskType: 'automation',
+        complexity: 'high',
+        confidence: 0.8,
+        requiresBrowserAutomation: true,
+        estimatedSteps: 5,
+        reasoning: 'Multi-agent execution requested based on task complexity',
+        entities: [],
+        requiresWeb3: false,
+        timestamp: Date.now(),
+        analysis: intent ? `Intent: ${intent.action}` : 'Multi-agent execution requested',
+        browserActions: intent ? [intent.action] : ['navigate'],
+        web3Actions: []
+      };
+
+      // Execute with multi-agent system
+      const result = await this.multiAgentIntegration.executeTask(
+        lastMessage,
+        taskAnalysis,
+        false, // No streaming for now
+        undefined
+      );
+
+      logger.info('Multi-agent response generated successfully', {
+        success: result.success,
+        steps: result.steps,
+        duration: result.duration,
+        confidence: result.confidence,
+      });
+
+      // Convert multi-agent result to LLMResponse
+      return {
+        response: result.message,
+        actions: result.actions.map(action => ({
+          type: action.type || 'unknown',
+          params: action.params || {},
+          confidence: result.confidence,
+          reasoning: action.description,
+        })),
+        confidence: result.confidence,
+        thinking: `Multi-agent execution completed with ${result.steps} steps`,
+        functionCalls: [], // Multi-agent has its own action execution model
+      };
+
+    } catch (error) {
+      logger.error('Multi-agent response generation failed:', error);
+
+      // Fall back to regular function calling
+      logger.info('Falling back to function calling response');
+      const effectiveTools = this.getAvailableTools();
+      if (this._supportsFunctionCalling && effectiveTools.length > 0) {
+        return await this.generateFunctionCallingResponse(
+          messages,
+          context,
+          effectiveTools,
+          intent
+        );
+      } else {
+        return await this.generateLegacyResponse(messages, context, intent);
+      }
+    }
+  }
+
+  // Public method to enable/disable multi-agent
+  setMultiAgentEnabled(enabled: boolean): void {
+    this.enableMultiAgent = enabled;
+    logger.info(`Multi-agent ${enabled ? 'enabled' : 'disabled'} for Web3LLM`);
+  }
+
+  // Public method to get multi-agent status
+  getMultiAgentStatus(): {
+    enabled: boolean;
+    available: boolean;
+    systemStatus?: any;
+  } {
+    return {
+      enabled: this.enableMultiAgent,
+      available: !!this.multiAgentIntegration,
+      systemStatus: this.multiAgentIntegration?.getSystemStatus(),
+    };
   }
 
   // Internal: attach OpenAI tools for RealChatModel when provider supports it
@@ -1810,7 +1963,11 @@ export { Web3LLM, RealChatModel, LangChainAdapter };
 
 export async function createLLMInstance(
   providerConfig: ProviderConfig,
-  modelConfig: ModelConfig
+  modelConfig: ModelConfig,
+  options?: {
+    enableMultiAgent?: boolean;
+    context?: Web3Context;
+  }
 ): Promise<IWeb3LLM> {
   const { type: providerType, apiKey, baseUrl } = providerConfig;
   const { modelName, parameters = {} } = modelConfig;
@@ -1892,8 +2049,13 @@ export async function createLLMInstance(
     }
 
     // Wrap with Web3LLM for Web3-specific functionality
-    const web3LLM = new Web3LLM(baseModel, providerType, modelName);
-    logger.info(`Created Web3LLM instance for ${providerType}/${modelName}`);
+    const web3LLM = new Web3LLM(baseModel, providerType, modelName, {
+      enableMultiAgent: options?.enableMultiAgent,
+      context: options?.context
+    });
+    logger.info(`Created Web3LLM instance for ${providerType}/${modelName}`, {
+      multiAgentEnabled: options?.enableMultiAgent
+    });
 
     return web3LLM;
   } catch (error) {

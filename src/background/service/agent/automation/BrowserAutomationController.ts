@@ -170,6 +170,46 @@ export class BrowserAutomationController {
   }
 
   /**
+   * Get or create an active tab with robust error handling
+   */
+  private async getOrCreateActiveTab(): Promise<chrome.tabs.Tab> {
+    // Check for active tabs
+    const activeTabs = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+
+    let targetTab = activeTabs[0];
+    
+    // If no active tab, try to get any tab from current window
+    if (!targetTab) {
+      const allTabs = await chrome.tabs.query({ currentWindow: true });
+      if (allTabs.length > 0) {
+        // Activate the first available tab
+        await chrome.tabs.update(allTabs[0].id!, { active: true });
+        targetTab = allTabs[0];
+      }
+    }
+    
+    // If still no tab, create a new one
+    if (!targetTab) {
+      targetTab = await chrome.tabs.create({ 
+        url: 'about:blank',
+        active: true 
+      });
+      
+      // Wait for tab to initialize
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    if (!targetTab || !targetTab.id) {
+      throw new Error('No active tab found and could not create new tab');
+    }
+
+    return targetTab;
+  }
+
+  /**
    * Main entry point for handling automation tasks
    */
   async handleAutomationTask(
@@ -594,16 +634,24 @@ export class BrowserAutomationController {
         
         let tab: chrome.tabs.Tab;
         
-        // Get or create a tab for navigation
-        const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (activeTabs.length > 0) {
-          logger.info('Updating existing tab for navigation', { 
-            tabId: activeTabs[0].id, 
+        // Get or create a tab for navigation using robust tab management
+        try {
+          tab = await this.getOrCreateActiveTab();
+          logger.info('Got tab for navigation', { 
+            tabId: tab.id, 
+            tabUrl: tab.url,
             requestedUrl: params.url,
             isUrlOf: params.url === 'of',
             urlLength: params.url.length,
           });
-          tab = await chrome.tabs.update(activeTabs[0].id!, { url: params.url });
+        } catch (tabError) {
+          logger.error('Failed to get or create tab for navigation', tabError);
+          throw new Error(`Failed to get or create tab for navigation: ${tabError.message}`);
+        }
+        
+        // Update the tab with the new URL
+        try {
+          tab = await chrome.tabs.update(tab.id!, { url: params.url });
           logger.info('Chrome tabs.update result', { 
             tabId: tab.id, 
             tabUrl: tab.url,
@@ -611,21 +659,9 @@ export class BrowserAutomationController {
             urlMatches: tab.url === params.url,
             isTabUrlOf: tab.url === 'of',
           });
-        } else {
-          // Create new tab if no active tab exists
-          logger.info('Creating new tab for navigation', { 
-            requestedUrl: params.url,
-            isUrlOf: params.url === 'of',
-            urlLength: params.url.length,
-          });
-          tab = await chrome.tabs.create({ url: params.url });
-          logger.info('Chrome tabs.create result', { 
-            tabId: tab.id, 
-            tabUrl: tab.url,
-            originalRequestedUrl: params.url,
-            urlMatches: tab.url === params.url,
-            isTabUrlOf: tab.url === 'of',
-          });
+        } catch (updateError) {
+          logger.error('Failed to update tab URL', updateError);
+          throw new Error(`Failed to update tab URL: ${updateError.message}`);
         }
 
         // Update active tabs tracking
@@ -713,10 +749,7 @@ export class BrowserAutomationController {
     try {
       if (chrome.scripting && chrome.scripting.executeScript) {
         // Real browser interaction
-        const [tab] = await chrome.tabs.query({
-          active: true,
-          currentWindow: true,
-        });
+        const tab = await this.getOrCreateActiveTab();
 
         const results = await chrome.scripting.executeScript({
           target: { tabId: tab.id! },
@@ -758,10 +791,7 @@ export class BrowserAutomationController {
   }): Promise<BrowserActionResult> {
     try {
       if (chrome.scripting && chrome.scripting.executeScript) {
-        const [tab] = await chrome.tabs.query({
-          active: true,
-          currentWindow: true,
-        });
+        const tab = await this.getOrCreateActiveTab();
 
         const results = await chrome.scripting.executeScript({
           target: { tabId: tab.id! },
@@ -804,10 +834,7 @@ export class BrowserAutomationController {
   }): Promise<BrowserActionResult> {
     try {
       if (chrome.scripting && chrome.scripting.executeScript) {
-        const [tab] = await chrome.tabs.query({
-          active: true,
-          currentWindow: true,
-        });
+        const tab = await this.getOrCreateActiveTab();
 
         const results = await chrome.scripting.executeScript({
           target: { tabId: tab.id! },
@@ -857,10 +884,7 @@ export class BrowserAutomationController {
   private async scrollPage(params: any): Promise<BrowserActionResult> {
     try {
       if (chrome.scripting && chrome.scripting.executeScript) {
-        const [tab] = await chrome.tabs.query({
-          active: true,
-          currentWindow: true,
-        });
+        const tab = await this.getOrCreateActiveTab();
 
         await chrome.scripting.executeScript({
           target: { tabId: tab.id! },
@@ -1052,7 +1076,7 @@ export class BrowserAutomationController {
       const elements = document.querySelectorAll(params.selector);
       const results: any[] = [];
 
-      for (const element of elements) {
+      for (const element of Array.from(elements)) {
         let content = '';
 
         switch (params.type) {
@@ -1102,19 +1126,130 @@ export class BrowserAutomationController {
     });
   }
 
-  // Element selection methods
-  private async activateElementSelection(params: any): Promise<BrowserActionResult> {
+  /**
+   * Ensure we have an active tab for element operations
+   */
+  private async ensureActiveTab(): Promise<chrome.tabs.Tab | null> {
     try {
+      // Try to get active tab
       const [activeTab] = await chrome.tabs.query({
         active: true,
         currentWindow: true,
       });
 
-      if (!activeTab || !activeTab.id) {
-        throw new Error('No active tab found');
+      if (activeTab && activeTab.url && activeTab.url !== 'about:blank') {
+        return activeTab;
       }
 
-      const response = await chrome.tabs.sendMessage(activeTab.id, {
+      // Try to get any tab in current window
+      const allTabs = await chrome.tabs.query({ currentWindow: true });
+      if (allTabs.length > 0) {
+        const suitableTab = allTabs.find(tab => 
+          tab.url && tab.url !== 'about:blank' && !tab.discarded
+        );
+        
+        if (suitableTab) {
+          await chrome.tabs.update(suitableTab.id!, { active: true });
+          return suitableTab;
+        }
+      }
+
+      // Create new tab if needed
+      const newTab = await chrome.tabs.create({ 
+        url: 'about:blank',
+        active: true 
+      });
+      
+      // Wait for tab to initialize
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      return newTab;
+      
+    } catch (error) {
+      logger.error('Failed to ensure active tab', error);
+      return null;
+    }
+  }
+
+  /**
+   * Verify content script is available in target tab
+   */
+  private async verifyContentScript(tabId: number): Promise<boolean> {
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+      return true;
+    } catch (error) {
+      // Content script not available, try to inject it
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ['content-script.js']
+        });
+        return true;
+      } catch (injectError) {
+        logger.error('Failed to inject content script', injectError);
+        return false;
+      }
+    }
+  }
+
+  // Element selection methods
+  private async activateElementSelection(params: any): Promise<BrowserActionResult> {
+    try {
+      // Get current active tabs with better error handling
+      const activeTabs = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      let targetTab = activeTabs[0];
+      
+      // If no active tab, try to get any tab from current window
+      if (!targetTab) {
+        const allTabs = await chrome.tabs.query({ currentWindow: true });
+        if (allTabs.length > 0) {
+          // Activate the first available tab
+          await chrome.tabs.update(allTabs[0].id!, { active: true });
+          targetTab = allTabs[0];
+          logger.info('Activated existing tab for element selection', { 
+            tabId: targetTab.id, 
+            url: targetTab.url 
+          });
+        }
+      }
+      
+      // If still no tab, create a new one
+      if (!targetTab) {
+        logger.info('No suitable tab found, creating new tab for element selection');
+        targetTab = await chrome.tabs.create({ 
+          url: 'about:blank',
+          active: true 
+        });
+        
+        // Wait for tab to initialize
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        logger.info('Created new tab for element selection', { 
+          tabId: targetTab.id, 
+          url: targetTab.url 
+        });
+      }
+
+      if (!targetTab || !targetTab.id) {
+        throw new Error('No active tab available and could not create new tab');
+      }
+
+      // Verify tab has proper URL before proceeding
+      if (!targetTab.url || targetTab.url === 'about:blank') {
+        // Wait a bit for tab to fully initialize
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
+      // Verify content script is available
+      const contentScriptReady = await this.verifyContentScript(targetTab.id);
+      if (!contentScriptReady) {
+        throw new Error('Content script not available in target tab');
+      }
+
+      const response = await chrome.tabs.sendMessage(targetTab.id, {
         type: 'ELEMENT_SELECTOR_ACTIVATE',
         options: {
           mode: params.mode,
@@ -1140,16 +1275,20 @@ export class BrowserAutomationController {
 
   private async analyzeElement(params: any): Promise<BrowserActionResult> {
     try {
-      const [activeTab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      });
-
-      if (!activeTab || !activeTab.id) {
-        throw new Error('No active tab found');
+      // Use enhanced tab management
+      const targetTab = await this.ensureActiveTab();
+      
+      if (!targetTab || !targetTab.id) {
+        throw new Error('No active tab available and could not create new tab');
       }
 
-      const response = await chrome.tabs.sendMessage(activeTab.id, {
+      // Verify content script is available
+      const contentScriptReady = await this.verifyContentScript(targetTab.id);
+      if (!contentScriptReady) {
+        throw new Error('Content script not available in target tab');
+      }
+
+      const response = await chrome.tabs.sendMessage(targetTab.id, {
         type: 'ELEMENT_ANALYZE',
         selector: params.selector,
         includeAccessibility: params.includeAccessibility,
@@ -1173,16 +1312,20 @@ export class BrowserAutomationController {
 
   private async findElements(params: any): Promise<BrowserActionResult> {
     try {
-      const [activeTab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      });
-
-      if (!activeTab || !activeTab.id) {
-        throw new Error('No active tab found');
+      // Use enhanced tab management
+      const targetTab = await this.ensureActiveTab();
+      
+      if (!targetTab || !targetTab.id) {
+        throw new Error('No active tab available and could not create new tab');
       }
 
-      const response = await chrome.tabs.sendMessage(activeTab.id, {
+      // Verify content script is available
+      const contentScriptReady = await this.verifyContentScript(targetTab.id);
+      if (!contentScriptReady) {
+        throw new Error('Content script not available in target tab');
+      }
+
+      const response = await chrome.tabs.sendMessage(targetTab.id, {
         type: 'ELEMENT_FIND_BY_TEXT',
         text: params.text,
         elementType: params.elementType,
@@ -1207,16 +1350,20 @@ export class BrowserAutomationController {
 
   private async highlightElement(params: any): Promise<BrowserActionResult> {
     try {
-      const [activeTab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      });
-
-      if (!activeTab || !activeTab.id) {
-        throw new Error('No active tab found');
+      // Use enhanced tab management
+      const targetTab = await this.ensureActiveTab();
+      
+      if (!targetTab || !targetTab.id) {
+        throw new Error('No active tab available and could not create new tab');
       }
 
-      const response = await chrome.tabs.sendMessage(activeTab.id, {
+      // Verify content script is available
+      const contentScriptReady = await this.verifyContentScript(targetTab.id);
+      if (!contentScriptReady) {
+        throw new Error('Content script not available in target tab');
+      }
+
+      const response = await chrome.tabs.sendMessage(targetTab.id, {
         type: 'ELEMENT_HIGHLIGHT',
         selector: params.selector,
         color: params.color,

@@ -142,6 +142,13 @@ function MessageBlock({
   const isStreaming = message.messageType === 'streaming_chunk' || message.isStreaming;
   const isStreamingComplete = message.messageType === 'streaming_complete';
   const isStreamingError = message.messageType === 'streaming_error';
+  const isFunctionCall = message.messageType === 'function_call' || (message.functionCalls && message.functionCalls.length > 0);
+
+  // Get function call status for styling
+  const getFunctionCallStatus = () => {
+    if (!message.functionCalls || message.functionCalls.length === 0) return null;
+    return message.functionCalls[0].status;
+  };
 
   // Enhanced content validation
   const content = React.useMemo(() => {
@@ -167,7 +174,7 @@ function MessageBlock({
   }, [message, messageIndex, totalMessages, content]);
 
   return (
-    <div className={`flex gap-3 max-w-full ${!isSameActor ? 'pt-4 mt-4 border-t border-gray-100 dark:border-gray-800' : ''} ${isThinking ? 'p-2 bg-purple-50 rounded-lg opacity-80 dark:bg-purple-900/10' : ''} ${isReActStatus ? 'p-2 bg-green-50 rounded-lg opacity-90 dark:bg-green-900/10 border-l-3 border-l-green-300' : ''} ${isStreamingError ? 'p-2 bg-red-50 rounded-lg dark:bg-red-900/10' : ''}`}>
+    <div className={`flex gap-3 max-w-full ${!isSameActor ? 'pt-4 mt-4 border-t border-gray-100 dark:border-gray-800' : ''} ${isThinking ? 'p-2 bg-purple-50 rounded-lg opacity-80 dark:bg-purple-900/10' : ''} ${isReActStatus ? 'p-2 bg-green-50 rounded-lg opacity-90 dark:bg-green-900/10 border-l-3 border-l-green-300' : ''} ${isStreamingError ? 'p-2 bg-red-50 rounded-lg dark:bg-red-900/10' : ''} ${isFunctionCall ? 'p-2 bg-blue-50 rounded-lg opacity-90 dark:bg-blue-900/10 border-l-3 border-l-blue-300' : ''}`}>
       {!isSameActor && (
         <div
           className="flex flex-shrink-0 justify-center items-center w-24 h-24 rounded-full shadow-md"
@@ -191,7 +198,7 @@ function MessageBlock({
 
       <div className="flex-1 min-w-0">
         <div>
-          <div className={`text-sm ${isThinking ? 'italic text-gray-600 dark:text-gray-300' : ''} ${isReActStatus ? 'text-gray-700 dark:text-gray-300' : ''} ${isStreamingError ? 'text-red-700 dark:text-red-300' : ''}`}>
+          <div className={`text-sm ${isThinking ? 'italic text-gray-600 dark:text-gray-300' : ''} ${isReActStatus ? 'text-gray-700 dark:text-gray-300' : ''} ${isStreamingError ? 'text-red-700 dark:text-red-300' : ''} ${isFunctionCall ? 'text-blue-700 dark:text-blue-300' : ''}`}>
             {isProgress ? (
               <div className="overflow-hidden h-1 bg-gray-200 rounded-full dark:bg-gray-700">
                 <div className="h-full bg-blue-500 animate-pulse" style={{ animation: 'progress-animation 2s linear infinite' }} />
@@ -220,6 +227,47 @@ function MessageBlock({
               <div className="flex gap-2 items-start">
                 <div className="text-lg">❌</div>
                 <div className="flex-1 text-red-700 dark:text-red-300">{content}</div>
+              </div>
+            ) : isFunctionCall && message.functionCalls ? (
+              <div className="space-y-2">
+                <div className="flex gap-2 items-start">
+                  <div className="text-lg">🔧</div>
+                  <div className="flex-1">
+                    <div className="font-medium text-blue-700 dark:text-blue-300">Function Call</div>
+                    <div className="text-sm text-gray-600 dark:text-gray-300">{content}</div>
+                  </div>
+                </div>
+                {message.functionCalls.map((call, index) => (
+                  <div key={call.id || index} className="p-2 ml-8 bg-white rounded border border-blue-200 dark:bg-gray-800 dark:border-blue-700">
+                    <div className="flex gap-2 items-center mb-1">
+                      <span className="font-mono text-sm font-medium text-blue-600 dark:text-blue-400">{call.name}</span>
+                      <span className={`px-2 py-1 text-xs rounded-full ${
+                        call.status === 'completed' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+                        call.status === 'failed' ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' :
+                        call.status === 'executing' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200' :
+                        'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
+                      }`}>
+                        {call.status}
+                      </span>
+                    </div>
+                    {call.arguments && Object.keys(call.arguments).length > 0 && (
+                      <div className="text-xs text-gray-600 dark:text-gray-400">
+                        <div className="mb-1 font-medium">Arguments:</div>
+                        <pre className="overflow-x-auto text-xs">
+                          {JSON.stringify(call.arguments, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                    {call.result && (
+                      <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                        <div className="mb-1 font-medium">Result:</div>
+                        <pre className="overflow-x-auto text-xs">
+                          {typeof call.result === 'object' ? JSON.stringify(call.result, null, 2) : String(call.result)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="max-w-none prose prose-sm dark:prose-invert">

@@ -42,10 +42,14 @@ import { PromptManager, PromptContext } from './prompts/PromptManager';
 import { ActionRegistry } from './actions/ActionRegistry';
 import { createLogger } from '@/utils/logger';
 import type { BaseChatModel as IBaseChatModel } from './llm/messages';
-import { PlannerAgent } from './agents/PlannerAgent';
-import { NavigatorAgent } from './agents/NavigatorAgent';
-import { ValidatorAgent } from './agents/ValidatorAgent';
-import { elementSelectionAgent, ElementSelectionTask } from './element-selection/ElementSelectionAgent';
+import { EnhancedNavigatorAgent } from './agents/EnhancedNavigatorAgent';
+import { MultiAgentSystem } from './agents/MultiAgentSystem';
+import { DynamicTaskPlanner, PlanningContext } from './agents/TaskPlanner';
+import { AgentMessage } from './agents/AgentTypes';
+import { TaskValidator } from './agents/TaskValidator';
+import { AgentConfigManager } from './agents/schemas/AgentConfig';
+import { elementSelectionAgent, ElementSelectionAgent, ElementSelectionTask } from './element-selection/ElementSelectionAgent';
+import { MultiAgentIntegration } from './agents/MultiAgentIntegration';
 import {
   EnhancedIntent,
   ExecutionPlan,
@@ -68,6 +72,7 @@ export interface AgentResponse {
   error?: string;
   sessionId: string;
   timestamp: number;
+  metadata?: Record<string, any>;
 }
 
 export interface Web3AgentConfig {
@@ -111,12 +116,16 @@ export class Web3Agent extends EventEmitter {
   private actionRegistry: ActionRegistry;
 
   // Multi-Agent System
-  private plannerAgent!: PlannerAgent;
-  private navigatorAgent!: NavigatorAgent;
-  private validatorAgent!: ValidatorAgent;
-  private elementSelectionAgent = elementSelectionAgent;
+  private multiAgentSystem!: MultiAgentSystem;
+  private elementSelectionAgent: ElementSelectionAgent;
   private multiStepExecutor: MultiStepExecutor;
+  private multiAgentIntegration!: MultiAgentIntegration;
   private coordinationEnabled: boolean = true;
+
+  // Individual agents
+  private plannerAgent!: DynamicTaskPlanner;
+  private navigatorAgent!: EnhancedNavigatorAgent;
+  private validatorAgent!: TaskValidator;
 
   private config: Web3AgentConfig;
   private state: Web3AgentState;
@@ -142,7 +151,7 @@ export class Web3Agent extends EventEmitter {
       dependenciesProvided: !!dependencies,
       constructorStack: new Error().stack
     });
-    
+
     this.context = context;
     this.llm = llm;
 
@@ -162,6 +171,9 @@ export class Web3Agent extends EventEmitter {
     this.promptManager = dependencies?.promptManager || new PromptManager();
     this.actionRegistry = dependencies?.actionRegistry || new ActionRegistry();
 
+    // Initialize Element Selection Agent
+    this.elementSelectionAgent = elementSelectionAgent;
+    
     // Initialize Multi-Agent System
     this.initializeMultiAgentSystem();
 
@@ -220,18 +232,20 @@ export class Web3Agent extends EventEmitter {
    */
   private initializeMultiAgentSystem(): void {
     try {
-      // Initialize individual agents with empty initial task
-      this.plannerAgent = new PlannerAgent('planner');
+      // Initialize multi-agent system
+      this.multiAgentSystem = new MultiAgentSystem(this.llm, this.state.currentContext);
 
-      this.navigatorAgent = new NavigatorAgent('navigator');
+      // Initialize multi-agent integration
+      this.multiAgentIntegration = new MultiAgentIntegration(this.llm, this.state.currentContext);
 
-      this.validatorAgent = new ValidatorAgent({
-        chatLLM: this.llm.getChatModel(),
-        task: '',
-        tabId: this.context.tabId || -1
-      });
+      // Initialize individual agents
+      this.plannerAgent = new DynamicTaskPlanner(this.llm);
+      this.navigatorAgent = new EnhancedNavigatorAgent(new AgentConfigManager('development'));
+      this.validatorAgent = new TaskValidator(this.llm);
 
       logger.info('Multi-agent system initialized successfully', {
+        multiAgentSystem: !!this.multiAgentSystem,
+        multiAgentIntegration: !!this.multiAgentIntegration,
         plannerAgent: !!this.plannerAgent,
         navigatorAgent: !!this.navigatorAgent,
         validatorAgent: !!this.validatorAgent,
@@ -617,12 +631,12 @@ export class Web3Agent extends EventEmitter {
 
       // Step 3: Navigator Agent executes the plan
       const navigatorResult = await this.executeNavigatorAgent(executionPlan);
-      
+
       // Step 4: Validator Agent validates results
       const validatorResult = await this.executeValidatorAgent(
         enhancedIntent,
         executionPlan,
-        navigatorResult.results || []
+        navigatorResult.data || []
       );
 
       // Step 5: Generate final response
@@ -630,7 +644,7 @@ export class Web3Agent extends EventEmitter {
         instruction,
         enhancedIntent,
         executionPlan,
-        navigatorResult.results || [],
+        navigatorResult.data || [],
         validatorResult.result
       );
 
@@ -638,7 +652,7 @@ export class Web3Agent extends EventEmitter {
       this.multiStepExecutor.isExecuting = false;
       this.multiStepExecutor.endTime = Date.now();
       this.multiStepExecutor.currentPlan = executionPlan;
-      this.multiStepExecutor.executionHistory = this.convertActionResultsToEnhancedActions(navigatorResult.results || []);
+      this.multiStepExecutor.executionHistory = this.convertActionResultsToEnhancedActions(navigatorResult.data || []);
 
       // Add to coordination events
       this.recordCoordinationEvent('task_complete', {
@@ -654,7 +668,7 @@ export class Web3Agent extends EventEmitter {
       await this.storeConversationStep(
         new HumanMessage(instruction),
         assistantMessage,
-        this.convertActionResultsToActionSteps(navigatorResult.results || [])
+        this.convertActionResultsToActionSteps(navigatorResult.data || [])
       );
 
       this.state.lastActivity = Date.now();
@@ -662,14 +676,14 @@ export class Web3Agent extends EventEmitter {
       return {
         success: response.success,
         message: response.message,
-        actions: this.convertActionResultsToActionSteps(navigatorResult.results || []),
+        actions: this.convertActionResultsToActionSteps(navigatorResult.data || []),
         sessionId: this.state.sessionId,
         timestamp: Date.now()
       };
 
     } catch (error) {
       logger.error('Multi-agent coordination failed:', error);
-      
+
       // Fallback to traditional processing
       logger.info('Falling back to traditional processing');
       return await this.processWithTraditionalMethod(instruction, taskAnalysis);
@@ -681,19 +695,19 @@ export class Web3Agent extends EventEmitter {
    */
   private getRequiredCapabilities(taskAnalysis: TaskAnalysis): string[] {
     const capabilities: string[] = [];
-    
+
     if (taskAnalysis.requiresBrowserAutomation) {
       capabilities.push('browser_automation');
     }
-    
+
     if (taskAnalysis.requiresWeb3) {
       capabilities.push('web3');
     }
-    
+
     if (taskAnalysis.taskType === 'automation') {
       capabilities.push('automation');
     }
-    
+
     return capabilities;
   }
 
@@ -704,12 +718,73 @@ export class Web3Agent extends EventEmitter {
     if (taskAnalysis.complexity === 'high' || taskAnalysis.requiresWeb3) {
       return 'HIGH';
     }
-    
+
     if (taskAnalysis.requiresBrowserAutomation) {
       return 'MEDIUM';
     }
-    
+
     return 'LOW';
+  }
+
+  /**
+   * Convert AgentTaskPlan to ExecutionPlan
+   */
+  private convertToExecutionPlan(agentTaskPlan: any): ExecutionPlan {
+    const enhancedActions: EnhancedAction[] = agentTaskPlan.steps.map((step: any, index: number) => ({
+      id: step.id || `action_${index}`,
+      name: step.description || `Step ${index + 1}`,
+      description: step.description || '',
+      status: 'pending' as const,
+      type: step.type,
+      params: step.parameters || {},
+      dependencies: step.dependencies || [],
+      riskLevel: 'LOW' as const,
+      agentType: this.getAgentTypeForStep(step.type),
+      priority: agentTaskPlan.priority === 'high' ? 1 : (agentTaskPlan.priority === 'low' ? 3 : 2),
+      retries: 0,
+      maxRetries: step.retries || 3,
+      timeout: step.timeout || 10000,
+      fallbackActions: [],
+      contextRequirements: [],
+    }));
+
+    return {
+      id: agentTaskPlan.id,
+      name: agentTaskPlan.instruction || 'Task Plan',
+      description: agentTaskPlan.reasoning || 'Generated task plan',
+      actions: enhancedActions,
+      dependencies: [],
+      estimatedDuration: agentTaskPlan.estimatedDuration || 30000,
+      riskLevel: 'LOW' as const,
+      requiresConfirmation: false,
+      metadata: {
+        originalPlan: agentTaskPlan,
+        confidence: agentTaskPlan.confidence || 0.8,
+        reasoning: agentTaskPlan.reasoning || '',
+      },
+    };
+  }
+
+  /**
+   * Get agent type for step type
+   */
+  private getAgentTypeForStep(stepType: string): 'planner' | 'navigator' | 'validator' | 'web3' | 'browser' {
+    switch (stepType) {
+      case 'navigate':
+      case 'click':
+      case 'input':
+      case 'scroll':
+      case 'highlight':
+      case 'focus':
+        return 'navigator';
+      case 'validate':
+      case 'extract':
+        return 'validator';
+      case 'wait':
+        return 'browser';
+      default:
+        return 'navigator';
+    }
   }
 
   /**
@@ -719,18 +794,28 @@ export class Web3Agent extends EventEmitter {
     try {
       this.emitCoordinationEvent('planner_start', { intent });
 
-      const result = await this.plannerAgent.createExecutionPlan(intent, {
-        id: `task_${Date.now()}`,
-        intentId: intent.id,
-        taskType: 'automation',
-        complexity: 'medium',
-        estimatedDuration: 30000,
-        requiredCapabilities: ['browser_automation'],
-        riskLevel: 'LOW'
-      }, this.state.currentContext);
+      const planningContext: PlanningContext = {
+        instruction: intent.parameters.instruction,
+        currentUrl: '', // Will be set during execution
+        previousSteps: [],
+        failedSteps: [],
+        currentStep: 0,
+        maxSteps: 10,
+        context: this.state.currentContext,
+        executionHistory: [],
+      };
 
-      this.emitCoordinationEvent('planner_complete', { result });
-      return result;
+      const plannerResult = await this.plannerAgent.createPlan(
+        intent.parameters.instruction,
+        planningContext,
+        'adaptive'
+      );
+
+      // Convert AgentTaskPlan to ExecutionPlan
+      const executionPlan = this.convertToExecutionPlan(plannerResult.plan);
+
+      this.emitCoordinationEvent('planner_complete', { result: executionPlan });
+      return executionPlan;
     } catch (error) {
       logger.error('Planner agent execution failed:', error);
       this.emitCoordinationEvent('planner_error', { error });
@@ -743,12 +828,23 @@ export class Web3Agent extends EventEmitter {
    */
   private async executeNavigatorAgent(plan: ExecutionPlan) {
     try {
-      // Create a new navigator agent with the specific task
-      const navigatorAgent = new NavigatorAgent('navigator', this.browserAutomationController);
-      
       this.emitCoordinationEvent('navigator_start', { plan });
 
-      const result = await navigatorAgent.executePlan(plan, this.state.currentContext);
+      // Convert ExecutionPlan actions to navigator-compatible format
+      const navigatorMessage: AgentMessage = {
+        id: `navigator_${Date.now()}`,
+        from: 'web3-agent',
+        to: 'enhanced-navigator',
+        type: 'request',
+        content: {
+          action: 'execute_plan',
+          plan: plan.actions,
+          context: this.state.currentContext
+        },
+        timestamp: Date.now(),
+      };
+
+      const result = await this.navigatorAgent.execute(navigatorMessage);
 
       this.emitCoordinationEvent('navigator_complete', { result });
       return result;
@@ -768,19 +864,28 @@ export class Web3Agent extends EventEmitter {
     actionResults: ActionResult[]
   ) {
     try {
-      // Create a new validator agent with the specific task
-      const validatorAgent = new ValidatorAgent({
-        chatLLM: this.llm.getChatModel(),
-        task: `Validate ${intent.action}`,
-        tabId: this.context.tabId || -1
-      });
-      
       this.emitCoordinationEvent('validator_start', { intent, plan });
 
-      const result = await validatorAgent.execute();
+      const validationContext = {
+        originalInstruction: intent.parameters.instruction,
+        executedSteps: plan.actions?.map(step => step.description) || [],
+        currentUrl: '', // URL not available in AgentContext
+        executionResults: actionResults.map(result => ({
+          step: result.metadata?.description || 'Unknown step',
+          success: result.success,
+          result: result.data,
+          timestamp: Date.now()
+        })),
+        context: this.state.currentContext
+      };
+
+      const result = await this.validatorAgent.validateTask(
+        intent.parameters.instruction,
+        validationContext
+      );
 
       this.emitCoordinationEvent('validator_complete', { result });
-      return result;
+      return { result };
     } catch (error) {
       logger.error('Validator agent execution failed:', error);
       this.emitCoordinationEvent('validator_error', { error });
@@ -791,7 +896,7 @@ export class Web3Agent extends EventEmitter {
   /**
    * Execute Element Selection Agent
    */
-  private async executeElementSelectionAgent(task: ElementSelectionTask) {
+  private async executeElementSelectionAgentInternal(task: ElementSelectionTask) {
     try {
       this.emitCoordinationEvent('element_selection_start', { task });
       const result = await this.elementSelectionAgent.executeTask(
@@ -820,7 +925,7 @@ export class Web3Agent extends EventEmitter {
     validationResult?: any
   ): Promise<{ success: boolean; message: string }> {
     try {
-      const success = actionResults.every(r => r.success) && 
+      const success = actionResults.every(r => r.success) &&
                      validationResult?.result?.isValid;
 
       if (success) {
@@ -829,9 +934,9 @@ export class Web3Agent extends EventEmitter {
           message: `✅ Successfully completed ${intent.action} using multi-agent coordination.\n\n` +
                    `**Plan:** ${plan.name}\n` +
                    `**Actions:** ${actionResults.length} executed\n` +
-                   `**Validation:** ${validationResult?.result?.confidence ? Math.round(validationResult.result.confidence * 100) + '% confidence' : 'Completed'}\n\n` +
-                   validationResult?.result?.recommendations?.length ? 
-                   `**Recommendations:** ${validationResult.result.recommendations.join(', ')}` : ''
+                   `**Validation:** ${validationResult?.confidence ? Math.round(validationResult.confidence * 100) + '% confidence' : 'Completed'}\n\n` +
+                   validationResult?.suggestions?.length ?
+                   `**Recommendations:** ${validationResult.suggestions.join(', ')}` : ''
         };
       } else {
         const failedActions = actionResults.filter(r => !r.success).length;
@@ -840,9 +945,9 @@ export class Web3Agent extends EventEmitter {
           message: `⚠️ Multi-agent execution partially completed.\n\n` +
                    `**Plan:** ${plan.name}\n` +
                    `**Failed Actions:** ${failedActions}/${actionResults.length}\n` +
-                   `**Validation:** ${validationResult?.result?.isValid ? 'Passed' : 'Failed'}\n\n` +
-                   validationResult?.result?.recommendations?.length ?
-                   `**Recommendations:** ${validationResult.result.recommendations.join(', ')}` : ''
+                   `**Validation:** ${validationResult?.isValid ? 'Passed' : 'Failed'}\n\n` +
+                   validationResult?.suggestions?.length ?
+                   `**Recommendations:** ${validationResult.suggestions.join(', ')}` : ''
         };
       }
     } catch (error) {
@@ -861,7 +966,7 @@ export class Web3Agent extends EventEmitter {
     taskAnalysis: TaskAnalysis
   ): Promise<AgentResponse> {
     logger.info('Using traditional processing method');
-    
+
     // This would call the original processing logic
     // For now, return a simple response
     return {
@@ -1442,6 +1547,9 @@ export class Web3Agent extends EventEmitter {
           timestamp: Date.now(),
         });
       }
+      
+      // Store initial thinking message
+      await this.storeReActStatusMessage('Analyzing your request...');
 
       // Step 1: Extract intent from user instruction
       const intent = await this.intentRecognizer.extractIntent(
@@ -1464,6 +1572,9 @@ export class Web3Agent extends EventEmitter {
           timestamp: Date.now(),
         });
       }
+      
+      // Store intent recognition message
+      await this.storeReActStatusMessage(`Intent recognized: ${intent.action}`);
 
       // Step 2: Optional ReAct planning phase (create plan first)
       let reactPlan: ActionPlan | undefined;
@@ -1492,7 +1603,7 @@ export class Web3Agent extends EventEmitter {
           }
 
           reactPlan = await this.actionPlanner.createPlan(intent);
-          
+
           // Send thinking message about the plan
           if (onThinking && reactPlan) {
             onThinking({
@@ -1528,7 +1639,7 @@ export class Web3Agent extends EventEmitter {
       // Step 4: Generate LLM response with function calling (ReAct loop)
       let llmResponse: LLMResponse;
       const accumulatedActions: ActionStep[] = [];
-      
+
       // Send thinking message about starting function calling
       if (onThinking) {
         onThinking({
@@ -1550,6 +1661,9 @@ export class Web3Agent extends EventEmitter {
           timestamp: Date.now(),
         });
       }
+      
+      // Store tool preparation message
+      await this.storeReActStatusMessage('Preparing to execute tools...');
 
       // First turn: ask for tool calls
       // Ensure provider receives tool schemas
@@ -1573,7 +1687,7 @@ export class Web3Agent extends EventEmitter {
 
       // Extract function calls from LLM response (handles both OpenAI tool_calls and internal functionCalls formats)
       const extractedFunctionCalls = this.extractFunctionCallsFromResponse(llmResponse);
-      
+
       // If model requested tool calls, execute then send tool results back for a second turn
       if (extractedFunctionCalls && extractedFunctionCalls.length > 0) {
         // Send thinking message about executing tools
@@ -1600,6 +1714,10 @@ export class Web3Agent extends EventEmitter {
             timestamp: Date.now(),
           });
         }
+        
+        // Store tool execution message
+        const toolNames = extractedFunctionCalls.map(fc => fc.name).join(', ');
+        await this.storeReActStatusMessage(`Executing tools: ${toolNames}`, `Running ${toolNames}`, false, true);
 
         // Record the assistant tool_calls message to keep role structure consistent
         const assistantToolCallMsg = new AIMessage('', {
@@ -1733,7 +1851,7 @@ export class Web3Agent extends EventEmitter {
 
     // Convert OpenAI tool_calls format to internal FunctionCall format if needed
     const normalizedFunctionCalls = this.normalizeFunctionCalls(functionCalls);
-    
+
     logger.info('executeFunctionCalls starting', {
       count: normalizedFunctionCalls.length,
       functionNames: normalizedFunctionCalls.map(fc => fc.name),
@@ -1785,87 +1903,122 @@ export class Web3Agent extends EventEmitter {
           totalSteps: functionCalls.length,
         });
 
+        // Store pending tool call message
+        await this.storeToolCallMessage(functionCall, 'pending');
+
         // Check if tool exists
         const toolExists = toolRegistry.getTool(functionCall.name);
         if (!toolExists) {
           logger.error(`[${stepExecutionId}] Tool not found: ${functionCall.name}`, {
             availableTools: Array.from(toolRegistry.getAllTools()).map(t => t.name),
           });
+          
+          // Store failed tool call message
+          await this.storeToolCallMessage(functionCall, 'failed');
           throw new Error(`Tool not found: ${functionCall.name}`);
         }
 
-        logger.info(`[${stepExecutionId}] Tool found, validating parameters`, {
-          toolName: functionCall.name,
-          toolCategory: toolExists.category,
-          toolRiskLevel: toolExists.riskLevel,
-        });
-
-        // Validate parameters
-        const validation = toolRegistry.validateParameters(
-          functionCall.name,
-          functionCall.arguments
-        );
-        if (!validation.valid) {
-          logger.warn(
-            `[${stepExecutionId}] Parameter validation failed for ${functionCall.name}:`,
-            {
-              errors: validation.errors,
-              receivedParams: functionCall.arguments,
-              requiredParams: toolExists.required,
-            }
-          );
-          throw new Error(`Parameter validation failed: ${validation.errors.join(', ')}`);
+        // Check and recover permissions if tool requires them
+        if (toolExists.requiredPermissions && toolExists.requiredPermissions.length > 0) {
+          const permissionCheck = await this.checkAndRecoverPermissions(toolExists.requiredPermissions);
+          
+          if (!permissionCheck.hasAllPermissions) {
+            const errorMessage = this.createPermissionErrorMessage(permissionCheck.missingPermissions);
+            logger.error(`[${stepExecutionId}] Permission check failed for ${functionCall.name}`, {
+              missingPermissions: permissionCheck.missingPermissions,
+              recoverySuccessful: permissionCheck.recoverySuccessful,
+              error: permissionCheck.error
+            });
+            
+            // Store failed tool call message with permission error
+            await this.storeToolCallMessage(functionCall, 'failed', {
+              success: false,
+              error: errorMessage,
+              permissionError: true
+            });
+            
+            throw new Error(`Permission required: ${errorMessage}`);
+          }
         }
 
-        logger.info(`[${stepExecutionId}] Parameter validation successful, executing tool`);
+        let result;
+        try {
+          logger.info(`[${stepExecutionId}] Tool found, validating parameters`, {
+            toolName: functionCall.name,
+            toolCategory: toolExists.category,
+            toolRiskLevel: toolExists.riskLevel,
+          });
 
-        // 🚨🚨🚨 CRITICAL DEBUGGING: Check parameters right before execution
-        console.log('🚨🚨🚨 RIGHT BEFORE TOOL REGISTRY EXECUTION:', {
-          toolName: functionCall.name,
-          arguments: functionCall.arguments,
-          argumentsType: typeof functionCall.arguments,
-          argumentsKeys: Object.keys(functionCall.arguments),
-          hasUrl: 'url' in functionCall.arguments,
-          urlValue: functionCall.arguments.url,
-          urlType: typeof functionCall.arguments.url,
-          isUrlValid: functionCall.arguments.url && 
-                     typeof functionCall.arguments.url === 'string' && 
-                     functionCall.arguments.url.startsWith('http'),
-          functionCallDetails: JSON.stringify(functionCall, null, 2),
-        });
+          // Validate parameters
+          const validation = toolRegistry.validateParameters(
+            functionCall.name,
+            functionCall.arguments
+          );
+          if (!validation.valid) {
+            logger.warn(
+              `[${stepExecutionId}] Parameter validation failed for ${functionCall.name}:`,
+              {
+                errors: validation.errors,
+                receivedParams: functionCall.arguments,
+                requiredParams: toolExists.required,
+              }
+            );
+            throw new Error(`Parameter validation failed: ${validation.errors.join(', ')}`);
+          }
 
-        // Execute the function call
-        const result = await toolRegistry.executeTool(
-          functionCall.name,
-          functionCall.arguments
-        );
-        
-        const stepExecutionTime = Date.now() - stepStartTime;
-        logger.info(`[${stepExecutionId}] Tool execution completed`, {
-          toolName: functionCall.name,
-          success: result.success,
-          hasResult: !!result.result,
-          executionTime: stepExecutionTime,
-          resultSummary: result.result ? JSON.stringify(result.result).substring(0, 200) : undefined,
-          error: result.error,
-        });
+          logger.info(`[${stepExecutionId}] Parameter validation successful, executing tool`);
 
-        // Create action step
-        const actionStep: ActionStep = {
-          id: `func_${functionCall.name}_${Date.now()}`,
-          name: `Execute ${functionCall.name}`,
-          type: functionCall.name,
-          description: `Executed ${functionCall.name}`,
-          params: functionCall.arguments,
-          status: 'completed',
-          result,
-          dependencies: [],
-          riskLevel: this.getFunctionRiskLevel(functionCall.name),
-        };
+          // Enhanced tool execution logging
+          logger.info(`[${stepExecutionId}] Starting tool execution`, {
+            toolName: functionCall.name,
+            toolCategory: toolExists.category,
+            toolRiskLevel: toolExists.riskLevel,
+            params: functionCall.arguments,
+            paramCount: Object.keys(functionCall.arguments).length,
+          });
 
-        executedActions.push(actionStep);
-        logger.info(`[${stepExecutionId}] Function call executed successfully: ${functionCall.name}`);
-      } catch (error) {
+          // Store executing tool call message
+          await this.storeToolCallMessage(functionCall, 'executing');
+
+          // Execute the function call
+          result = await toolRegistry.executeTool(
+            functionCall.name,
+            functionCall.arguments
+          );
+
+          const stepExecutionTime = Date.now() - stepStartTime;
+          logger.info(`[${stepExecutionId}] Tool execution completed`, {
+            toolName: functionCall.name,
+            success: result.success,
+            hasData: !!result.data,
+            executionTime: stepExecutionTime,
+            dataSummary: result.data ? JSON.stringify(result.data).substring(0, 200) : undefined,
+            error: result.error,
+            action: result.action,
+            timestamp: result.timestamp,
+            tabId: result.tabId,
+            tabUrl: result.tabUrl,
+          });
+
+          // Store completed tool call message
+          await this.storeToolCallMessage(functionCall, result.success ? 'completed' : 'failed', result);
+
+          // Create action step
+          const actionStep: ActionStep = {
+            id: `func_${functionCall.name}_${Date.now()}`,
+            name: `Execute ${functionCall.name}`,
+            type: functionCall.name,
+            description: `Executed ${functionCall.name}`,
+            params: functionCall.arguments,
+            status: 'completed',
+            result,
+            dependencies: [],
+            riskLevel: this.getFunctionRiskLevel(functionCall.name),
+          };
+
+          executedActions.push(actionStep);
+          logger.info(`[${stepExecutionId}] Function call executed successfully: ${functionCall.name}`);
+        } catch (error) {
         const stepExecutionTime = Date.now() - stepStartTime;
         logger.error(
           `[${stepExecutionId}] Function call execution failed: ${functionCall.name}`,
@@ -1875,8 +2028,17 @@ export class Web3Agent extends EventEmitter {
             arguments: functionCall.arguments,
             executionTime: stepExecutionTime,
             stepIndex: i,
+            toolCategory: toolExists.category,
+            toolRiskLevel: toolExists.riskLevel,
+            paramCount: Object.keys(functionCall.arguments).length,
           }
         );
+        
+        // Store failed tool call message
+        await this.storeToolCallMessage(functionCall, 'failed', {
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        });
 
         // Create failed action step
         const actionStep: ActionStep = {
@@ -1889,6 +2051,30 @@ export class Web3Agent extends EventEmitter {
           result: {
             success: false,
             error: error instanceof Error ? error.message : String(error),
+          },
+          dependencies: [],
+          riskLevel: this.getFunctionRiskLevel(functionCall.name),
+        };
+
+        executedActions.push(actionStep);
+        }
+      } catch (outerError) {
+        logger.error(`[${stepExecutionId}] Unexpected error in function call execution`, {
+          error: outerError instanceof Error ? outerError.message : String(outerError),
+          functionName: functionCall.name,
+        });
+        
+        // Create failed action step for unexpected errors
+        const actionStep: ActionStep = {
+          id: `func_${functionCall.name}_${Date.now()}`,
+          name: `Execute ${functionCall.name}`,
+          type: functionCall.name,
+          description: `Unexpected error executing ${functionCall.name}`,
+          params: functionCall.arguments,
+          status: 'failed',
+          result: {
+            success: false,
+            error: outerError instanceof Error ? outerError.message : String(outerError),
           },
           dependencies: [],
           riskLevel: this.getFunctionRiskLevel(functionCall.name),
@@ -1916,6 +2102,37 @@ export class Web3Agent extends EventEmitter {
     const executedActions: ActionStep[] = [];
 
     try {
+      // Pre-check permissions for all function calls
+      for (const functionCall of functionCalls) {
+        const toolExists = toolRegistry.getTool(functionCall.name);
+        if (!toolExists) {
+          logger.error(`Tool not found for parallel execution: ${functionCall.name}`);
+          throw new Error(`Tool not found: ${functionCall.name}`);
+        }
+
+        // Check permissions if required
+        if (toolExists.requiredPermissions && toolExists.requiredPermissions.length > 0) {
+          const permissionCheck = await this.checkAndRecoverPermissions(toolExists.requiredPermissions);
+          
+          if (!permissionCheck.hasAllPermissions) {
+            const errorMessage = this.createPermissionErrorMessage(permissionCheck.missingPermissions);
+            logger.error(`Permission check failed for parallel execution of ${functionCall.name}`, {
+              missingPermissions: permissionCheck.missingPermissions,
+              recoverySuccessful: permissionCheck.recoverySuccessful
+            });
+            
+            // Store failed tool call message with permission error
+            await this.storeToolCallMessage(functionCall, 'failed', {
+              success: false,
+              error: errorMessage,
+              permissionError: true
+            });
+            
+            throw new Error(`Permission required for ${functionCall.name}: ${errorMessage}`);
+          }
+        }
+      }
+
       // Create parallel executor with optimized settings
       const executor = createExecutionBatch(functionCalls, {
         maxConcurrency: 3,
@@ -2020,7 +2237,7 @@ export class Web3Agent extends EventEmitter {
       const functionCalls: FunctionCall[] = rawResponse.tool_calls.map((toolCall: any) => {
         try {
           let parsedArguments: Record<string, any> = {};
-          
+
           if (toolCall.function && toolCall.function.arguments) {
             const rawArgs = toolCall.function.arguments;
             logger.info('Processing OpenAI tool call arguments', {
@@ -2032,7 +2249,7 @@ export class Web3Agent extends EventEmitter {
               rawArgsLength: rawArgs.length,
               rawArgsPreview: rawArgs.length > 100 ? rawArgs.substring(0, 100) + '...' : rawArgs,
             });
-            
+
             if (typeof rawArgs === 'string') {
               // Handle various edge cases in JSON parsing
               if (rawArgs.trim() === '') {
@@ -2047,7 +2264,7 @@ export class Web3Agent extends EventEmitter {
                   fullToolCall: toolCall,
                   context: 'URL parameter corruption detected at extraction phase',
                 });
-                
+
                 // For navigateToUrl, try to extract URL from context
                 if (toolCall.function.name === 'navigateToUrl') {
                   // Look for URL patterns in the broader context
@@ -2089,18 +2306,18 @@ export class Web3Agent extends EventEmitter {
                     rawArgs,
                     rawArgsLength: rawArgs.length,
                   });
-                  
+
                   // Try to fix common JSON issues
                   let fixedArgs = rawArgs;
-                  
+
                   // Strategy 1: Remove trailing commas
                   fixedArgs = fixedArgs.replace(/,\s*([}\]])/g, '$1');
-                  
+
                   // Strategy 2: Fix unescaped quotes in URLs
                   fixedArgs = fixedArgs.replace(/"url":\s*"([^"]*)"/g, (match, url) => {
                     return `"url": "${url.replace(/"/g, '\\"')}"`;
                   });
-                  
+
                   // Strategy 3: Try to extract URL if it contains obvious patterns
                   const urlMatch = rawArgs.match(/https?:\/\/[^\s"}]+/);
                   if (urlMatch && toolCall.function.name === 'navigateToUrl') {
@@ -2144,7 +2361,7 @@ export class Web3Agent extends EventEmitter {
             arguments: parsedArguments,
             id: toolCall.id || `call_${Date.now()}`,
           };
-          
+
           // 🚨🚨🚨 CRITICAL DEBUGGING: Check final parsed arguments before returning
           console.log('🚨🚨🚨 FINAL FUNCTION CALL DEBUG:', {
             functionName: functionCall.name,
@@ -2154,14 +2371,14 @@ export class Web3Agent extends EventEmitter {
             hasUrl: 'url' in functionCall.arguments,
             urlValue: functionCall.arguments.url,
             urlType: typeof functionCall.arguments.url,
-            isUrlValid: functionCall.arguments.url && 
-                       typeof functionCall.arguments.url === 'string' && 
+            isUrlValid: functionCall.arguments.url &&
+                       typeof functionCall.arguments.url === 'string' &&
                        functionCall.arguments.url.startsWith('http'),
             rawToolCall: toolCall,
             parsedArguments: parsedArguments,
             fullFunctionCall: JSON.stringify(functionCall, null, 2),
           });
-          
+
           // Enhanced debugging for URL parameters in final function call
           if (functionCall.name === 'navigateToUrl') {
             logger.info('FINAL FUNCTION CALL CREATED - navigateToUrl', {
@@ -2174,14 +2391,14 @@ export class Web3Agent extends EventEmitter {
               fullFunctionCall: JSON.stringify(functionCall),
             });
           }
-          
+
           return functionCall;
         } catch (error) {
           logger.error('Failed to parse OpenAI tool call', {
             error: error instanceof Error ? error.message : String(error),
             toolCall,
           });
-          
+
           return {
             name: toolCall.function?.name || 'unknown',
             arguments: {},
@@ -2394,7 +2611,7 @@ export class Web3Agent extends EventEmitter {
    * Public method to execute element selection tasks
    */
   public async executeElementSelection(task: ElementSelectionTask) {
-    return await this.executeElementSelectionAgent(task);
+    return await this.executeElementSelectionAgentInternal(task);
   }
 
   /**
@@ -2495,6 +2712,237 @@ export class Web3Agent extends EventEmitter {
     }
   }
 
+  /**
+   * Store ReAct thinking status message in chat history
+   */
+  private async storeReActStatusMessage(
+    thinkingContent: string,
+    currentAction?: string,
+    isThinking: boolean = true,
+    isActing: boolean = false
+  ): Promise<void> {
+    try {
+      const uiActors = (await import('@/ui/views/Agent/types/message')).Actors;
+      await chatHistoryStore.addMessage(this.state.sessionId, {
+        actor: uiActors.ASSISTANT,
+        content: thinkingContent,
+        timestamp: Date.now(),
+        messageType: 'react_status',
+        reactStatus: {
+          isThinking,
+          isActing,
+          currentStep: this.state.executionHistory.length + 1,
+          maxSteps: 10, // Default max steps
+          currentAction,
+          thinkingContent,
+          isActive: true,
+          timestamp: Date.now()
+        }
+      });
+    } catch (error) {
+      console.error('Error storing ReAct status message:', error);
+    }
+  }
+
+  /**
+   * Store tool call execution message in chat history
+   */
+  private async storeToolCallMessage(
+    functionCall: FunctionCall,
+    status: 'pending' | 'executing' | 'completed' | 'failed',
+    result?: any
+  ): Promise<void> {
+    try {
+      const uiActors = (await import('@/ui/views/Agent/types/message')).Actors;
+      const toolMessage: any = {
+        actor: uiActors.ASSISTANT,
+        content: `${status === 'pending' ? 'Preparing to execute' : status === 'executing' ? 'Executing' : status === 'completed' ? 'Completed' : 'Failed'} tool: ${functionCall.name}`,
+        timestamp: Date.now(),
+        messageType: 'function_call',
+        functionCalls: [{
+          id: functionCall.id,
+          name: functionCall.name,
+          arguments: functionCall.arguments,
+          status,
+          timestamp: Date.now()
+        }]
+      };
+
+      if (result !== undefined) {
+        toolMessage.functionCalls[0].result = result;
+      }
+
+      await chatHistoryStore.addMessage(this.state.sessionId, toolMessage);
+    } catch (error) {
+      console.error('Error storing tool call message:', error);
+    }
+  }
+
+  /**
+   * Store thinking process message in chat history
+   */
+  private async storeThinkingMessage(content: string): Promise<void> {
+    try {
+      const uiActors = (await import('@/ui/views/Agent/types/message')).Actors;
+      await chatHistoryStore.addMessage(this.state.sessionId, {
+        actor: uiActors.ASSISTANT,
+        content,
+        timestamp: Date.now(),
+        messageType: 'thinking'
+      });
+    } catch (error) {
+      console.error('Error storing thinking message:', error);
+    }
+  }
+
+  /**
+   * Check Chrome extension permissions and handle recovery
+   */
+  private async checkAndRecoverPermissions(requiredPermissions: string[]): Promise<{
+    hasAllPermissions: boolean;
+    missingPermissions: string[];
+    recoveryAttempted: boolean;
+    recoverySuccessful: boolean;
+    error?: string;
+  }> {
+    try {
+      // Get current permissions
+      const currentPermissions = await chrome.permissions.getAll();
+      
+      // Check which permissions are missing
+      const missingPermissions = requiredPermissions.filter(permission => {
+        return !currentPermissions.permissions?.includes(permission as any);
+      });
+
+      if (missingPermissions.length === 0) {
+        return {
+          hasAllPermissions: true,
+          missingPermissions: [],
+          recoveryAttempted: false,
+          recoverySuccessful: false
+        };
+      }
+
+      logger.warn('Missing required permissions', {
+        required: requiredPermissions,
+        missing: missingPermissions,
+        current: currentPermissions.permissions
+      });
+
+      // Attempt to recover permissions
+      const recoveryResult = await this.attemptPermissionRecovery(missingPermissions);
+
+      return {
+        hasAllPermissions: recoveryResult.success,
+        missingPermissions: recoveryResult.success ? [] : missingPermissions,
+        recoveryAttempted: true,
+        recoverySuccessful: recoveryResult.success,
+        error: recoveryResult.error
+      };
+
+    } catch (error) {
+      logger.error('Failed to check permissions', error);
+      return {
+        hasAllPermissions: false,
+        missingPermissions: requiredPermissions,
+        recoveryAttempted: false,
+        recoverySuccessful: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  /**
+   * Attempt to recover missing permissions
+   */
+  private async attemptPermissionRecovery(missingPermissions: string[]): Promise<{
+    success: boolean;
+    error?: string;
+  }> {
+    try {
+      // Store permission recovery message
+      await this.storeReActStatusMessage(
+        `Attempting to recover missing permissions: ${missingPermissions.join(', ')}`,
+        'Requesting permissions...'
+      );
+
+      // Try to request optional permissions
+      const requestResult = await chrome.permissions.request({
+        permissions: missingPermissions as any
+      });
+
+      if (requestResult) {
+        logger.info('Permission recovery successful', { recoveredPermissions: missingPermissions });
+        await this.storeReActStatusMessage(
+          'Permission recovery successful!',
+          'All required permissions granted'
+        );
+        return { success: true };
+      } else {
+        logger.warn('Permission recovery failed - user denied request');
+        await this.storeReActStatusMessage(
+          'Permission recovery failed',
+          'User denied permission request. Some features may not work properly.',
+          false,
+          false
+        );
+        return { 
+          success: false, 
+          error: 'User denied permission request. Please grant the required permissions in extension settings.' 
+        };
+      }
+
+    } catch (error) {
+      logger.error('Permission recovery failed with error', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      await this.storeReActStatusMessage(
+        'Permission recovery failed',
+        `Unable to recover permissions: ${errorMessage}`,
+        false,
+        false
+      );
+      
+      return { 
+        success: false, 
+        error: `Failed to recover permissions: ${errorMessage}. Please check extension permissions.` 
+      };
+    }
+  }
+
+  /**
+   * Get user-friendly permission descriptions
+   */
+  private getPermissionDescription(permission: string): string {
+    const descriptions: Record<string, string> = {
+      'activeTab': 'Access to the current tab for interaction',
+      'scripting': 'Ability to execute scripts on web pages',
+      'tabs': 'Access to browser tabs for navigation',
+      'webNavigation': 'Monitor web navigation for automation',
+      'debugger': 'Debug access for advanced automation',
+      'storage': 'Local storage for data persistence',
+      'unlimitedStorage': 'Unlimited local storage capacity',
+      'alarms': 'Schedule alarms for timed operations',
+      'notifications': 'Display notifications for important events',
+      'offscreen': 'Offscreen document processing',
+      'contextMenus': 'Context menu integration',
+      'sidePanel': 'Side panel access for enhanced UI',
+      'host_permissions': 'Access to all websites for automation'
+    };
+    return descriptions[permission] || `${permission} permission`;
+  }
+
+  /**
+   * Create user-friendly permission error message
+   */
+  private createPermissionErrorMessage(missingPermissions: string[]): string {
+    const permissionList = missingPermissions
+      .map(perm => `• ${this.getPermissionDescription(perm)}`)
+      .join('\n');
+
+    return `The following permissions are required for this feature to work properly:\n\n${permissionList}\n\nPlease grant these permissions in the extension settings or try again.`;
+  }
+
   private async storeActionExecution(action: ActionStep): Promise<void> {
     try {
       await chatHistoryStore.addAgentStep(this.state.sessionId, {
@@ -2546,8 +2994,71 @@ export class Web3Agent extends EventEmitter {
       logger.info('Handling browser automation task', {
         instruction,
         taskType: taskAnalysis.taskType,
+        requiresMultiAgent: taskAnalysis.requiresBrowserAutomation && taskAnalysis.complexity === 'high',
       });
 
+      // Use multi-agent system for complex tasks requiring browser automation
+      if (taskAnalysis.requiresBrowserAutomation && taskAnalysis.complexity === 'high' && this.multiAgentIntegration) {
+        logger.info('Using multi-agent system for complex automation task');
+
+        const multiAgentResult = await this.multiAgentIntegration.executeTask(
+          instruction,
+          taskAnalysis,
+          false, // Streaming handled separately
+          undefined
+        );
+
+        // Add user message to conversation history
+        const userMessage = new HumanMessage(instruction);
+        this.state.conversationHistory.push(userMessage);
+
+        // Add assistant response to conversation history
+        const assistantMessage = new AIMessage(multiAgentResult.message);
+        this.state.conversationHistory.push(assistantMessage);
+
+        // Convert ActionStep types for compatibility
+        const convertedActions = multiAgentResult.actions.map((action) => ({
+          id: action.id,
+          name: action.type || action.description,
+          description: action.description,
+          status: (action.status || 'pending') as
+            | 'pending'
+            | 'in_progress'
+            | 'completed'
+            | 'failed',
+          type: action.type,
+          params: action.params,
+          dependencies: action.dependencies,
+        }));
+
+        // Store in chat history
+        await this.storeConversationStep(
+          userMessage,
+          assistantMessage,
+          convertedActions
+        );
+
+        this.state.lastActivity = Date.now();
+
+        return {
+          success: multiAgentResult.success,
+          message: multiAgentResult.message,
+          sessionId: this.state.sessionId,
+          timestamp: Date.now(),
+          actions: convertedActions,
+          metadata: {
+            executionMethod: 'multi_agent',
+            steps: multiAgentResult.steps,
+            duration: multiAgentResult.duration,
+            validation: multiAgentResult.validation,
+            recovery: multiAgentResult.recovery,
+            planning: multiAgentResult.planning,
+            confidence: multiAgentResult.confidence,
+          },
+        };
+      }
+
+      // Use traditional browser automation for simpler tasks
       const result = await this.browserAutomationController.handleAutomationTask(
         instruction,
         taskAnalysis,
@@ -2690,6 +3201,8 @@ export class Web3Agent extends EventEmitter {
         navigator: !!this.navigatorAgent,
         validator: !!this.validatorAgent
       },
+      multiAgentIntegration: !!this.multiAgentIntegration,
+      multiAgentSystem: this.multiAgentIntegration ? this.multiAgentIntegration.getSystemStatus() : null,
       currentExecution: this.multiStepExecutor,
       coordinationEvents: this.state.coordinationEvents?.length || 0,
       currentPlan: this.state.currentEnhancedPlan
@@ -2711,6 +3224,107 @@ export class Web3Agent extends EventEmitter {
         return this.validatorAgent ? { available: true, id: 'validator' } : { available: false };
       default:
         return { available: false };
+    }
+  }
+
+  /**
+   * Execute task using multi-agent system explicitly
+   */
+  async executeWithMultiAgent(
+    instruction: string,
+    enableStreaming: boolean = false,
+    onChunk?: (chunk: any) => void
+  ): Promise<AgentResponse> {
+    if (!this.multiAgentIntegration) {
+      throw new Error('Multi-agent integration not available');
+    }
+
+    try {
+      logger.info('Executing task with multi-agent system', { instruction });
+
+      // Create basic task analysis
+      const taskAnalysis: TaskAnalysis = {
+        taskType: 'automation',
+        complexity: 'high',
+        confidence: 0.8,
+        requiresBrowserAutomation: true,
+        requiresWeb3: false,
+        estimatedSteps: 5,
+        reasoning: 'Explicit multi-agent execution requested',
+        entities: [],
+        browserActions: ['navigate'],
+        web3Actions: [],
+        timestamp: Date.now(),
+        analysis: 'Multi-agent execution requested by user'
+      };
+
+      const result = await this.multiAgentIntegration.executeTask(
+        instruction,
+        taskAnalysis,
+        enableStreaming,
+        onChunk
+      );
+
+      // Add user message to conversation history
+      const userMessage = new HumanMessage(instruction);
+      this.state.conversationHistory.push(userMessage);
+
+      // Add assistant response to conversation history
+      const assistantMessage = new AIMessage(result.message);
+      this.state.conversationHistory.push(assistantMessage);
+
+      // Convert ActionStep types for compatibility
+      const convertedActions = result.actions.map((action) => ({
+        id: action.id,
+        name: action.type || action.description,
+        description: action.description,
+        status: (action.status || 'pending') as
+          | 'pending'
+          | 'in_progress'
+          | 'completed'
+          | 'failed',
+        type: action.type,
+        params: action.params,
+        dependencies: action.dependencies,
+      }));
+
+      // Store in chat history
+      await this.storeConversationStep(
+        userMessage,
+        assistantMessage,
+        convertedActions
+      );
+
+      this.state.lastActivity = Date.now();
+
+      return {
+        success: result.success,
+        message: result.message,
+        sessionId: this.state.sessionId,
+        timestamp: Date.now(),
+        actions: convertedActions,
+        metadata: {
+          executionMethod: 'multi_agent_explicit',
+          steps: result.steps,
+          duration: result.duration,
+          validation: result.validation,
+          recovery: result.recovery,
+          planning: result.planning,
+          confidence: result.confidence,
+        },
+      };
+    } catch (error) {
+      logger.error('Multi-agent execution failed:', error);
+      return {
+        success: false,
+        message: `Multi-agent execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        sessionId: this.state.sessionId,
+        timestamp: Date.now(),
+        actions: [],
+        metadata: {
+          confidence: 0,
+        },
+      };
     }
   }
 

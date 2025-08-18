@@ -70,7 +70,9 @@
     "offscreen",
     "contextMenus",
     "sidePanel",
-    "debugger"
+    "debugger",
+    "tabs",
+    "webNavigation"
   ],
   "host_permissions": [
     "<all_urls>"

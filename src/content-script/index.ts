@@ -55,7 +55,7 @@ class ElementSelectionSystem {
 
   private handleElementClick(event: MouseEvent): void {
     if (!this.isActive || this.options.mode !== 'select') return;
-    
+
     event.preventDefault();
     event.stopPropagation();
 
@@ -118,14 +118,14 @@ class ElementSelectionSystem {
 
     const tagName = element.tagName.toLowerCase();
     const parent = element.parentElement;
-    
+
     if (!parent) {
       return tagName;
     }
 
     const siblings = Array.from(parent.children).filter(child => child.tagName === element.tagName);
     const index = siblings.indexOf(element);
-    
+
     if (siblings.length > 1) {
       return `${tagName}:nth-child(${index + 1})`;
     }
@@ -136,10 +136,10 @@ class ElementSelectionSystem {
   private isElementVisible(element: HTMLElement): boolean {
     const rect = element.getBoundingClientRect();
     const style = window.getComputedStyle(element);
-    
-    return rect.width > 0 && 
-           rect.height > 0 && 
-           style.display !== 'none' && 
+
+    return rect.width > 0 &&
+           rect.height > 0 &&
+           style.display !== 'none' &&
            style.visibility !== 'hidden' &&
            style.opacity !== '0';
   }
@@ -217,7 +217,7 @@ class ElementSelectionSystem {
   public activate(options: ElementSelectorOptions): void {
     this.options = options;
     this.isActive = true;
-    
+
     if (this.overlay) {
       this.overlay.style.display = 'block';
       this.overlay.style.pointerEvents = options.mode === 'select' ? 'auto' : 'none';
@@ -231,7 +231,7 @@ class ElementSelectionSystem {
 
   public deactivate(): void {
     this.isActive = false;
-    
+
     if (this.overlay) {
       this.overlay.style.display = 'none';
       this.overlay.style.pointerEvents = 'none';
@@ -243,7 +243,7 @@ class ElementSelectionSystem {
 
   private highlightInteractiveElements(): void {
     const interactiveSelectors = [
-      'button', 'input', 'select', 'textarea', 'a[href]', 
+      'button', 'input', 'select', 'textarea', 'a[href]',
       '[role="button"]', '[role="link"]', '[role="textbox"]',
       '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])'
     ];
@@ -264,7 +264,7 @@ class ElementSelectionSystem {
    */
   private detectDeFiElements(): HTMLElement[] {
     const defiElements: HTMLElement[] = [];
-    
+
     // Wallet connection elements
     const walletConnectionPatterns = [
       'button[class*="connect"]',
@@ -368,10 +368,22 @@ class ElementSelectionSystem {
    * Enhanced element highlighting with DeFi prioritization
    */
   public highlightDeFiElements(): number {
+    // Ensure overlay is visible for highlighting
+    if (!this.overlay) {
+      this.createOverlay();
+    }
+    if (this.overlay) {
+      this.overlay.style.display = 'block';
+      this.overlay.style.pointerEvents = 'none';
+      // Clear previous highlights before drawing new ones
+      this.overlay.innerHTML = '';
+    }
+    this.highlights.clear();
+
     const defiElements = this.detectDeFiElements();
-    
+
     // Highlight DeFi elements with special styling
-    defiElements.forEach((element, index) => {
+    defiElements.forEach((element) => {
       const highlight = this.createHighlight(element);
       if (highlight) {
         // Add special DeFi styling
@@ -415,7 +427,7 @@ class ElementSelectionSystem {
       const htmlElement = element as HTMLElement;
       const bounds = htmlElement.getBoundingClientRect();
       const style = window.getComputedStyle(htmlElement);
-      
+
       return {
         selector,
         element: {
@@ -460,7 +472,7 @@ class ElementSelectionSystem {
         visibleOnly = true,
       } = options;
 
-      const searchRegex = caseSensitive 
+      const searchRegex = caseSensitive
         ? new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')
         : new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
 
@@ -470,7 +482,7 @@ class ElementSelectionSystem {
       elements.forEach((element) => {
         const htmlElement = element as HTMLElement;
         const textContent = htmlElement.textContent || '';
-        
+
         if (searchRegex.test(textContent) && (!visibleOnly || this.isElementVisible(htmlElement))) {
           const bounds = htmlElement.getBoundingClientRect();
           matches.push({
@@ -506,42 +518,50 @@ class ElementSelectionSystem {
         elementType = '',
         textFilter = '',
         includeAttributes = false,
+        includeAll = false,
+        includeHidden = false,
       } = options;
 
-      const interactiveSelectors = elementType 
-        ? [elementType]
-        : [
-            'button', 'input', 'select', 'textarea', 'a[href]', 
-            '[role="button"]', '[role="link"]', '[role="textbox"]',
-            '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])'
-          ];
+      // Decide which selectors to use
+      const selectors = includeAll
+        ? ['*']
+        : (elementType
+            ? [elementType]
+            : [
+                'button', 'input', 'select', 'textarea', 'a[href]',
+                '[role="button"]', '[role="link"]', '[role="textbox"]',
+                '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])'
+              ]);
 
       const elements: HTMLElement[] = [];
-      interactiveSelectors.forEach(selector => {
+      selectors.forEach(selector => {
         document.querySelectorAll(selector).forEach(el => elements.push(el as HTMLElement));
       });
 
-      const interactiveElements = elements
-        .filter(el => this.isElementVisible(el))
+      const filtered = elements
+        .filter(el => includeHidden ? true : this.isElementVisible(el))
         .filter(el => !textFilter || (el.textContent || '').toLowerCase().includes(textFilter.toLowerCase()))
-        .map(el => {
-          const bounds = el.getBoundingClientRect();
-          return {
-            selector: this.generateSelector(el),
-            element: {
-              tagName: el.tagName.toLowerCase(),
-              textContent: el.textContent?.substring(0, 100),
-              ...(includeAttributes && { attributes: this.getElementAttributes(el) }),
-            },
-            bounds: {
-              top: bounds.top,
-              left: bounds.left,
-              width: bounds.width,
-              height: bounds.height,
-            },
-            visible: this.isElementVisible(el),
-          };
-        });
+        // Avoid overlay/debug containers if any
+        .filter(el => !(el.id && /^vibe3-(overlay|debug)/i.test(el.id)));
+
+      const interactiveElements = filtered.map(el => {
+        const bounds = el.getBoundingClientRect();
+        return {
+          selector: this.generateSelector(el),
+          element: {
+            tagName: el.tagName.toLowerCase(),
+            textContent: el.textContent?.substring(0, 200),
+            ...(includeAttributes && { attributes: this.getElementAttributes(el) }),
+          },
+          bounds: {
+            top: bounds.top,
+            left: bounds.left,
+            width: bounds.width,
+            height: bounds.height,
+          },
+          visible: this.isElementVisible(el),
+        };
+      });
 
       return { elements: interactiveElements, success: true };
     } catch (error) {
@@ -561,7 +581,7 @@ class ElementSelectionSystem {
 
       const { color = 'blue', duration = 0 } = options;
       const htmlElement = element as HTMLElement;
-      
+
       // Create temporary highlight
       const bounds = htmlElement.getBoundingClientRect();
       const highlight = document.createElement('div');
@@ -572,7 +592,7 @@ class ElementSelectionSystem {
         yellow: '#f59e0b',
         purple: '#8b5cf6',
       };
-      
+
       highlight.style.cssText = `
         position: fixed;
         top: ${bounds.top}px;
@@ -596,8 +616,8 @@ class ElementSelectionSystem {
         }, duration);
       }
 
-      return { 
-        success: true, 
+      return {
+        success: true,
         highlightId: `highlight-${Date.now()}`,
         bounds: {
           top: bounds.top,
@@ -623,7 +643,7 @@ class ElementSelectionSystem {
 
       const htmlElement = element as HTMLElement;
       const bounds = htmlElement.getBoundingClientRect();
-      
+
       // In a real implementation, this would use chrome.tabs.captureVisibleTab
       // For now, return element information for screenshot capture
       return {
@@ -660,6 +680,10 @@ const elementSelector = new ElementSelectionSystem();
 
 // Handle element selection messages from background
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'PING') {
+    return Promise.resolve({ success: true, type: 'PONG', timestamp: Date.now() });
+  }
+
   if (message.type === 'ELEMENT_SELECTOR_ACTIVATE') {
     elementSelector.activate(message.options);
     return Promise.resolve();
@@ -682,14 +706,237 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const result = elementSelector.getInteractiveElements(message.params.options || {});
     return Promise.resolve({ success: true, data: result });
   } else if (message.type === 'ELEMENT_HIGHLIGHT') {
-    const result = elementSelector.highlightElement(message.params.selector, message.params.options || {});
-    return Promise.resolve({ success: true, data: result });
+    try {
+      const rawKind = message.params?.interactiveOnly;
+      const kind = typeof rawKind === 'string' ? rawKind.toLowerCase() : (rawKind ? 'button' : 'all');
+      const limit = Math.max(1, Math.min(500, Number(message.params?.limit) || (kind === 'clickable' || kind === 'button' || kind === 'input' ? 100 : 200)));
+      const overlayId = 'vibe3-debug-overlay';
+      let overlay = document.getElementById(overlayId) as HTMLElement | null;
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = overlayId;
+        Object.assign((overlay as HTMLElement).style, {
+          position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '2147483647'
+        });
+        document.documentElement.appendChild(overlay as unknown as Node);
+      }
+      (overlay as HTMLElement).innerHTML = '';
+
+      // Collect elements
+      const visible = (el: Element) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        return r && r.width > 0 && r.height > 0;
+      };
+
+      let candidates: Element[] = [];
+      const selector = message.params?.selector as string | undefined;
+      if (selector) {
+        const el = document.querySelector(selector);
+        if (el) candidates = [el];
+      } else {
+        const allEls: Element[] = Array.prototype.slice.call(document.querySelectorAll('*'));
+        const selectorMap: Record<string, string> = {
+          button: 'button, [role="button"], input[type="button"], input[type="submit"]',
+          clickable: 'button, [role="button"], input[type="button"], input[type="submit"], a[href], [role="link"]',
+          input: 'input, textarea, select, [contenteditable="true"], [role="textbox"]',
+          link: 'a[href], [role="link"]',
+          all: '*',
+        };
+        const sel = selectorMap[kind] || '*';
+        candidates = sel === '*'
+          ? allEls
+          : Array.prototype.slice.call(document.querySelectorAll(sel));
+      }
+
+      const filteredAll = candidates.filter(visible);
+      const filtered = filteredAll.slice(0, limit);
+
+      // Draw wireframe with index labels
+      filtered.forEach((el, idx) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        const box = document.createElement('div');
+        Object.assign(box.style, {
+          position: 'absolute', top: `${Math.max(0, r.top)}px`, left: `${Math.max(0, r.left)}px`,
+          width: `${r.width}px`, height: `${r.height}px`, border: '2px solid #22d3ee', boxSizing: 'border-box'
+        });
+        const tag = document.createElement('div');
+        tag.textContent = String(idx + 1);
+        Object.assign(tag.style, {
+          position: 'absolute', top: `${Math.max(0, r.top - 14)}px`, left: `${Math.max(0, r.left)}px`,
+          fontSize: '10px', lineHeight: '12px', padding: '0 4px', color: '#000', background: '#22d3ee', borderRadius: '3px', pointerEvents: 'none'
+        });
+        (overlay as HTMLElement).appendChild(box);
+        (overlay as HTMLElement).appendChild(tag);
+      });
+
+      // Return the indexed elements minimal info so Agent can choose later
+      const elements = filtered.map((el, idx) => ({
+        index: idx + 1,
+        selector: (() => {
+          let node: Element | null = el; const parts: string[] = [];
+          while (node && node.nodeType === 1 && parts.length < 5) {
+            let part = node.tagName.toLowerCase();
+            const id = (node as HTMLElement).id; if (id) { parts.unshift(`#${id}`); break; }
+            const siblings = Array.prototype.slice.call(node.parentElement?.children || []);
+            const nth = siblings.indexOf(node) + 1; parts.unshift(`${part}:nth-child(${nth})`); node = node.parentElement;
+          }
+          return parts.join(' > ');
+        })(),
+        tag: (el as HTMLElement).tagName.toLowerCase(),
+        text: ((el.textContent || '').trim().slice(0, 120))
+      }));
+
+      return Promise.resolve({ success: true, data: { elements } });
+    } catch (e) {
+      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
   } else if (message.type === 'ELEMENT_SCREENSHOT') {
     const result = elementSelector.captureElementScreenshot(message.params.selector);
     return Promise.resolve({ success: true, data: result });
   } else if (message.type === 'ELEMENT_HIGHLIGHT_DEFIELEMENTS') {
     const result = elementSelector.highlightDeFiElements();
     return Promise.resolve({ success: true, data: { defiElementCount: result } });
+  } else if (message.type === 'ELEMENT_CLICK_SELECTOR') {
+    try {
+      const sel = message.params?.selector;
+      const el = sel ? document.querySelector(sel) as HTMLElement | null : null;
+      if (!el) return Promise.resolve({ success: false, error: 'Element not found' });
+      el.click();
+      return Promise.resolve({ success: true });
+    } catch (e) {
+      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  } else if (message.type === 'ELEMENT_INPUT_SELECTOR') {
+    try {
+      const sel = message.params?.selector;
+      const value = message.params?.value ?? '';
+      const el = sel ? document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null : null;
+      if (!el) return Promise.resolve({ success: false, error: 'Element not found' });
+      (el as any).focus?.();
+      (el as any).value = value;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return Promise.resolve({ success: true });
+    } catch (e) {
+      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  } else if (message.type === 'ELEMENT_SCROLL_SELECTOR') {
+    try {
+      const sel = message.params?.selector;
+      const el = sel ? document.querySelector(sel) as HTMLElement | null : null;
+      if (!el) return Promise.resolve({ success: false, error: 'Element not found' });
+      el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+      return Promise.resolve({ success: true });
+    } catch (e) {
+      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  } else if (message.type === 'ELEMENT_DEBUG_SCAN_AND_LOG') {
+    try {
+      // Activate highlight mode and clear previous overlay
+      elementSelector.activate({ mode: 'highlight' });
+      const opts = message.params?.options || {};
+      const result = elementSelector.getInteractiveElements(opts);
+      // Log in page (visible in page console)
+      // eslint-disable-next-line no-console
+      console.info('[ElementSelector][Page] Scan:', {
+        url: location.href,
+        title: document.title,
+        count: result?.elements?.length || 0,
+        elements: result?.elements || [],
+      });
+      return Promise.resolve({ success: true, data: result });
+    } catch (e) {
+      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  } else if (message.type === 'ELEMENT_DEBUG_PAGE_LOG') {
+    try {
+      const payload = message.params?.payload ?? message.payload ?? message.message ?? 'No payload';
+      // eslint-disable-next-line no-console
+      console.info('[ElementSelector][Page][Log]:', payload);
+      return Promise.resolve({ success: true });
+    } catch (e) {
+      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  } else if (message.type === 'ELEMENT_HIGHLIGHT_ELEMENTS') {
+    try {
+      const items = (message.params?.items || []) as Array<{ selector: string; type?: string; label?: string }>;
+      const overlayId = 'vibe3-debug-overlay';
+      let overlay = document.getElementById(overlayId) as HTMLElement | null;
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = overlayId;
+        Object.assign((overlay as HTMLElement).style, {
+          position: 'fixed',
+          inset: '0',
+          pointerEvents: 'none',
+          zIndex: '2147483647',
+        });
+        document.documentElement.appendChild(overlay as unknown as Node);
+      }
+      (overlay as HTMLElement).innerHTML = '';
+
+      const colorMap: Record<string, string> = {
+        button: '#10b981', // emerald
+        input: '#3b82f6',  // blue
+        textarea: '#f97316', // orange
+        select: '#f59e0b',  // amber
+        a: '#8b5cf6',       // violet
+        default: '#6b7280', // gray
+      };
+
+      const toType = (el: Element | null, t?: string) => (t ? t.toLowerCase() : (el?.tagName.toLowerCase() || 'default'));
+      const toLabel = (type: string, fallback?: string) => {
+        switch (type) {
+          case 'button': return 'BTN';
+          case 'input': return 'INP';
+          case 'textarea': return 'TXT';
+          case 'select': return 'SEL';
+          case 'a': return 'A';
+          default: return fallback || 'EL';
+        }
+      };
+
+      items.forEach((it) => {
+        const el = document.querySelector(it.selector) as HTMLElement | null;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        const type = toType(el, it.type);
+        const color = colorMap[type] || colorMap.default;
+        const label = it.label || toLabel(type);
+
+        const box = document.createElement('div');
+        Object.assign(box.style, {
+          position: 'absolute',
+          top: `${Math.max(0, rect.top)}px`,
+          left: `${Math.max(0, rect.left)}px`,
+          width: `${rect.width}px`,
+          height: `${rect.height}px`,
+          border: `2px solid ${color}`,
+          boxSizing: 'border-box',
+          background: 'transparent',
+        });
+        const tag = document.createElement('div');
+        tag.textContent = label;
+        Object.assign(tag.style, {
+          position: 'absolute',
+          top: `${Math.max(0, rect.top - 14)}px`,
+          left: `${Math.max(0, rect.left)}px`,
+          fontSize: '10px',
+          lineHeight: '12px',
+          padding: '0 4px',
+          color: '#fff',
+          background: color,
+          borderRadius: '3px',
+          pointerEvents: 'none',
+        });
+        overlay!.appendChild(box);
+        overlay!.appendChild(tag);
+      });
+
+      return Promise.resolve({ success: true });
+    } catch (e) {
+      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
   }
   return undefined;
 });

@@ -13,6 +13,7 @@ import BookmarkList from './components/BookmarkList';
 import Settings from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import IconButton from './components/IconButton';
+import ElementSelector from './components/ElementSelector';
 import {
   StreamingMessage,
   useStreamingMessage,
@@ -77,6 +78,7 @@ export const SidePanelApp = () => {
   );
   const [reactStatus, setReactStatus] = useState<ReActStatusMessage | null>(null);
   const [showNewChatConfirm, setShowNewChatConfirm] = useState(false);
+  const [showElementSelector, setShowElementSelector] = useState(false);
   const portRef = useRef<chrome.runtime.Port | null>(null);
   const heartbeatIntervalRef = useRef<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -1346,6 +1348,18 @@ export const SidePanelApp = () => {
     setShowSettings(false);
   }, []);
 
+  const handleOpenElementSelector = useCallback(() => {
+    logger.debug(COMPONENT_NAME, 'HandleOpenElementSelector called');
+    setShowElementSelector(true);
+    setShowSettings(false);
+    setShowHistory(false);
+  }, []);
+
+  const handleCloseElementSelector = useCallback(() => {
+    logger.debug(COMPONENT_NAME, 'HandleCloseElementSelector called');
+    setShowElementSelector(false);
+  }, []);
+
 
 
   useEffect(() => {
@@ -1628,23 +1642,35 @@ export const SidePanelApp = () => {
               onClick={handleToggleDarkMode}
               data-testid="dark-mode-button"
               active={isDarkMode}
+              size="medium"
             />
             <IconButton
               icon="history"
               onClick={handleLoadHistory}
               data-testid="history-button"
               active={showHistory}
+              size="medium"
             />
               <IconButton
               icon="plus"
               onClick={handleNewChat}
               data-testid="new-chat-button"
+              size="medium"
+            />
+            <IconButton
+              icon="target"
+              onClick={handleOpenElementSelector}
+              data-testid="element-selector-button"
+              active={showElementSelector}
+              tooltip="Element Selector"
+              size="medium"
             />
             <IconButton
               icon="settings"
               onClick={handleOpenSettings}
               data-testid="settings-button"
               active={showSettings}
+              size="medium"
             />
 
           </div>
@@ -1656,6 +1682,20 @@ export const SidePanelApp = () => {
                 <Settings onClose={handleCloseSettings} />
               </ErrorBoundary>
             </div>
+          ) : showElementSelector ? (
+            <ErrorBoundary componentName="ElementSelector">
+              <ElementSelector
+                isActive={showElementSelector}
+                onActivate={(mode) => {
+                  logger.info(COMPONENT_NAME, 'Element selector activated', { mode });
+                }}
+                onDeactivate={handleCloseElementSelector}
+                onElementSelect={(element) => {
+                  logger.info(COMPONENT_NAME, 'Element selected', { element });
+                  handleCloseElementSelector();
+                }}
+              />
+            </ErrorBoundary>
           ) : showHistory ? (
             <ErrorBoundary componentName="ChatHistoryList">
               <ChatHistoryList

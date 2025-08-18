@@ -1,17 +1,87 @@
-// 🔥🔥🔥 EXTREMELY AGGRESSIVE DEBUGGING - AGENT INDEX LOADED! 🔥🔥🔥
-console.log('🔥🔥🔥 AGENT INDEX MODULE LOADED - THIS MUST APPEAR! 🔥🔥🔥', {
-  timestamp: Date.now(),
-  moduleStack: new Error().stack
-});
+// Multi-Agent Automation System
+// 
+// A sophisticated automation system for Vibe3-Wallet that enables
+// complex web interactions through AI-powered agent coordination.
+// 
+// @module MultiAgentSystem
 
-// Simple test function that doesn't depend on external modules
-export function testDebugging() {
-  console.log('🚨🚨🚨 DEBUGGING TEST FUNCTION CALLED! 🚨🚨🚨');
-  return 'debugging-test-successful';
-}
+// Configuration management
+export * from './schemas/AgentConfig';
 
-export * from './context';
-export * from './messageManager';
-export * from './executor';
-export * from './Web3Agent';
-export * from './sessionManager';
+// Schema validation - with explicit exports to avoid conflicts
+export { 
+  AgentActionSchema, 
+  TaskPlanSchema, 
+  ElementSelectionSchema, 
+  ValidationResultSchema, 
+  PerformanceMetricsSchema,
+  AgentSchemaValidator,
+  type AgentAction,
+  type TaskPlan as SchemaTaskPlan,
+  type ElementSelection,
+  type ValidationResult as SchemaValidationResult,
+  type PerformanceMetrics as SchemaPerformanceMetrics
+} from './schemas/AgentSchemas';
+
+// Core types and interfaces - selective exports to avoid conflicts
+export {
+  AgentCapability,
+  AgentStatus,
+  AgentError,
+  AgentConfiguration,
+  ExecutionContext,
+  AgentMessage,
+  PlanStep,
+  SelectedElement,
+  TaskExecutionStatus
+} from './agents/AgentTypes';
+
+// Enhanced highlighting and navigation components
+export {
+  ElementHighlighter,
+  type HighlightBox,
+  type HighlightOptions,
+  type ElementInfo
+} from './agents/ElementHighlighter';
+
+export {
+  EnhancedNavigatorAgent,
+  type NavigationStep,
+  type NavigationResult
+} from './agents/EnhancedNavigatorAgent';
+
+// Export conflicting types with aliases
+import { 
+  PerformanceMetrics as AgentPerformanceMetrics,
+  TaskPlan as AgentTaskPlan,
+  ValidationResult as AgentValidationResult 
+} from './agents/AgentTypes';
+
+export { 
+  AgentPerformanceMetrics as PerformanceMetrics_Agent,
+  AgentTaskPlan as TaskPlan_Agent,
+  AgentValidationResult as ValidationResult_Agent 
+};
+
+// System version
+export const MULTI_AGENT_VERSION = '1.0.0';
+
+// System capabilities
+export const SYSTEM_CAPABILITIES = [
+  'natural_language_processing',
+  'web_automation',
+  'element_selection',
+  'task_planning',
+  'error_recovery',
+  'performance_monitoring',
+  'multi_agent_coordination',
+  'visual_element_highlighting',
+  'colored_box_feedback',
+  'interactive_element_indexing',
+] as const;
+
+// Default export for easy importing
+export default {
+  version: MULTI_AGENT_VERSION,
+  capabilities: SYSTEM_CAPABILITIES,
+};

@@ -19,26 +19,20 @@ export interface ToolDefinition {
   category: 'web3' | 'utility' | 'system' | 'browser';
   riskLevel: 'low' | 'medium' | 'high';
   requiresConfirmation: boolean;
+  requiredPermissions?: string[];
 }
 
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
   private categories: Map<string, string[]> = new Map();
+  private executionTracker = new Map<string, number>();
+  private lastHighlightedByTabId = new Map<number, any[]>();
 
   constructor() {
-    // 🔥🔥🔥 EXTREMELY AGGRESSIVE DEBUGGING - TOOLREGISTRY CONSTRUCTOR! 🔥🔥🔥
-    console.log('🔥🔥🔥 TOOLREGISTRY CONSTRUCTOR - THIS MUST BE VISIBLE! 🔥🔥🔥', {
-      timestamp: Date.now(),
-      constructorStack: new Error().stack,
-      toolsMapSize: this.tools.size,
-      categoriesMapSize: this.categories.size
-    });
-    
     this.initializeWeb3Tools();
     this.initializeBrowserTools();
     this.initializeUtilityTools();
     this.initializeSystemTools();
-    console.log('🚨🚨🚨 ToolRegistry initialized with debug version! 🚨🚨🚨');
   }
 
   private initializeWeb3Tools(): void {
@@ -1078,49 +1072,26 @@ export class ToolRegistry {
       requiresConfirmation: false,
     });
 
-    this.registerTool({
-      name: 'getInteractiveElements',
-      description: 'Get all interactive elements on the page (buttons, links, inputs, etc.)',
-      parameters: [
-        {
-          type: 'string',
-          description: 'Optional: Filter by element type (button, link, input, etc.)',
-        },
-        {
-          type: 'string',
-          description: 'Optional: Filter by containing text',
-        },
-        {
-          type: 'boolean',
-          description: 'Optional: Include element attributes',
-        },
-      ],
-      required: [],
-      handler: this.createElementSelectionHandler('getInteractiveElements'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
+
 
     this.registerTool({
       name: 'highlightElement',
-      description: 'Highlight a specific element with visual overlay',
+      description: "Highlight elements with numbered wireframe boxes. 'interactiveOnly' can be a kind string to control which elements: 'button' | 'clickable' | 'input' | 'link' | 'all'. Optionally pass 'selector' to highlight only one element, and 'limit' to cap results.",
       parameters: [
         {
           type: 'string',
-          description: 'CSS selector for the element to highlight',
+          description: "interactiveOnly kind: 'button' | 'clickable' | 'input' | 'link' | 'all' (also accepts boolean for backward-compat; true='button', false='all')",
         },
         {
           type: 'string',
-          description: 'Highlight color (red, blue, green, yellow, purple)',
-          enum: ['red', 'blue', 'green', 'yellow', 'purple'],
+          description: 'selector: optional CSS selector to only highlight a single element',
         },
         {
           type: 'number',
-          description: 'Optional: Duration in milliseconds (0 for permanent)',
+          description: 'limit: optional maximum number of elements to return (1..500)',
         },
       ],
-      required: ['selector'],
+      required: [],
       handler: this.createElementSelectionHandler('highlightElement'),
       category: 'browser',
       riskLevel: 'low',
@@ -1325,7 +1296,20 @@ export class ToolRegistry {
     return async (params: any) => {
       const startTime = Date.now();
       const executionId = `browser_${actionName}_${Date.now()}`;
-      
+
+      // Prevent duplicate executions within 5 seconds
+      const duplicateKey = `${actionName}_${JSON.stringify(params)}`;
+      const lastExecution = this.executionTracker.get(duplicateKey);
+      if (lastExecution && (Date.now() - lastExecution) < 5000) {
+        logger.warn(`Preventing duplicate execution of ${actionName}`, {
+          params,
+          timeSinceLastExecution: Date.now() - lastExecution
+        });
+        throw new Error(`Duplicate execution prevented for ${actionName}`);
+      }
+
+      this.executionTracker.set(duplicateKey, Date.now());
+
       try {
         logger.info(`[${executionId}] Starting browser automation action: ${actionName}`, {
           params,
@@ -1349,7 +1333,7 @@ export class ToolRegistry {
         let processedParams = params;
         if (actionName === 'fillForm') {
           let fields = params.fields;
-          
+
           // Case 1: fields is already an array (correct format)
           if (Array.isArray(fields)) {
             logger.info(`[${executionId}] Fields already in array format`, {
@@ -1417,11 +1401,11 @@ export class ToolRegistry {
             urlStartsWithHttp: params.url && params.url.startsWith('http'),
             fullParams: JSON.stringify(params),
           });
-          
+
           if (!params.url) {
             throw new Error('url parameter is required for navigateToUrl');
           }
-          
+
           // CRITICAL: Check for "of" corruption
           if (params.url === 'of') {
             console.error(`🚨🚨🚨 [${executionId}] URL CORRUPTION DETECTED: URL parameter is "of"`, {
@@ -1433,7 +1417,7 @@ export class ToolRegistry {
             });
             throw new Error(`URL parameter corruption detected: url is "of" instead of a valid URL`);
           }
-          
+
           // Validate URL format
           if (!params.url.startsWith('http')) {
             logger.warn(`[${executionId}] Invalid URL format detected`, {
@@ -1475,7 +1459,7 @@ export class ToolRegistry {
         const result = await browserController.executeAction(actionStep);
 
         const executionTime = Date.now() - startTime;
-        
+
         // Enhanced result debugging for navigateToUrl
         if (actionName === 'navigateToUrl') {
           logger.info(`[${executionId}] navigateToUrl COMPLETED - RESULT ANALYSIS`, {
@@ -1492,7 +1476,7 @@ export class ToolRegistry {
             fullResult: JSON.stringify(result),
           });
         }
-        
+
         logger.info(`[${executionId}] Browser action completed`, {
           actionName,
           success: result.success,
@@ -1514,6 +1498,9 @@ export class ToolRegistry {
           executionId,
         };
       } catch (error) {
+        // Remove from tracker on error to allow retries
+        this.executionTracker.delete(duplicateKey);
+
         const executionTime = Date.now() - startTime;
         logger.error(`[${executionId}] Browser automation action failed: ${actionName}`, {
           error: error instanceof Error ? error.message : String(error),
@@ -1587,14 +1574,48 @@ export class ToolRegistry {
       try {
         logger.info(`Executing element selection action: ${actionName}`, params);
 
-        // Get active tab
-        const [activeTab] = await chrome.tabs.query({
-          active: true,
-          currentWindow: true,
-        });
+        // Check Chrome extension permissions
+        try {
+          const permissions = await chrome.permissions.getAll();
+          const hasRequiredPermissions = permissions.permissions?.includes('activeTab') &&
+                                        permissions.permissions?.includes('scripting');
 
-        if (!activeTab || !activeTab.id) {
-          throw new Error('No active tab found');
+          if (!hasRequiredPermissions) {
+            logger.error('Missing required permissions for element selection', permissions);
+            throw new Error('Missing required permissions: activeTab and scripting are required');
+          }
+        } catch (permError) {
+          logger.error('Failed to check permissions', permError);
+          throw new Error(`Failed to check permissions: ${permError.message}`);
+        }
+
+        // Determine target tab
+        let targetTab: chrome.tabs.Tab;
+        try {
+          if (params && typeof params.tabId === 'number') {
+            const t = await chrome.tabs.get(params.tabId);
+            if (!t || !t.id) throw new Error('Invalid tabId provided');
+            // Validate tab URL scheme
+            const url = t.url || '';
+            if (!/^https?:\/\//i.test(url) && !/^file:\/\//i.test(url)) {
+              throw new Error(`Provided tabId (${params.tabId}) is not a regular web page (url=${url || 'unknown'})`);
+            }
+            targetTab = t;
+            logger.info('Using provided tabId for element selection', { tabId: targetTab.id, url: targetTab.url });
+          } else {
+            targetTab = await this.getOrCreateActiveTab();
+          }
+        } catch (tabError: any) {
+          logger.error('Failed to resolve target tab', tabError);
+          throw new Error(`Failed to resolve target tab: ${tabError.message || tabError}`);
+        }
+
+        // Ensure content script is available
+        try {
+          await this.ensureContentScriptAvailable(targetTab.id!);
+        } catch (scriptError) {
+          logger.error('Failed to ensure content script availability', scriptError);
+          throw new Error(`Content script not available: ${scriptError.message}`);
         }
 
         // Map action names to message types
@@ -1613,13 +1634,34 @@ export class ToolRegistry {
         const messageType = messageTypes[actionName] || actionName.toUpperCase();
 
         // Send message to content script
-        const response = await chrome.tabs.sendMessage(activeTab.id, {
-          type: messageType,
-          params,
-        });
+        let response;
+        try {
+          response = await chrome.tabs.sendMessage(targetTab.id!, {
+            type: messageType,
+            params,
+          });
+        } catch (messageError) {
+          logger.error('Failed to send message to content script', messageError);
+          throw new Error(`Failed to communicate with content script: ${messageError.message}`);
+        }
 
         if (!response || !response.success) {
-          throw new Error(response?.error || 'Element selection action failed');
+          const errorDetails = response?.error || 'Element selection action failed';
+          logger.error('Content script returned error response', {
+            actionName,
+            error: errorDetails,
+            response
+          });
+          throw new Error(errorDetails);
+        }
+
+        // Store last highlighted candidates for the tab so agent can use them next
+        try {
+          if (actionName === 'highlightElement' && response?.data?.elements && targetTab.id) {
+            this.lastHighlightedByTabId.set(targetTab.id, response.data.elements);
+          }
+        } catch (storeErr) {
+          logger.warn('Failed to store last highlighted candidates', storeErr);
         }
 
         return {
@@ -1628,6 +1670,8 @@ export class ToolRegistry {
           result: response.data,
           success: true,
           timestamp: Date.now(),
+          tabId: targetTab.id,
+          tabUrl: targetTab.url
         };
       } catch (error) {
         logger.error(`Element selection action failed: ${actionName}`, error);
@@ -1650,11 +1694,11 @@ export class ToolRegistry {
 
         // Import Web3Agent dynamically to avoid circular dependency
         const { Web3Agent } = await import('../Web3Agent');
-        
+
         // Get or create Web3Agent instance
         // This is a simplified approach - in production, you'd want to manage instances properly
         let web3Agent: InstanceType<typeof Web3Agent> | null = null;
-        
+
         switch (actionName) {
           case 'createExecutionPlan':
             // This would integrate with the PlannerAgent
@@ -1914,7 +1958,7 @@ export class ToolRegistry {
       analyzeElement: ['selector', 'includeAccessibility', 'includeEvents'],
       findElementsByText: ['text', 'elementType', 'caseSensitive', 'visibleOnly'],
       getInteractiveElements: ['elementType', 'textFilter', 'includeAttributes'],
-      highlightElement: ['selector', 'color', 'duration'],
+      highlightElement: ['interactiveOnly', 'selector', 'limit'],
       captureElementScreenshot: ['selector', 'includeHighlights'],
       highlightDeFiElements: [],
       // Utility tools
@@ -1940,6 +1984,18 @@ export class ToolRegistry {
       throw new Error(`Tool not found: ${name}`);
     }
 
+    // Special validation for element selection tools
+    if (this.isElementSelectionTool(name)) {
+      const validation = await this.validateElementSelectionPrerequisites();
+      if (!validation.valid) {
+        return {
+          success: false,
+          error: validation.error,
+          result: null
+        };
+      }
+    }
+
     try {
       logger.info(`Executing tool: ${name}`, params);
       const result = await tool.handler(params);
@@ -1949,6 +2005,339 @@ export class ToolRegistry {
       logger.error(`Tool execution failed: ${name}`, error);
       throw error;
     }
+  }
+
+  /**
+   * Check if a tool is an element selection tool
+   */
+  private isElementSelectionTool(toolName: string): boolean {
+    const elementSelectionTools = [
+      'activateElementSelector',
+      'deactivateElementSelector',
+      'getHighlightedElements',
+      'analyzeElement',
+      'findElementsByText',
+      'getInteractiveElements',
+      'highlightElement',
+      'captureElementScreenshot',
+      'highlightDeFiElements'
+    ];
+
+    return elementSelectionTools.includes(toolName);
+  }
+
+  /**
+   * Validate prerequisites for element selection tools
+   */
+  private async validateElementSelectionPrerequisites(): Promise<{ valid: boolean; error?: string }> {
+    try {
+      // Check if Chrome extension API is available
+      if (typeof chrome === 'undefined' || !chrome.tabs) {
+        return {
+          valid: false,
+          error: 'Chrome extension API not available'
+        };
+      }
+
+      // Prefer an existing tab that is a valid web page (http/https/file)
+      const isValidWebTab = (tab?: chrome.tabs.Tab) => {
+        if (!tab || !tab.id) return false;
+        const url = tab.url || '';
+        return /^https?:\/\//i.test(url) || /^file:\/\//i.test(url);
+      };
+
+      // Check for active tabs across windows first
+      const activeTabs = await chrome.tabs.query({ active: true });
+      let targetTab = activeTabs.find(isValidWebTab);
+
+      // If no active suitable tab, search all tabs and prefer an active one
+      if (!targetTab) {
+        const allTabs = await chrome.tabs.query({});
+        targetTab = allTabs.find((t) => t.active && isValidWebTab(t));
+        if (!targetTab) {
+          targetTab = allTabs.find((t) => isValidWebTab(t));
+        }
+        if (targetTab && !targetTab.active) {
+          await chrome.tabs.update(targetTab.id!, { active: true });
+          logger.info('Activated existing web tab for element selection', {
+            tabId: targetTab.id,
+            url: targetTab.url
+          });
+        }
+      }
+
+      // If still no tab, abort with a clear error instead of creating about:blank (cannot inject there)
+      if (!targetTab || !targetTab.id) {
+        return {
+          valid: false,
+          error: 'No suitable web tab found. Please open a webpage (http/https/file) and try again.'
+        };
+      }
+
+      // Verify content script is available
+      try {
+        await chrome.tabs.sendMessage(targetTab.id, { type: 'PING' });
+      } catch (error) {
+        // Content script not available, try to inject it
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: targetTab.id },
+            files: ['content-script.js']
+          });
+        } catch (injectError) {
+          logger.error('Failed to inject content script', injectError);
+          return {
+            valid: false,
+            error: 'Content script not available in target tab'
+          };
+        }
+      }
+
+      return { valid: true };
+    } catch (error) {
+      logger.error('Element selection prerequisite validation failed', error);
+      return {
+        valid: false,
+        error: error instanceof Error ? error.message : 'Prerequisite validation failed'
+      };
+    }
+  }
+
+  /**
+   * Get or create an active tab for element selection operations
+   */
+  private async getOrCreateActiveTab(): Promise<chrome.tabs.Tab> {
+    // Helper to validate a tab points to a real web page we can inject into
+    const isValidWebTab = (tab?: chrome.tabs.Tab) => {
+      if (!tab || !tab.id) return false;
+      const url = tab.url || '';
+      return /^https?:\/\//i.test(url) || /^file:\/\//i.test(url);
+    };
+
+    // 1) Prefer the currently active tab in any window that is a valid web page
+    const activeTabs = await chrome.tabs.query({ active: true });
+    let targetTab = activeTabs.find(isValidWebTab);
+
+    // 2) If none, search all tabs for a suitable web page (prefer an active one)
+    if (!targetTab) {
+      const allTabs = await chrome.tabs.query({});
+      // Prefer an active tab that is a valid web page
+      targetTab = allTabs.find((t) => t.active && isValidWebTab(t));
+      if (!targetTab) {
+        // Fallback to any valid web page tab
+        targetTab = allTabs.find((t) => isValidWebTab(t));
+      }
+      if (targetTab && !targetTab.active) {
+        await chrome.tabs.update(targetTab.id!, { active: true });
+        logger.info('Activated existing web tab for element selection', {
+          tabId: targetTab.id,
+          url: targetTab.url,
+        });
+      }
+    }
+
+    // 3) If still none, do NOT create about:blank (content scripts cannot run there)
+    if (!targetTab) {
+      const allTabsCount = (await chrome.tabs.query({})).length;
+      throw new Error(
+        `No suitable web tab found to perform element selection. Please open a webpage (http/https/file) and try again. Context: { allTabs: ${allTabsCount} }`
+      );
+    }
+
+    return targetTab;
+  }
+
+  /**
+   * Ensure content script is available in the specified tab
+   */
+  private async ensureContentScriptAvailable(tabId: number): Promise<void> {
+    try {
+      // Method 1: Try multiple pings to ensure connection
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+          logger.info(`Content script ping successful on attempt ${attempt}`, { tabId });
+          return; // Success
+        } catch (pingError) {
+          logger.warn(`Content script ping attempt ${attempt} failed`, {
+            tabId,
+            error: pingError instanceof Error ? pingError.message : String(pingError)
+          });
+
+          if (attempt < 3) {
+            // Wait before retry
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        }
+      }
+
+      // Method 2: Try to inject content script file
+      logger.info(`All pings failed, attempting content script file injection`, { tabId });
+
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ['content-script.js']
+        });
+
+        // Wait for injection to complete
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Final verification ping
+        await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+        logger.info('Content script injected and verified successfully', { tabId });
+        return;
+      } catch (injectError) {
+        logger.error('Content script file injection failed', injectError);
+      }
+
+      // Method 3: Try injecting the content script code directly
+      logger.info(`File injection failed, attempting direct code injection`, { tabId });
+
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: this.createContentScriptCode()
+        });
+
+        // Wait for injection to complete
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Final verification ping
+        await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+        logger.info('Direct code injection successful', { tabId });
+        return;
+      } catch (directInjectError) {
+        logger.error('Direct code injection failed', directInjectError);
+      }
+
+      // Method 4: Try minimal injection for basic communication
+      logger.info(`Direct injection failed, attempting minimal injection`, { tabId });
+
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: this.createMinimalContentScript()
+        });
+
+        // Wait for injection to complete
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Final verification ping
+        await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+        logger.info('Minimal injection successful', { tabId });
+        return;
+      } catch (minimalInjectError) {
+        logger.error('Minimal injection failed', minimalInjectError);
+      }
+
+      // All methods failed
+      throw new Error('Content script not available in target tab. Please refresh the page or try a different tab.');
+    } catch (error) {
+      logger.error('Content script verification failed', error);
+      throw new Error('Content script verification failed: ' + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+
+  /**
+   * Create content script code for direct injection
+   */
+  private createContentScriptCode() {
+    return () => {
+      // Create a simple message listener for content script communication
+      const messageListener = (event: MessageEvent) => {
+        if (event.source !== window) return;
+
+        if (event.data && event.data.type === 'PING') {
+          window.postMessage({ type: 'PONG', timestamp: Date.now() }, '*');
+        }
+
+        // Handle element selection messages
+        if (event.data && event.data.type === 'ELEMENT_SELECTOR_ACTIVATE') {
+          try {
+            // Activate element selection mode
+            const highlightElements = () => {
+              const interactiveElements = document.querySelectorAll(
+                'button, [onclick], [href], input, select, textarea, [role="button"], [role="link"]'
+              );
+
+              interactiveElements.forEach((element, index) => {
+                const rect = element.getBoundingClientRect();
+                const overlay = document.createElement('div');
+                overlay.id = `element-highlight-${index}`;
+                overlay.style.cssText = `
+                  position: absolute;
+                  left: ${rect.left + window.scrollX}px;
+                  top: ${rect.top + window.scrollY}px;
+                  width: ${rect.width}px;
+                  height: ${rect.height}px;
+                  border: 2px solid #ff0000;
+                  background: rgba(255, 0, 0, 0.1);
+                  z-index: 999999;
+                  pointer-events: none;
+                `;
+                document.body.appendChild(overlay);
+              });
+            };
+
+            highlightElements();
+            window.postMessage({
+              type: 'ELEMENT_SELECTOR_RESPONSE',
+              success: true,
+              data: { highlighted: true }
+            }, '*');
+          } catch (error) {
+            window.postMessage({
+              type: 'ELEMENT_SELECTOR_RESPONSE',
+              success: false,
+              error: error instanceof Error ? error.message : String(error)
+            }, '*');
+          }
+        }
+      };
+
+      window.addEventListener('message', messageListener);
+
+      // Store for cleanup
+      (window as any)._vibe3ContentScript = {
+        messageListener,
+        active: true
+      };
+    };
+  }
+
+  /**
+   * Create minimal content script for basic communication
+   */
+  private createMinimalContentScript() {
+    return () => {
+      // Minimal message listener for basic ping/pong
+      const minimalListener = (event: MessageEvent) => {
+        if (event.source !== window) return;
+
+        if (event.data && event.data.type === 'PING') {
+          window.postMessage({ type: 'PONG' }, '*');
+        }
+      };
+
+      window.addEventListener('message', minimalListener);
+
+      // Clean up existing script if any
+      if ((window as any)._vibe3ContentScript) {
+        try {
+          window.removeEventListener('message', (window as any)._vibe3ContentScript.messageListener);
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+      }
+
+      // Store new listener
+      (window as any)._vibe3ContentScript = {
+        messageListener: minimalListener,
+        active: true,
+        minimal: true
+      };
+    };
   }
 
   validateParameters(

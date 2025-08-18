@@ -3,7 +3,9 @@ import { TaskAnalysis } from '../task-analysis/IntelligentTaskAnalyzer';
 import { StreamingLLMResponse } from '../llm/types';
 import { createLogger } from '@/utils/logger';
 import { BrowserAutomationController } from '../automation/BrowserAutomationController';
+import { Web3Agent } from '../Web3Agent';
 import { toolRegistry } from '../tools/ToolRegistry';
+import { agent } from '../../agent';
 
 const logger = createLogger('ElementSelectionAgent');
 
@@ -52,12 +54,83 @@ export interface ElementSelectionResult {
  */
 export class ElementSelectionAgent {
   private browserController: BrowserAutomationController;
+  private web3Agent: Web3Agent | null = null;
   private isActive: boolean = false;
   private currentTask: ElementSelectionTask | null = null;
   private executionHistory: ElementSelectionTask[] = [];
 
-  constructor() {
+  constructor(web3Agent?: Web3Agent) {
     this.browserController = new BrowserAutomationController();
+    this.web3Agent = web3Agent || null;
+  }
+
+  /**
+   * Set the Web3Agent instance for proper message integration
+   */
+  setWeb3Agent(web3Agent: Web3Agent): void {
+    this.web3Agent = web3Agent;
+  }
+
+  /**
+   * Get the Web3Agent instance from the agent service
+   */
+  private getWeb3AgentFromService(): Web3Agent | null {
+    try {
+      return agent.getWeb3Agent();
+    } catch (error) {
+      logger.warn('ElementSelectionAgent', 'Failed to get Web3Agent from service', { error });
+      return null;
+    }
+  }
+
+  /**
+   * Execute tool with proper message storage through Web3Agent
+   */
+  private async executeToolWithMessageTracking(toolName: string, params: any): Promise<any> {
+    // Get Web3Agent from service if not already set
+    if (!this.web3Agent) {
+      this.web3Agent = this.getWeb3AgentFromService();
+    }
+
+    if (this.web3Agent) {
+      // Create a function call object for message tracking
+      const functionCall = {
+        id: `call_${toolName}_${Date.now()}`,
+        name: toolName,
+        arguments: params,
+        timestamp: Date.now()
+      };
+
+      try {
+        // Store pending tool call message
+        await this.web3Agent['storeToolCallMessage'](functionCall, 'pending');
+
+        // Store executing tool call message
+        await this.web3Agent['storeToolCallMessage'](functionCall, 'executing');
+
+        // Execute the tool
+        const result = await toolRegistry.executeTool(toolName, params);
+
+        // Store completed tool call message
+        await this.web3Agent['storeToolCallMessage'](functionCall, 'completed', {
+          success: result.success,
+          result: result.result,
+          error: result.error
+        });
+
+        return result;
+      } catch (error) {
+        // Store failed tool call message
+        await this.web3Agent['storeToolCallMessage'](functionCall, 'failed', {
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        throw error;
+      }
+    } else {
+      // Fallback to direct tool registry execution
+      return await toolRegistry.executeTool(toolName, params);
+    }
   }
 
   /**
@@ -162,19 +235,42 @@ export class ElementSelectionAgent {
       });
     }
 
-    // Activate element selector
-    const highlightResult = await toolRegistry.executeTool('activateElementSelector', {
+    // Activate element selector with better error handling and message tracking
+    let highlightResult = await this.executeToolWithMessageTracking('activateElementSelector', {
       mode: 'highlight',
       filter: task.params.filter,
       visibleOnly: task.params.visibleOnly || true,
     });
 
     if (!highlightResult.success) {
-      throw new Error(`Failed to activate element selector: ${highlightResult.error}`);
+      // Try to recover by creating a tab first
+      if (highlightResult.error?.includes('No active tab found') ||
+          highlightResult.error?.includes('No active tab available') ||
+          highlightResult.error?.includes('Content script not available')) {
+        logger.warn('Element selection failed, attempting recovery...', {
+          error: highlightResult.error
+        });
+
+        // Wait a moment before retry
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Retry the activation with message tracking
+        highlightResult = await this.executeToolWithMessageTracking('activateElementSelector', {
+          mode: 'highlight',
+          filter: task.params.filter,
+          visibleOnly: task.params.visibleOnly || true,
+        });
+
+        if (!highlightResult.success) {
+          throw new Error(`Failed to activate element selector after recovery: ${highlightResult.error}`);
+        }
+      } else {
+        throw new Error(`Failed to activate element selector: ${highlightResult.error}`);
+      }
     }
 
-    // Get highlighted elements
-    const elementsResult = await toolRegistry.executeTool('getHighlightedElements', {
+    // Get highlighted elements with message tracking
+    const elementsResult = await this.executeToolWithMessageTracking('getHighlightedElements', {
       filter: task.params.filter,
       includeAttributes: true,
     });
@@ -218,22 +314,45 @@ export class ElementSelectionAgent {
       });
     }
 
-    // Activate element selector in select mode
-    const selectResult = await toolRegistry.executeTool('activateElementSelector', {
+    // Activate element selector in select mode with recovery and message tracking
+    let selectResult = await this.executeToolWithMessageTracking('activateElementSelector', {
       mode: 'select',
       filter: task.params.filter,
       visibleOnly: true,
     });
 
     if (!selectResult.success) {
-      throw new Error(`Failed to activate element selector: ${selectResult.error}`);
+      // Try to recover from tab-related errors
+      if (selectResult.error?.includes('No active tab found') ||
+          selectResult.error?.includes('No active tab available') ||
+          selectResult.error?.includes('Content script not available')) {
+        logger.warn('Element selection failed, attempting recovery...', {
+          error: selectResult.error
+        });
+
+        // Wait a moment before retry
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Retry the activation with message tracking
+        selectResult = await this.executeToolWithMessageTracking('activateElementSelector', {
+          mode: 'select',
+          filter: task.params.filter,
+          visibleOnly: true,
+        });
+
+        if (!selectResult.success) {
+          throw new Error(`Failed to activate element selector after recovery: ${selectResult.error}`);
+        }
+      } else {
+        throw new Error(`Failed to activate element selector: ${selectResult.error}`);
+      }
     }
 
     // Wait for user selection (simplified - in real implementation would use event listeners)
     await new Promise(resolve => setTimeout(resolve, 5000));
 
-    // Get highlighted elements (would normally get the selected element)
-    const elementsResult = await toolRegistry.executeTool('getHighlightedElements', {});
+    // Get highlighted elements (would normally get the selected element) with message tracking
+    const elementsResult = await this.executeToolWithMessageTracking('getHighlightedElements', {});
 
     if (enableStreaming && onChunk) {
       onChunk({
@@ -278,15 +397,38 @@ export class ElementSelectionAgent {
       });
     }
 
-    // Analyze element
-    const analyzeResult = await toolRegistry.executeTool('analyzeElement', {
+    // Analyze element with recovery logic and message tracking
+    let analyzeResult = await this.executeToolWithMessageTracking('analyzeElement', {
       selector: task.params.selector,
       includeAccessibility: task.params.includeAccessibility || true,
       includeEvents: task.params.includeEvents || false,
     });
 
     if (!analyzeResult.success) {
-      throw new Error(`Failed to analyze element: ${analyzeResult.error}`);
+      // Try to recover from tab-related errors
+      if (analyzeResult.error?.includes('No active tab found') ||
+          analyzeResult.error?.includes('No active tab available') ||
+          analyzeResult.error?.includes('Content script not available')) {
+        logger.warn('Element analysis failed, attempting recovery...', {
+          error: analyzeResult.error
+        });
+
+        // Wait a moment before retry
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Retry the analysis with message tracking
+        analyzeResult = await this.executeToolWithMessageTracking('analyzeElement', {
+          selector: task.params.selector,
+          includeAccessibility: task.params.includeAccessibility || true,
+          includeEvents: task.params.includeEvents || false,
+        });
+
+        if (!analyzeResult.success) {
+          throw new Error(`Failed to analyze element after recovery: ${analyzeResult.error}`);
+        }
+      } else {
+        throw new Error(`Failed to analyze element: ${analyzeResult.error}`);
+      }
     }
 
     if (enableStreaming && onChunk) {
@@ -329,10 +471,10 @@ export class ElementSelectionAgent {
     }
 
     let elements = [];
-    
+
     if (task.params.text) {
-      // Find by text
-      const findResult = await toolRegistry.executeTool('findElementsByText', {
+      // Find by text with recovery logic and message tracking
+      let findResult = await this.executeToolWithMessageTracking('findElementsByText', {
         text: task.params.text,
         elementType: task.params.elementType,
         caseSensitive: task.params.caseSensitive || false,
@@ -340,23 +482,69 @@ export class ElementSelectionAgent {
       });
 
       if (!findResult.success) {
-        throw new Error(`Failed to find elements: ${findResult.error}`);
+        // Try to recover from tab-related errors
+        if (findResult.error?.includes('No active tab found') ||
+            findResult.error?.includes('No active tab available') ||
+            findResult.error?.includes('Content script not available')) {
+          logger.warn('Find elements failed, attempting recovery...', {
+            error: findResult.error
+          });
+
+          // Wait a moment before retry
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+          // Retry the find operation with message tracking
+          findResult = await this.executeToolWithMessageTracking('findElementsByText', {
+            text: task.params.text,
+            elementType: task.params.elementType,
+            caseSensitive: task.params.caseSensitive || false,
+            visibleOnly: task.params.visibleOnly || true,
+          });
+
+          if (!findResult.success) {
+            throw new Error(`Failed to find elements after recovery: ${findResult.error}`);
+          }
+        } else {
+          throw new Error(`Failed to find elements: ${findResult.error}`);
+        }
       }
 
       elements = findResult.result?.elements || [];
     } else {
-      // Get interactive elements with filter
-      const interactiveResult = await toolRegistry.executeTool('getInteractiveElements', {
-        elementType: task.params.elementType,
-        textFilter: task.params.textFilter,
-        includeAttributes: true,
+      // Simplified: use highlightElement to retrieve candidates (buttons-only when interactiveOnly)
+      let highlightResult = await this.executeToolWithMessageTracking('highlightElement', {
+        interactiveOnly: true,
+        // limit can be tuned or provided via task
+        limit: Math.min(200, Math.max(1, Number(task.params?.limit) || 100)),
       });
 
-      if (!interactiveResult.success) {
-        throw new Error(`Failed to get interactive elements: ${interactiveResult.error}`);
+      if (!highlightResult.success) {
+        // Try to recover from tab-related errors
+        if (highlightResult.error?.includes('No active tab found') ||
+            highlightResult.error?.includes('No active tab available') ||
+            highlightResult.error?.includes('Content script not available')) {
+          logger.warn('highlightElement failed, attempting recovery...', {
+            error: highlightResult.error
+          });
+
+          // Wait a moment before retry
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+          // Retry
+          highlightResult = await this.executeToolWithMessageTracking('highlightElement', {
+            interactiveOnly: true,
+            limit: Math.min(200, Math.max(1, Number(task.params?.limit) || 100)),
+          });
+
+          if (!highlightResult.success) {
+            throw new Error(`Failed to highlight elements after recovery: ${highlightResult.error}`);
+          }
+        } else {
+          throw new Error(`Failed to highlight elements: ${highlightResult.error}`);
+        }
       }
 
-      elements = interactiveResult.result?.elements || [];
+      elements = highlightResult.result?.elements || [];
     }
 
     if (enableStreaming && onChunk) {
@@ -398,29 +586,56 @@ export class ElementSelectionAgent {
       });
     }
 
-    // First highlight the element
-    await toolRegistry.executeTool('highlightElement', {
+    // First highlight the element with recovery logic and message tracking
+    let highlightResult = await this.executeToolWithMessageTracking('highlightElement', {
       selector: task.params.selector,
       color: 'blue',
       duration: 2000,
     });
 
-    // Perform the interaction
+    if (!highlightResult.success) {
+      // Try to recover from tab-related errors
+      if (highlightResult.error?.includes('No active tab found') ||
+          highlightResult.error?.includes('No active tab available') ||
+          highlightResult.error?.includes('Content script not available')) {
+        logger.warn('Element highlight failed, attempting recovery...', {
+          error: highlightResult.error
+        });
+
+        // Wait a moment before retry
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Retry the highlight with message tracking
+        highlightResult = await this.executeToolWithMessageTracking('highlightElement', {
+          selector: task.params.selector,
+          color: 'blue',
+          duration: 2000,
+        });
+
+        if (!highlightResult.success) {
+          throw new Error(`Failed to highlight element after recovery: ${highlightResult.error}`);
+        }
+      } else {
+        throw new Error(`Failed to highlight element: ${highlightResult.error}`);
+      }
+    }
+
+    // Perform the interaction with recovery logic and message tracking
     let interactionResult;
     switch (task.params.action) {
       case 'click':
-        interactionResult = await toolRegistry.executeTool('clickElement', {
+        interactionResult = await this.executeToolWithMessageTracking('clickElement', {
           selector: task.params.selector,
         });
         break;
       case 'hover':
-        interactionResult = await toolRegistry.executeTool('hoverElement', {
+        interactionResult = await this.executeToolWithMessageTracking('hoverElement', {
           selector: task.params.selector,
           duration: 1000,
         });
         break;
       case 'screenshot':
-        interactionResult = await toolRegistry.executeTool('captureElementScreenshot', {
+        interactionResult = await this.executeToolWithMessageTracking('captureElementScreenshot', {
           selector: task.params.selector,
           includeHighlights: true,
         });
@@ -430,7 +645,45 @@ export class ElementSelectionAgent {
     }
 
     if (!interactionResult.success) {
-      throw new Error(`Interaction failed: ${interactionResult.error}`);
+      // Try to recover from tab-related errors
+      if (interactionResult.error?.includes('No active tab found') ||
+          interactionResult.error?.includes('No active tab available') ||
+          interactionResult.error?.includes('Content script not available')) {
+        logger.warn('Element interaction failed, attempting recovery...', {
+          error: interactionResult.error,
+          action: task.params.action
+        });
+
+        // Wait a moment before retry
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Retry the interaction with message tracking
+        switch (task.params.action) {
+          case 'click':
+            interactionResult = await this.executeToolWithMessageTracking('clickElement', {
+              selector: task.params.selector,
+            });
+            break;
+          case 'hover':
+            interactionResult = await this.executeToolWithMessageTracking('hoverElement', {
+              selector: task.params.selector,
+              duration: 1000,
+            });
+            break;
+          case 'screenshot':
+            interactionResult = await this.executeToolWithMessageTracking('captureElementScreenshot', {
+              selector: task.params.selector,
+              includeHighlights: true,
+            });
+            break;
+        }
+
+        if (!interactionResult.success) {
+          throw new Error(`Failed to ${task.params.action} element after recovery: ${interactionResult.error}`);
+        }
+      } else {
+        throw new Error(`Interaction failed: ${interactionResult.error}`);
+      }
     }
 
     if (enableStreaming && onChunk) {
@@ -455,7 +708,7 @@ export class ElementSelectionAgent {
    */
   private generateHighlightRecommendations(elements: any[]): string[] {
     const recommendations: string[] = [];
-    
+
     if (elements.length === 0) {
       recommendations.push('No interactive elements found on the page');
       recommendations.push('Try navigating to a page with forms or buttons');
@@ -475,14 +728,14 @@ export class ElementSelectionAgent {
    */
   private generateAnalysisRecommendations(element?: any): string[] {
     const recommendations: string[] = [];
-    
+
     if (!element) {
       recommendations.push('Element not found or not accessible');
       return recommendations;
     }
 
     recommendations.push(`Element type: ${element.properties?.tagName || 'unknown'}`);
-    
+
     if (element.properties?.textContent) {
       const text = element.properties.textContent.substring(0, 50);
       recommendations.push(`Element contains text: "${text}..."`);
@@ -493,7 +746,7 @@ export class ElementSelectionAgent {
     }
 
     recommendations.push('Use this selector for reliable automation');
-    
+
     return recommendations;
   }
 
@@ -502,7 +755,7 @@ export class ElementSelectionAgent {
    */
   private generateFindRecommendations(elements: any[], params: any): string[] {
     const recommendations: string[] = [];
-    
+
     if (elements.length === 0) {
       recommendations.push('No matching elements found');
       recommendations.push('Try adjusting search criteria or check page content');
@@ -521,7 +774,7 @@ export class ElementSelectionAgent {
    */
   private generateInteractionRecommendations(action: string): string[] {
     const recommendations: string[] = [];
-    
+
     switch (action) {
       case 'click':
         recommendations.push('Element clicked successfully');
@@ -576,3 +829,14 @@ export class ElementSelectionAgent {
 
 // Global element selection agent instance
 export const elementSelectionAgent = new ElementSelectionAgent();
+
+// Initialize the element selection agent with Web3Agent from service when available
+try {
+  const web3Agent = agent.getWeb3Agent();
+  if (web3Agent) {
+    elementSelectionAgent.setWeb3Agent(web3Agent);
+    logger.info('ElementSelectionAgent', 'Initialized with Web3Agent from service');
+  }
+} catch (error) {
+  logger.warn('ElementSelectionAgent', 'Failed to initialize with Web3Agent from service', { error });
+}
