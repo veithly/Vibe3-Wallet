@@ -312,26 +312,26 @@ export default function ChainAndSiteSelector({
 
   if (isGnosis) {
     pickedPanelKeys = [
-      'swap',
       'send',
       'receive',
+      'swap',
       'bridge',
+      'agent',
       'transactions',
       'nft',
       'security',
-      'agent',
       'more',
     ];
   } else {
     pickedPanelKeys = [
-      'swap',
       'send',
       'receive',
+      'swap',
       'bridge',
+      'agent',
       'transactions',
       'nft',
       'security',
-      'agent',
       'more',
     ];
   }
@@ -361,10 +361,21 @@ export default function ChainAndSiteSelector({
                 overlayClassName="rectangle direction-tooltip"
                 autoAdjustOverflow={false}
               >
-                <div key={index} className="disable-direction">
-                  <ThemeIcon src={item.icon} className="images" />
-                  <div>{item.content} </div>
-                </div>
+                {item.content === 'Agent' ? (
+                  <div
+                    key={index}
+                    // TODO-Ye: animate
+                    className="disable-direction bg-pink-500/50 animate-pulse"
+                  >
+                    <ThemeIcon src={item.icon} className="images" />
+                    <div>{item.content} agent </div>
+                  </div>
+                ) : (
+                  <div key={index} className="disable-direction">
+                    <ThemeIcon src={item.icon} className="images" />
+                    <div>{item.content} </div>
+                  </div>
+                )}
               </Tooltip>
             ) : (
               <div
