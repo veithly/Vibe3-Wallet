@@ -173,8 +173,29 @@ async function restoreAppState() {
       (async () => {
         try {
           const { toolRegistry } = await import('./service/agent/tools/ToolRegistry');
+          const { chatHistoryStore } = await import('./service/agent/chatHistory');
+          const { Actors } = await import('@/ui/views/Agent/types/message');
           const { name, params } = message;
+
+          // Execute tool
           const result = await toolRegistry.executeTool(name, params || {});
+
+          // Append tool result as a 'user' message into current session (if any)
+          try {
+            const current = await chatHistoryStore.getCurrentSession();
+            if (current && current.id) {
+              const safeContent = JSON.stringify({ tool: name, params: (params || {}), result });
+              await chatHistoryStore.addMessage(current.id, {
+                actor: Actors.USER,
+                content: safeContent,
+                timestamp: Date.now(),
+              });
+            }
+          } catch (e) {
+            // Non-fatal: logging only
+            console.warn('Failed to append tool result to chat history', e);
+          }
+
           sendResponse({ success: true, result });
         } catch (e) {
           const err = e instanceof Error ? e.message : String(e);

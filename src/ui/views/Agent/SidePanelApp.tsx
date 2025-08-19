@@ -96,7 +96,7 @@ export const SidePanelApp = () => {
     (newMessage: Message, sessionId?: string) => {
       logger.debug(COMPONENT_NAME, 'AppendMessage called', {
         actor: newMessage.actor,
-        contentLength: newMessage.content.length,
+        contentLength: typeof newMessage.content === 'string' ? newMessage.content.length : 0,
         messageType: newMessage.messageType,
         messageId: newMessage.messageId,
         isStreaming: newMessage.isStreaming,
@@ -104,11 +104,10 @@ export const SidePanelApp = () => {
       });
 
       // Validate message before adding
-      if (!newMessage.actor || !newMessage.content) {
-        logger.error(COMPONENT_NAME, 'Invalid message structure', {
+      if (!newMessage.actor) {
+        logger.error(COMPONENT_NAME, 'Invalid message structure (missing actor)', {
           message: newMessage,
           hasActor: !!newMessage.actor,
-          hasContent: !!newMessage.content,
         });
         return;
       }
@@ -125,7 +124,7 @@ export const SidePanelApp = () => {
         logger.debug(COMPONENT_NAME, 'Message appended to state', {
           totalMessages: updatedMessages.length,
           lastMessageActor: messageWithId.actor,
-          lastMessageLength: messageWithId.content.length,
+          lastMessageLength: typeof messageWithId.content === 'string' ? messageWithId.content.length : 0,
         });
         return updatedMessages;
       });
@@ -167,11 +166,100 @@ export const SidePanelApp = () => {
     setReactStatus(null);
   }, []);
 
+  // Handle tool call results and send them back to LLM
+  const handleToolResults = useCallback(async (toolResults: any[], originalMessage: Message) => {
+    logger.debug(COMPONENT_NAME, 'Handling tool results', {
+      resultsCount: toolResults.length,
+      originalMessageId: originalMessage.messageId,
+    });
+
+    // Display tool results in the UI
+    for (const result of toolResults) {
+      appendMessage({
+        actor: Actors.SYSTEM,
+        content: `Tool "${result.toolName}" completed`,
+        timestamp: Date.now(),
+        messageType: 'tool_result',
+        toolResults: [result],
+      });
+    }
+
+    // If the original message had finish_reason "tool_calls", send results back to LLM
+    if (originalMessage.finishReason === 'tool_calls') {
+      logger.info(COMPONENT_NAME, 'Sending tool results back to LLM', {
+        resultsCount: toolResults.length,
+      });
+
+      // Format tool results as user message for LLM
+      const toolResultsContent = toolResults.map(result =>
+        `Tool "${result.toolName}" result: ${JSON.stringify(result.result, null, 2)}`
+      ).join('\n\n');
+
+      // Send tool results as user message to continue the conversation
+      appendMessage({
+        actor: Actors.USER,
+        content: `Tool execution results:\n\n${toolResultsContent}`,
+        timestamp: Date.now(),
+        messageType: 'standard',
+      });
+
+      // Trigger LLM to continue processing with the tool results
+      // This would typically involve calling the agent service again
+      try {
+        if (portRef.current) {
+          portRef.current.postMessage({
+            type: 'continue_with_tool_results',
+            data: {
+              toolResults: toolResults,
+              sessionId: currentSessionId,
+            },
+          });
+        }
+      } catch (error) {
+        logger.error(COMPONENT_NAME, 'Failed to send tool results to LLM', error);
+      }
+    }
+  }, [appendMessage, currentSessionId]);
+
   // Enhanced task state handler with improved streaming completion detection
   const handleTaskState = useCallback(
     (event: AgentEvent) => {
       const { actor, state, timestamp, data } = event;
-      const content = data?.details;
+      const content = (data?.details ?? data?.content ?? '') as string;
+
+      const mapActionsToFunctionCalls = (actions?: any[]) => {
+        if (!Array.isArray(actions)) return undefined;
+        return actions.map((a: any, idx: number) => ({
+          id: a.id || `action_${idx}`,
+          name: a.type || a.name || 'action',
+          arguments: a.params || {},
+          result: a.result,
+          status: (['pending','executing','completed','failed'] as const).includes(a.status)
+            ? a.status
+            : 'completed',
+          timestamp: Date.now(),
+        }));
+      };
+
+      const mapOpenAIToolCalls = (toolCalls?: any[]) => {
+        if (!Array.isArray(toolCalls)) return undefined;
+        return toolCalls.map((tc: any, idx: number) => ({
+          id: tc.id || `call_${idx}`,
+          name: tc.function?.name || 'function',
+          arguments: (() => {
+            try {
+              if (typeof tc.function?.arguments === 'string') {
+                return JSON.parse(tc.function.arguments);
+              }
+              return tc.function?.arguments || {};
+            } catch {
+              return { raw: tc.function?.arguments };
+            }
+          })(),
+          status: 'executing' as const,
+          timestamp: Date.now(),
+        }));
+      };
 
       logger.debug(COMPONENT_NAME, 'Handling task state', {
         actor,
@@ -244,13 +332,60 @@ export const SidePanelApp = () => {
             state,
           });
 
-          // Regular message handling
-          appendMessage({
-            actor: actor as Actors,
-            content,
-            timestamp,
-            messageType: 'execution',
-          });
+          // Regular message handling with defensive functionCalls mapping
+          const fcFromActions = mapActionsToFunctionCalls(data?.actions);
+          const fcFromToolCalls = mapOpenAIToolCalls?.(data?.tool_calls);
+          const functionCalls = fcFromActions || fcFromToolCalls;
+
+          // Check if we have both content and function calls
+          const hasContent = content && content.trim().length > 0;
+          const hasFunctionCalls = functionCalls && functionCalls.length > 0;
+
+          if (hasContent && hasFunctionCalls) {
+            // Create separate messages for content and function calls
+            logger.debug(COMPONENT_NAME, 'Creating separate messages for content and function calls', {
+              contentLength: content.length,
+              functionCallsCount: functionCalls.length,
+            });
+
+            // First, add the assistant's content message
+            appendMessage({
+              actor: actor as Actors,
+              content,
+              timestamp,
+              messageType: 'assistant_content',
+              finishReason: data?.finish_reason,
+            });
+
+            // Then, add the function calls message
+            appendMessage({
+              actor: actor as Actors,
+              content: `Executing ${functionCalls.length} function call${functionCalls.length > 1 ? 's' : ''}...`,
+              timestamp: timestamp + 1, // Slightly later timestamp to ensure proper ordering
+              messageType: 'function_call',
+              functionCalls,
+              finishReason: data?.finish_reason,
+            });
+          } else if (hasFunctionCalls) {
+            // Only function calls, no content
+            appendMessage({
+              actor: actor as Actors,
+              content: content || `Executing ${functionCalls.length} function call${functionCalls.length > 1 ? 's' : ''}...`,
+              timestamp,
+              messageType: 'function_call',
+              functionCalls,
+              finishReason: data?.finish_reason,
+            });
+          } else {
+            // Only content, no function calls
+            appendMessage({
+              actor: actor as Actors,
+              content,
+              timestamp,
+              messageType: hasContent ? 'execution' : 'standard',
+              finishReason: data?.finish_reason,
+            });
+          }
         }
       } else {
         logger.debug(COMPONENT_NAME, 'Task state event with no content', {
@@ -341,16 +476,78 @@ export const SidePanelApp = () => {
             error: message.error,
             fullMessage: message,
           });
-          logEvent('error', { error: message.error || 'Unknown error' });
+          const rawError = message.rawError ?? message.error ?? message.data;
+          const normalizedError = typeof rawError === 'string' ? rawError : JSON.stringify(rawError);
+          logEvent('error', { error: normalizedError || 'Unknown error' });
           appendMessage({
             actor: Actors.SYSTEM,
-            content: message.error || 'Unknown error occurred',
+            content: normalizedError || 'Unknown error',
             timestamp: Date.now(),
             messageType: 'error',
           });
           setInputEnabled(true);
           setShowStopButton(false);
           resetReActStatus();
+        } else if (message && message.type === 'function_call') {
+          logger.debug(COMPONENT_NAME, 'Received function_call event', {
+            contentLength: message.data?.details?.length || 0,
+            calls: message.data?.functionCalls?.length || 0,
+          });
+
+          const functionCallMessage = {
+            actor: Actors.ASSISTANT,
+            content: message.data?.details || '',
+            timestamp: message.timestamp || Date.now(),
+            messageType: 'function_call' as const,
+            functionCalls: message.data?.functionCalls || [],
+            finishReason: message.data?.finish_reason,
+          };
+
+          appendMessage(functionCallMessage);
+
+          // If this is a tool_calls finish reason, we need to handle the results
+          if (message.data?.finish_reason === 'tool_calls' && message.data?.functionCalls?.length > 0) {
+            logger.info(COMPONENT_NAME, 'Function call with tool_calls finish reason detected', {
+              functionCallsCount: message.data.functionCalls.length,
+            });
+
+            // Monitor for tool execution completion
+            // This will be handled when we receive tool results from the backend
+          }
+        } else if (message && message.type === 'tool_result') {
+          logger.debug(COMPONENT_NAME, 'Received tool_result event', {
+            toolName: message.data?.toolName,
+            success: message.data?.success,
+          });
+
+          // Display tool result
+          appendMessage({
+            actor: Actors.SYSTEM,
+            content: `Tool "${message.data?.toolName || 'unknown'}" ${message.data?.success ? 'completed successfully' : 'failed'}`,
+            timestamp: message.timestamp || Date.now(),
+            messageType: 'tool_result',
+            toolResults: message.data ? [{
+              toolCallId: message.data.toolCallId || '',
+              toolName: message.data.toolName || '',
+              result: message.data.result,
+              success: message.data.success || false,
+              timestamp: message.timestamp || Date.now(),
+            }] : [],
+          });
+
+          // If we have tool results and need to continue the conversation
+          if (message.data?.continueConversation) {
+            logger.info(COMPONENT_NAME, 'Continuing conversation with tool results');
+
+            // Send tool results back to LLM as user message
+            const toolResultContent = `Tool execution result: ${JSON.stringify(message.data.result, null, 2)}`;
+            appendMessage({
+              actor: Actors.USER,
+              content: toolResultContent,
+              timestamp: Date.now(),
+              messageType: 'standard',
+            });
+          }
         } else if (message && message.type === 'streaming_start') {
           logger.info(COMPONENT_NAME, 'Starting streaming response', {
             taskId: message.taskId,
@@ -385,17 +582,23 @@ export const SidePanelApp = () => {
           // Handle streaming chunk
           if (streamingMessageId && message.chunk) {
             setMessages((prev) => {
-              const updatedMessages = prev.map((msg) =>
-                msg.messageId === streamingMessageId
-                  ? {
-                      ...msg,
-                      content:
-                        (msg.content || '') + (message.chunk.content || ''),
-                      functionCalls:
-                        message.chunk.functionCalls || msg.functionCalls || [],
-                    }
-                  : msg
-              );
+              const updatedMessages = prev.map((msg) => {
+                if (msg.messageId !== streamingMessageId) return msg;
+
+                const prevCalls = msg.functionCalls || [];
+                const chunkCalls = (message.chunk as any).functionCalls
+                  ? (message.chunk as any).functionCalls
+                  : (message.chunk as any).functionCall
+                  ? [(message.chunk as any).functionCall]
+                  : [];
+                const mergedCalls = [...prevCalls, ...chunkCalls];
+
+                return {
+                  ...msg,
+                  content: (msg.content || '') + (message.chunk.content || ''),
+                  functionCalls: mergedCalls,
+                };
+              });
 
               // Log the update
               const streamingMsg = updatedMessages.find(m => m.messageId === streamingMessageId);
@@ -505,14 +708,17 @@ export const SidePanelApp = () => {
             streamingMessageId,
           });
 
-          // Handle streaming error
+          const rawError = message.error ?? message.data?.error ?? message.data;
+          const normalizedError = typeof rawError === 'string' ? rawError : JSON.stringify(rawError);
+
+          // Handle streaming error - always display the raw/normalized error
           if (streamingMessageId) {
             setMessages((prev) =>
               prev.map((msg) =>
                 msg.messageId === streamingMessageId
                   ? {
                       ...msg,
-                      content: message.error || 'Streaming error occurred',
+                      content: normalizedError,
                       isStreaming: false,
                       messageType: 'streaming_error' as const,
                     }
@@ -520,10 +726,10 @@ export const SidePanelApp = () => {
               )
             );
           } else {
-            // Fallback: Create error message
+            // Fallback: Create error message with raw error
             appendMessage({
               actor: Actors.SYSTEM,
-              content: message.error || 'Streaming error occurred',
+              content: normalizedError,
               timestamp: Date.now(),
               messageType: 'streaming_error',
             });
@@ -536,7 +742,7 @@ export const SidePanelApp = () => {
 
           logEvent('streaming_error', {
             taskId: message.taskId,
-            error: message.error,
+            error: normalizedError,
           });
         } else if (message && message.type === 'thinking') {
           logger.debug(COMPONENT_NAME, 'Processing thinking message', {
@@ -1350,7 +1556,7 @@ export const SidePanelApp = () => {
 
   const handleOpenElementSelector = useCallback(() => {
     logger.debug(COMPONENT_NAME, 'HandleOpenElementSelector called');
-    setShowElementSelector(true);
+    setShowElementSelector(prev => !prev);
     setShowSettings(false);
     setShowHistory(false);
   }, []);
@@ -1570,7 +1776,7 @@ export const SidePanelApp = () => {
       <div className={`side-panel-app ${isDarkMode ? 'dark' : ''}`}>
         {/* New Chat Confirmation Modal */}
         {showNewChatConfirm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="flex fixed inset-0 z-50 justify-center items-center">
             {/* Backdrop */}
             <div
               className="absolute inset-0 bg-black bg-opacity-50"
@@ -1578,11 +1784,11 @@ export const SidePanelApp = () => {
             />
 
             {/* Modal */}
-            <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="relative mx-4 w-full max-w-md bg-white rounded-lg shadow-xl">
               {/* Header */}
-              <div className="flex items-center justify-between p-6 border-b">
+              <div className="flex justify-between items-center p-6 border-b">
                 <div className="flex items-center space-x-2">
-                  <div className="w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center">
+                  <div className="flex justify-center items-center w-5 h-5 bg-blue-500 rounded-full">
                     <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
                     </svg>
@@ -1593,7 +1799,7 @@ export const SidePanelApp = () => {
 
               {/* Body */}
               <div className="p-6">
-                <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="p-4 mb-4 bg-amber-50 rounded-lg border border-amber-200">
                   <div className="flex">
                     <div className="flex-shrink-0">
                       <svg className="w-5 h-5 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
@@ -1615,16 +1821,16 @@ export const SidePanelApp = () => {
               </div>
 
               {/* Footer */}
-              <div className="flex justify-end space-x-3 p-6 border-t bg-gray-50 rounded-b-lg">
+              <div className="flex justify-end p-6 space-x-3 bg-gray-50 rounded-b-lg border-t">
                 <button
                   onClick={cancelNewChat}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white rounded-md border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={confirmNewChat}
-                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md border border-transparent hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                 >
                   Start New Chat
                 </button>

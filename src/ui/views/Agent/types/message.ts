@@ -34,6 +34,14 @@ export interface ReActStatusMessage {
   timestamp: number;
 }
 
+export interface ToolResult {
+  toolCallId: string;
+  toolName: string;
+  result: any;
+  success: boolean;
+  timestamp: number;
+}
+
 export interface Message {
   actor: Actors;
   content: string;
@@ -43,7 +51,9 @@ export interface Message {
   functionCalls?: FunctionCall[];
   thinking?: ThinkingStep[];
   reactStatus?: ReActStatusMessage;
-  messageType?: 'standard' | 'thinking' | 'function_call' | 'reasoning' | 'react_status' | 'execution' | 'error' | 'streaming_start' | 'streaming_chunk' | 'streaming_complete' | 'streaming_error' | 'speech_to_text_error' | 'fallback' | 'fallback_complete';
+  toolResults?: ToolResult[];
+  finishReason?: string;
+  messageType?: 'standard' | 'thinking' | 'function_call' | 'reasoning' | 'react_status' | 'execution' | 'error' | 'streaming_start' | 'streaming_chunk' | 'streaming_complete' | 'streaming_error' | 'speech_to_text_error' | 'fallback' | 'fallback_complete' | 'tool_result' | 'assistant_content';
 }
 
 export interface ActorProfile {

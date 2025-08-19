@@ -180,7 +180,7 @@ export class BrowserAutomationController {
     });
 
     let targetTab = activeTabs[0];
-    
+
     // If no active tab, try to get any tab from current window
     if (!targetTab) {
       const allTabs = await chrome.tabs.query({ currentWindow: true });
@@ -190,16 +190,10 @@ export class BrowserAutomationController {
         targetTab = allTabs[0];
       }
     }
-    
-    // If still no tab, create a new one
+
+    // If still no tab, do not create about:blank. Surface a clear error to caller.
     if (!targetTab) {
-      targetTab = await chrome.tabs.create({ 
-        url: 'about:blank',
-        active: true 
-      });
-      
-      // Wait for tab to initialize
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      throw new Error('No active tab found. Please open a webpage (http/https/file) and try again.');
     }
 
     if (!targetTab || !targetTab.id) {
@@ -631,32 +625,49 @@ export class BrowserAutomationController {
             timing: Date.now() - startTime,
           };
         }
-        
+
         let tab: chrome.tabs.Tab;
-        
+
         // Get or create a tab for navigation using robust tab management
         try {
           tab = await this.getOrCreateActiveTab();
-          logger.info('Got tab for navigation', { 
-            tabId: tab.id, 
+          logger.info('Got tab for navigation', {
+            tabId: tab.id,
             tabUrl: tab.url,
             requestedUrl: params.url,
             isUrlOf: params.url === 'of',
             urlLength: params.url.length,
           });
-        } catch (tabError) {
-          logger.error('Failed to get or create tab for navigation', tabError);
-          throw new Error(`Failed to get or create tab for navigation: ${tabError.message}`);
+        } catch (tabError: any) {
+          // Fallback: create a new tab directly with the target URL (never about:blank)
+          logger.warn('Failed to get active tab; creating new tab with target URL', {
+            error: tabError?.message || String(tabError),
+            requestedUrl: params.url,
+          });
+          try {
+            tab = await chrome.tabs.create({ url: params.url, active: true });
+            logger.info('Created new tab with target URL', { tabId: tab.id, tabUrl: tab.url });
+          } catch (createErr: any) {
+            logger.error('Failed to create new tab with target URL', createErr);
+            throw new Error(`Failed to get or create tab for navigation: ${tabError?.message || tabError}`);
+          }
         }
-        
-        // Update the tab with the new URL
+
+        // If current tab URL already equals requested URL (normalized), avoid duplicate navigation
         try {
-          tab = await chrome.tabs.update(tab.id!, { url: params.url });
-          logger.info('Chrome tabs.update result', { 
-            tabId: tab.id, 
+          const normalize = (u?: string) => (u || '').trim().replace(/\/$/, '').toLowerCase();
+          const currentUrl = normalize(tab.url);
+          const targetUrl = normalize(params.url);
+          if (currentUrl === targetUrl) {
+            logger.info('Skip tabs.update: current URL equals target URL (normalized)', { tabId: tab.id, currentUrl: tab.url, targetUrl: params.url });
+          } else {
+            tab = await chrome.tabs.update(tab.id!, { url: params.url });
+          }
+          logger.info('Chrome tabs.update result', {
+            tabId: tab.id,
             tabUrl: tab.url,
             originalRequestedUrl: params.url,
-            urlMatches: tab.url === params.url,
+            urlMatches: (tab.url || '').trim().replace(/\/$/, '').toLowerCase() === (params.url || '').trim().replace(/\/$/, '').toLowerCase(),
             isTabUrlOf: tab.url === 'of',
           });
         } catch (updateError) {
@@ -689,14 +700,14 @@ export class BrowserAutomationController {
           method: 'chrome.tabs.update/create',
         });
 
-        const resultData = { 
-          tabId: tab.id, 
+        const resultData = {
+          tabId: tab.id,
           url: params.url,
           finalUrl: tab.url,
           title: tab.title,
           method: 'chrome.tabs.update/create'
         };
-        
+
         logger.info('RETURNING NAVIGATION RESULT - FINAL URL CHECK', {
           resultData,
           urlInResult: resultData.url,
@@ -717,8 +728,8 @@ export class BrowserAutomationController {
         const timing = Date.now() - startTime;
         return {
           success: true,
-          data: { 
-            simulated: true, 
+          data: {
+            simulated: true,
             url: params.url,
             method: 'simulation'
           },
@@ -1144,10 +1155,10 @@ export class BrowserAutomationController {
       // Try to get any tab in current window
       const allTabs = await chrome.tabs.query({ currentWindow: true });
       if (allTabs.length > 0) {
-        const suitableTab = allTabs.find(tab => 
+        const suitableTab = allTabs.find(tab =>
           tab.url && tab.url !== 'about:blank' && !tab.discarded
         );
-        
+
         if (suitableTab) {
           await chrome.tabs.update(suitableTab.id!, { active: true });
           return suitableTab;
@@ -1155,15 +1166,15 @@ export class BrowserAutomationController {
       }
 
       // Create new tab if needed
-      const newTab = await chrome.tabs.create({ 
+      const newTab = await chrome.tabs.create({
         url: 'about:blank',
-        active: true 
+        active: true
       });
-      
+
       // Wait for tab to initialize
       await new Promise(resolve => setTimeout(resolve, 1000));
       return newTab;
-      
+
     } catch (error) {
       logger.error('Failed to ensure active tab', error);
       return null;
@@ -1202,7 +1213,7 @@ export class BrowserAutomationController {
       });
 
       let targetTab = activeTabs[0];
-      
+
       // If no active tab, try to get any tab from current window
       if (!targetTab) {
         const allTabs = await chrome.tabs.query({ currentWindow: true });
@@ -1210,26 +1221,26 @@ export class BrowserAutomationController {
           // Activate the first available tab
           await chrome.tabs.update(allTabs[0].id!, { active: true });
           targetTab = allTabs[0];
-          logger.info('Activated existing tab for element selection', { 
-            tabId: targetTab.id, 
-            url: targetTab.url 
+          logger.info('Activated existing tab for element selection', {
+            tabId: targetTab.id,
+            url: targetTab.url
           });
         }
       }
-      
+
       // If still no tab, create a new one
       if (!targetTab) {
         logger.info('No suitable tab found, creating new tab for element selection');
-        targetTab = await chrome.tabs.create({ 
+        targetTab = await chrome.tabs.create({
           url: 'about:blank',
-          active: true 
+          active: true
         });
-        
+
         // Wait for tab to initialize
         await new Promise(resolve => setTimeout(resolve, 1000));
-        logger.info('Created new tab for element selection', { 
-          tabId: targetTab.id, 
-          url: targetTab.url 
+        logger.info('Created new tab for element selection', {
+          tabId: targetTab.id,
+          url: targetTab.url
         });
       }
 
@@ -1277,7 +1288,7 @@ export class BrowserAutomationController {
     try {
       // Use enhanced tab management
       const targetTab = await this.ensureActiveTab();
-      
+
       if (!targetTab || !targetTab.id) {
         throw new Error('No active tab available and could not create new tab');
       }
@@ -1314,7 +1325,7 @@ export class BrowserAutomationController {
     try {
       // Use enhanced tab management
       const targetTab = await this.ensureActiveTab();
-      
+
       if (!targetTab || !targetTab.id) {
         throw new Error('No active tab available and could not create new tab');
       }
@@ -1352,7 +1363,7 @@ export class BrowserAutomationController {
     try {
       // Use enhanced tab management
       const targetTab = await this.ensureActiveTab();
-      
+
       if (!targetTab || !targetTab.id) {
         throw new Error('No active tab available and could not create new tab');
       }

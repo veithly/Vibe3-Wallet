@@ -250,41 +250,11 @@ export const ElementSelector: React.FC<ElementSelectorProps> = ({
       } catch {}
       await chrome.tabs.sendMessage(activeTabId, { type: 'ELEMENT_SELECTOR_ACTIVATE', options: { mode: 'highlight' } });
 
-      // Ask page to scan and log in page console as well
+      // New flow: Use toolRegistry highlightElement with interactive kind and filter
+      let items: any[] = [];
       try {
-        await chrome.tabs.sendMessage(activeTabId, {
-          type: 'ELEMENT_DEBUG_SCAN_AND_LOG',
-          params: {
-            options: {
-              elementType: elementType.trim(),
-              textFilter: filterText.trim(),
-              includeAttributes: false,
-              includeAll: scanMode === 'all',
-            },
-          },
-        });
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('[ElementSelector][Scan] Page logging failed:', e);
-      }
-
-      const res = await chrome.tabs.sendMessage(activeTabId, {
-        type: 'ELEMENT_GET_INTERACTIVE',
-        params: {
-          options: {
-            elementType: elementType.trim(),
-            textFilter: filterText.trim(),
-            includeAttributes: false,
-            includeAll: scanMode === 'all',
-          },
-        },
-      });
-
-      let items = (res?.success && res?.data?.elements) ? res.data.elements : [];
-
-      // New flow: Use toolRegistry highlightElement with interactiveOnly flag
-      try {
-        const toolRes = await executeTool('highlightElement', { interactiveOnly: scanMode === 'interactive' });
+        const kind = scanMode === 'all' ? 'all' : 'clickable';
+        const toolRes = await executeTool('highlightElement', { interactiveOnly: kind, limit: 120 });
         const candidates = toolRes?.elements || [];
         if (Array.isArray(candidates) && candidates.length) {
           items = candidates.map((c: any) => ({ selector: c.selector, element: { tagName: c.tag, textContent: c.text } }));

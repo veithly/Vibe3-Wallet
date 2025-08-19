@@ -114,9 +114,16 @@ class RealChatModel implements IBaseChatModel {
     );
 
     if (!response.ok) {
-      throw new Error(
-        `OpenAI API error: ${response.status} ${response.statusText}`
-      );
+      let bodyText: string | undefined;
+      let bodyJson: any | undefined;
+      try {
+        bodyText = await response.text();
+        bodyJson = JSON.parse(bodyText);
+      } catch (_) {
+        // ignore
+      }
+      const errorPayload = bodyJson ?? { status: response.status, statusText: response.statusText, body: bodyText };
+      throw new Error(JSON.stringify(errorPayload));
     }
 
     const data = await response.json();
@@ -496,21 +503,33 @@ class RealChatModel implements IBaseChatModel {
   private transformToOpenAI(
     messages: any[]
   ): { payloadMessages: any[]; tools: any[] } {
-    const payloadMessages: any[] = [];
+    const payloadMessagesRaw: any[] = [];
+
     for (const msg of messages) {
-      if (msg.type === 'system') {
-        payloadMessages.push({ role: 'system', content: msg.content });
-      } else if (msg.type === 'human' || msg.type === 'user') {
-        payloadMessages.push({ role: 'user', content: msg.content });
-      } else if (msg.type === 'ai' || msg.type === 'assistant') {
+      // Prefer LangChain _getType when available
+      const lcType = (msg as any)?._getType?.();
+      const type = lcType || (msg as any)?.type;
+
+      if (type === 'system') {
+        payloadMessagesRaw.push({ role: 'system', content: msg.content });
+        continue;
+      }
+      if (type === 'human' || type === 'user') {
+        payloadMessagesRaw.push({ role: 'user', content: msg.content });
+        continue;
+      }
+      if (type === 'ai' || type === 'assistant') {
         const entry: any = { role: 'assistant', content: msg.content };
-        if (msg.additional_kwargs?.tool_calls) {
-          entry.tool_calls = msg.additional_kwargs.tool_calls;
+        const toolCalls = (msg as any)?.additional_kwargs?.tool_calls;
+        if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+          entry.tool_calls = toolCalls;
         }
-        payloadMessages.push(entry);
-      } else if (msg.type === 'tool') {
-        const tool_call_id = msg.additional_kwargs?.tool_call_id;
-        payloadMessages.push({
+        payloadMessagesRaw.push(entry);
+        continue;
+      }
+      if (type === 'tool') {
+        const tool_call_id = (msg as any)?.tool_call_id || (msg as any)?.additional_kwargs?.tool_call_id;
+        payloadMessagesRaw.push({
           role: 'tool',
           content:
             typeof msg.content === 'string'
@@ -518,12 +537,24 @@ class RealChatModel implements IBaseChatModel {
               : JSON.stringify(msg.content),
           tool_call_id,
         });
-      } else {
-        payloadMessages.push({ role: 'user', content: msg.content });
+        continue;
       }
+
+      // Fallback: infer from explicit role field or default to user
+      const explicitRole = (msg as any)?.role;
+      payloadMessagesRaw.push({ role: explicitRole || 'user', content: msg.content });
     }
 
-    // Tools may be injected by wrapper via a private field
+    // Deduplicate consecutive identical user messages to avoid duplicates
+    const payloadMessages: any[] = [];
+    for (const m of payloadMessagesRaw) {
+      const prev = payloadMessages[payloadMessages.length - 1];
+      if (prev && prev.role === 'user' && m.role === 'user' && String(prev.content) === String(m.content)) {
+        continue;
+      }
+      payloadMessages.push(m);
+    }
+
     const tools: any[] = (this as any)._pending_tools || [];
     return { payloadMessages, tools };
   }
@@ -538,16 +569,18 @@ class Web3LLM implements IWeb3LLM {
   private supportsStreaming: boolean;
   private multiAgentIntegration: MultiAgentIntegration | null;
   private enableMultiAgent: boolean;
+  private providerConfig?: ProviderConfig; // Store original provider config
 
   constructor(
     model: IBaseChatModel,
     providerType: string = 'enhanced',
     modelName: string = 'web3-llm',
-    options: { enableMultiAgent?: boolean; context?: Web3Context } = {}
+    options: { enableMultiAgent?: boolean; context?: Web3Context; providerConfig?: ProviderConfig } = {}
   ) {
     this.model = model;
     this.providerType = providerType;
     this.modelName = modelName;
+    this.providerConfig = options.providerConfig; // Store provider config for API key access
     this._supportsFunctionCalling = this.detectFunctionCallingSupport();
     this.supportsStreaming = this.detectStreamingSupport();
     this.enableMultiAgent = options.enableMultiAgent ?? false;
@@ -611,20 +644,8 @@ class Web3LLM implements IWeb3LLM {
       }
     } catch (error) {
       logger.error('Failed to generate LLM response:', error);
-
-      // Return fallback response
-      return {
-        response: JSON.stringify({
-          thinking: 'Error occurred while processing request',
-          actions: [],
-          confidence: 0.1,
-          reply:
-            'I apologize, but I encountered an error while processing your request. Please try again.',
-        }),
-        actions: [],
-        confidence: 0.1,
-        thinking: 'Error occurred',
-      };
+      // Bubble up raw provider error to be rendered by UI instead of preset fallback
+      throw error;
     }
   }
 
@@ -635,7 +656,20 @@ class Web3LLM implements IWeb3LLM {
     tools?: FunctionSchema[],
     onChunk?: (chunk: StreamingLLMResponse) => void
   ): Promise<LLMResponse> {
+    logger.info('🚀 generateStreamingResponse called', {
+      supportsStreaming: this.supportsStreaming,
+      providerType: this.providerType,
+      hasOnChunk: !!onChunk,
+      messageCount: messages.length,
+      modelName: this.modelName,
+    });
+
     if (!this.supportsStreaming) {
+      logger.warn('⚠️ Streaming not supported, falling back to non-streaming', {
+        providerType: this.providerType,
+        modelName: this.modelName,
+        supportedProviders: ['openai', 'anthropic', 'gemini', 'azure-openai', 'openrouter', 'groq'],
+      });
       // Fall back to non-streaming response
       const response = await this.generateResponse(
         messages,
@@ -644,6 +678,7 @@ class Web3LLM implements IWeb3LLM {
         tools
       );
       if (onChunk) {
+        logger.info('📤 Sending fallback chunks');
         // Send as single chunk for compatibility
         onChunk(
           createStreamingChunk('content', { content: response.response })
@@ -1360,6 +1395,52 @@ Summarize what you've accomplished and provide any additional insights or recomm
     tools?: FunctionSchema[],
     onChunk?: (chunk: StreamingLLMResponse) => void
   ): Promise<LLMResponse> {
+    logger.info('🔥 Starting real streaming response generation', {
+      providerType: this.providerType,
+      hasTools: !!tools && tools.length > 0,
+      messageCount: messages.length,
+      hasOnChunk: !!onChunk,
+    });
+
+    try {
+      // Use real streaming based on provider type
+      const providerLower = this.providerType.toLowerCase();
+      logger.info(`🎯 Routing to provider-specific streaming: ${providerLower}`);
+
+      switch (providerLower) {
+        case 'openai':
+        case 'azure-openai':
+        case 'openrouter':
+          logger.info('🚀 Using OpenAI streaming implementation - BYPASSING LANGCHAIN');
+          // IMPORTANT: Directly use our streaming implementation, bypass all LangChain calls
+          return await this.generateOpenAIStreamingResponse(messages, context, intent, tools, onChunk);
+        case 'anthropic':
+          logger.info('🤖 Using Anthropic streaming implementation (fallback)');
+          return await this.generateAnthropicStreamingResponse(messages, context, intent, tools, onChunk);
+        case 'gemini':
+          logger.info('🧠 Using Gemini streaming implementation (fallback)');
+          return await this.generateGeminiStreamingResponse(messages, context, intent, tools, onChunk);
+        case 'groq':
+          logger.info('⚡ Using Groq streaming implementation (fallback)');
+          return await this.generateGroqStreamingResponse(messages, context, intent, tools, onChunk);
+        default:
+          // Fall back to simulated streaming for unsupported providers
+          logger.warn(`❌ Real streaming not implemented for provider: ${this.providerType}, falling back to simulated streaming`);
+          return await this.generateSimulatedStreamingResponse(messages, context, intent, tools, onChunk);
+      }
+    } catch (error) {
+      logger.error('💥 Real streaming failed, falling back to simulated streaming', error);
+      return await this.generateSimulatedStreamingResponse(messages, context, intent, tools, onChunk);
+    }
+  }
+
+  private async generateSimulatedStreamingResponse(
+    messages: BaseMessage[],
+    context: Web3Context,
+    intent?: Web3Intent,
+    tools?: FunctionSchema[],
+    onChunk?: (chunk: StreamingLLMResponse) => void
+  ): Promise<LLMResponse> {
     const streamingHandler = new StreamingHandler({
       enableStreaming: true,
       onChunk,
@@ -1405,7 +1486,7 @@ Summarize what you've accomplished and provide any additional insights or recomm
       response: streamingResult.content,
       actions: [],
       confidence: 0.8,
-      thinking: 'Generated via streaming response',
+      thinking: 'Generated via simulated streaming response',
       functionCalls: streamingResult.functionCalls,
     };
   }
@@ -1427,21 +1508,32 @@ Summarize what you've accomplished and provide any additional insights or recomm
   private transformToOpenAI(
     messages: any[]
   ): { payloadMessages: any[]; tools: any[] } {
-    const payloadMessages: any[] = [];
+    const payloadMessagesRaw: any[] = [];
+
     for (const msg of messages) {
-      if (msg.type === 'system') {
-        payloadMessages.push({ role: 'system', content: msg.content });
-      } else if (msg.type === 'human' || msg.type === 'user') {
-        payloadMessages.push({ role: 'user', content: msg.content });
-      } else if (msg.type === 'ai' || msg.type === 'assistant') {
+      const lcType = (msg as any)?._getType?.();
+      const type = lcType || (msg as any)?.type;
+
+      if (type === 'system') {
+        payloadMessagesRaw.push({ role: 'system', content: msg.content });
+        continue;
+      }
+      if (type === 'human' || type === 'user') {
+        payloadMessagesRaw.push({ role: 'user', content: msg.content });
+        continue;
+      }
+      if (type === 'ai' || type === 'assistant') {
         const entry: any = { role: 'assistant', content: msg.content };
-        if (msg.additional_kwargs?.tool_calls) {
-          entry.tool_calls = msg.additional_kwargs.tool_calls;
+        const toolCalls = (msg as any)?.additional_kwargs?.tool_calls;
+        if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+          entry.tool_calls = toolCalls;
         }
-        payloadMessages.push(entry);
-      } else if (msg.type === 'tool') {
-        const tool_call_id = msg.additional_kwargs?.tool_call_id;
-        payloadMessages.push({
+        payloadMessagesRaw.push(entry);
+        continue;
+      }
+      if (type === 'tool') {
+        const tool_call_id = (msg as any)?.tool_call_id || (msg as any)?.additional_kwargs?.tool_call_id;
+        payloadMessagesRaw.push({
           role: 'tool',
           content:
             typeof msg.content === 'string'
@@ -1449,12 +1541,22 @@ Summarize what you've accomplished and provide any additional insights or recomm
               : JSON.stringify(msg.content),
           tool_call_id,
         });
-      } else {
-        payloadMessages.push({ role: 'user', content: msg.content });
+        continue;
       }
+
+      const explicitRole = (msg as any)?.role;
+      payloadMessagesRaw.push({ role: explicitRole || 'user', content: msg.content });
     }
 
-    // Supply tools if present on the last assistant message; otherwise caller should inject via parameters
+    const payloadMessages: any[] = [];
+    for (const m of payloadMessagesRaw) {
+      const prev = payloadMessages[payloadMessages.length - 1];
+      if (prev && prev.role === 'user' && m.role === 'user' && String(prev.content) === String(m.content)) {
+        continue;
+      }
+      payloadMessages.push(m);
+    }
+
     const tools: any[] = (this as any)._pending_tools || [];
     return { payloadMessages, tools };
   }
@@ -1839,7 +1941,461 @@ Protocols: ${Object.keys(context.protocols).join(', ')}
       'groq',
     ];
 
-    return streamingProviders.includes(this.providerType.toLowerCase());
+    const supportsStreaming = streamingProviders.includes(this.providerType.toLowerCase());
+    logger.info('🔍 Streaming support detection', {
+      providerType: this.providerType,
+      providerTypeLower: this.providerType.toLowerCase(),
+      streamingProviders,
+      supportsStreaming,
+    });
+
+    return supportsStreaming;
+  }
+
+  /**
+   * Real OpenAI streaming implementation
+   */
+  private async generateOpenAIStreamingResponse(
+    messages: BaseMessage[],
+    context: Web3Context,
+    intent?: Web3Intent,
+    tools?: FunctionSchema[],
+    onChunk?: (chunk: StreamingLLMResponse) => void
+  ): Promise<LLMResponse> {
+    logger.info('🔥 OpenAI streaming method called', {
+      messageCount: messages.length,
+      hasOnChunk: !!onChunk,
+      hasTools: !!tools && tools.length > 0,
+    });
+
+    // Normalize messages to proper OpenAI schema (preserve system/tool roles)
+    const { payloadMessages } = this.transformToOpenAI(messages as any);
+
+    // Deduplicate consecutive identical user messages to avoid double user inputs
+    const openaiMessages: any[] = [];
+    for (const m of payloadMessages) {
+      const prev = openaiMessages[openaiMessages.length - 1];
+      if (prev && prev.role === 'user' && m.role === 'user' && String(prev.content) === String(m.content)) {
+        continue; // skip duplicate consecutive user message
+      }
+      openaiMessages.push(m);
+    }
+
+    // Get model configuration from the underlying model
+    const modelConfig = this.model as any;
+    const modelName = modelConfig.modelName || modelConfig._modelName || 'gpt-3.5-turbo';
+    const temperature = modelConfig.temperature || modelConfig._temperature || 0.7;
+
+    // Try multiple ways to get the API key from LangChain model
+    let apiKey: string | undefined = undefined;
+
+    // Method 1: Direct properties
+    apiKey = modelConfig.apiKey ||
+             modelConfig.openAIApiKey ||
+             modelConfig.openaiApiKey ||
+             modelConfig.configuration?.apiKey ||
+             modelConfig.configuration?.openAIApiKey;
+
+    // Method 2: From LangChain model fields
+    if (!apiKey && modelConfig.model) {
+      const langchainModel = modelConfig.model;
+      apiKey = langchainModel.apiKey ||
+               langchainModel.openAIApiKey ||
+               langchainModel.openaiApiKey ||
+               langchainModel.configuration?.apiKey;
+    }
+
+    // Method 3: From Web3LLM provider config (most reliable)
+    if (!apiKey && this.providerConfig) {
+      apiKey = this.providerConfig.apiKey;
+      logger.info('🔑 Found API key in provider config', {
+        hasApiKey: !!apiKey,
+        apiKeyLength: apiKey ? apiKey.length : 0,
+      });
+    }
+
+    // Method 4: Environment variable
+    if (!apiKey) {
+      apiKey = process.env.OPENAI_API_KEY;
+    }
+
+    const baseUrl = modelConfig.baseUrl ||
+                    modelConfig.configuration?.baseUrl ||
+                    'https://api.openai.com/v1';
+
+    logger.info('🔧 OpenAI streaming config', {
+      modelName,
+      temperature,
+      hasApiKey: !!apiKey,
+      apiKeyLength: apiKey ? apiKey.length : 0,
+      baseUrl,
+      messageCount: openaiMessages.length,
+      modelConfigKeys: Object.keys(modelConfig),
+      modelConfigType: typeof modelConfig,
+      modelType: this.model?.constructor?.name,
+    });
+
+    if (!apiKey) {
+      logger.error('❌ No OpenAI API key found', {
+        modelConfig: JSON.stringify(modelConfig, null, 2),
+        envHasKey: !!process.env.OPENAI_API_KEY,
+      });
+      throw new Error('OpenAI API key is required for streaming');
+    }
+
+    const requestBody: any = {
+      model: modelName,
+      messages: openaiMessages,
+      temperature: temperature,
+      stream: true,
+    };
+
+    // Add tools if available
+    if (this._supportsFunctionCalling && tools && tools.length > 0) {
+      requestBody.tools = tools.map(tool => ({
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        },
+      }));
+      requestBody.tool_choice = 'auto';
+    }
+
+    logger.info('🚀 Making OpenAI streaming request', {
+      url: `${baseUrl}/chat/completions`,
+      requestBody: JSON.stringify(requestBody, null, 2),
+    });
+
+    const response = await fetch(
+      `${baseUrl}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      }
+    );
+
+    logger.info('📡 OpenAI response received', {
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries()),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error('❌ OpenAI API error', {
+        status: response.status,
+        statusText: response.statusText,
+        errorText,
+      });
+      throw new Error(`OpenAI API error: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      logger.error('❌ Failed to get response stream reader');
+      throw new Error('Failed to get response stream reader');
+    }
+
+    logger.info('📖 Starting to read streaming response');
+    let fullContent = '';
+    let functionCalls: FunctionCall[] = [];
+    const decoder = new TextDecoder();
+    let chunkCount = 0;
+
+    // Track streaming tool calls
+    const streamingToolCalls = new Map<string, {
+      id: string;
+      name: string;
+      arguments: string;
+    }>();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          logger.info('✅ Streaming read completed', { chunkCount, fullContentLength: fullContent.length });
+          break;
+        }
+
+        chunkCount++;
+        const chunk = decoder.decode(value, { stream: true });
+        logger.debug(`📦 Received chunk ${chunkCount}`, { chunkLength: chunk.length, chunk: chunk.substring(0, 100) });
+
+        const lines = chunk.split('\n').filter(line => line.trim() !== '');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') {
+              logger.info('🏁 Received [DONE] marker');
+              continue;
+            }
+
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed.choices?.[0]?.delta;
+
+              if (delta?.content) {
+                fullContent += delta.content;
+                logger.debug('📝 Content delta received', {
+                  deltaLength: delta.content.length,
+                  totalLength: fullContent.length,
+                  delta: delta.content.substring(0, 50),
+                });
+
+                if (onChunk) {
+                  logger.debug('📤 Sending content chunk to callback');
+                  onChunk({
+                    id: `chunk_${Date.now()}`,
+                    type: 'content',
+                    content: delta.content,
+                    timestamp: Date.now(),
+                  });
+                }
+              }
+
+              if (delta?.tool_calls) {
+                // Handle streaming tool calls - accumulate arguments
+                for (const toolCall of delta.tool_calls) {
+                  // Use index as the primary identifier for streaming tool calls
+                  const toolCallIndex = toolCall.index !== undefined ? toolCall.index : 0;
+                  const toolCallKey = `tool_${toolCallIndex}`;
+
+                  // Get or create streaming tool call using index as key
+                  let streamingCall = streamingToolCalls.get(toolCallKey);
+                  if (!streamingCall) {
+                    streamingCall = {
+                      id: toolCall.id || `call_${toolCallIndex}`,
+                      name: '',
+                      arguments: '',
+                    };
+                    streamingToolCalls.set(toolCallKey, streamingCall);
+                    console.log('🆕 Created new streaming tool call', {
+                      toolCallIndex,
+                      toolCallKey,
+                      toolCallId: toolCall.id,
+                      initialName: toolCall.function?.name,
+                      hasInitialName: !!toolCall.function?.name,
+                    });
+                    logger.info('🆕 Created new streaming tool call', {
+                      toolCallIndex,
+                      toolCallKey,
+                      toolCallId: toolCall.id,
+                      initialName: toolCall.function?.name,
+                    });
+                  }
+
+                  // Accumulate function name and arguments
+                  if (toolCall.function?.name && !streamingCall.name) {
+                    streamingCall.name = toolCall.function.name;
+                    console.log('📝 Set tool call name', {
+                      toolCallKey,
+                      name: streamingCall.name,
+                      hadPreviousName: !!streamingCall.name,
+                    });
+                    logger.info('📝 Set tool call name', {
+                      toolCallKey,
+                      name: streamingCall.name,
+                    });
+                  } else if (toolCall.function?.name) {
+                    console.log('⚠️ Tool call name already set', {
+                      toolCallKey,
+                      existingName: streamingCall.name,
+                      newName: toolCall.function.name,
+                    });
+                  }
+                  if (toolCall.function?.arguments) {
+                    streamingCall.arguments += toolCall.function.arguments;
+                    logger.debug('📝 Tool call delta received', {
+                      toolCallKey,
+                      name: streamingCall.name,
+                      argumentsLength: streamingCall.arguments.length,
+                      delta: toolCall.function.arguments.substring(0, 50),
+                      totalArguments: streamingCall.arguments.substring(0, 100),
+                    });
+                  }
+
+                  // Update ID if we get a real one
+                  if (toolCall.id && toolCall.id !== streamingCall.id) {
+                    const oldId = streamingCall.id;
+                    streamingCall.id = toolCall.id;
+                    logger.info('🔄 Updated tool call ID', {
+                      toolCallKey,
+                      oldId,
+                      newId: toolCall.id,
+                    });
+                  }
+                }
+              }
+            } catch (parseError) {
+              logger.warn('Failed to parse streaming chunk', parseError);
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+      logger.info('📖 Streaming reader released', {
+        streamingToolCallsSize: streamingToolCalls.size,
+        streamingToolCallsKeys: Array.from(streamingToolCalls.keys()),
+      });
+    }
+
+    // Process accumulated tool calls
+    console.log('🔧 Processing accumulated tool calls', {
+      streamingToolCallsCount: streamingToolCalls.size,
+      streamingToolCallsKeys: Array.from(streamingToolCalls.keys()),
+    });
+    logger.info('🔧 Processing accumulated tool calls', {
+      streamingToolCallsCount: streamingToolCalls.size,
+      streamingToolCallsKeys: Array.from(streamingToolCalls.keys()),
+    });
+
+    for (const [toolCallKey, streamingCall] of streamingToolCalls) {
+      logger.info('🔍 Processing streaming tool call', {
+        toolCallKey,
+        name: streamingCall.name,
+        hasName: !!streamingCall.name,
+        argumentsLength: streamingCall.arguments.length,
+        arguments: streamingCall.arguments,
+      });
+
+      if (streamingCall.name && streamingCall.arguments) {
+        try {
+          const parsedArguments = JSON.parse(streamingCall.arguments);
+          const functionCall: FunctionCall = {
+            name: streamingCall.name,
+            arguments: parsedArguments,
+            id: streamingCall.id,
+          };
+          functionCalls.push(functionCall);
+
+          console.log('✅ Completed tool call from streaming', {
+            name: functionCall.name,
+            id: functionCall.id,
+            arguments: parsedArguments,
+            functionCallsLength: functionCalls.length,
+          });
+          logger.info('✅ Completed tool call from streaming', {
+            name: functionCall.name,
+            id: functionCall.id,
+            arguments: parsedArguments,
+            functionCallsLength: functionCalls.length,
+          });
+
+          if (onChunk) {
+            onChunk({
+              id: `tool_complete_${Date.now()}`,
+              type: 'function_call',
+              functionCall,
+              timestamp: Date.now(),
+            });
+          }
+        } catch (parseError) {
+          logger.warn('❌ Failed to parse accumulated tool call arguments', {
+            toolCallKey,
+            name: streamingCall.name,
+            arguments: streamingCall.arguments,
+            error: parseError,
+          });
+        }
+      } else {
+        logger.warn('⚠️ Incomplete tool call data', {
+          toolCallKey,
+          name: streamingCall.name,
+          hasName: !!streamingCall.name,
+          argumentsLength: streamingCall.arguments.length,
+          arguments: streamingCall.arguments.substring(0, 100),
+        });
+      }
+    }
+
+    // Send completion chunk
+    if (onChunk) {
+      onChunk({
+        id: `done_${Date.now()}`,
+        type: 'done',
+        done: true,
+        timestamp: Date.now(),
+      });
+    }
+
+    const streamingResult = {
+      response: fullContent,
+      actions: [],
+      confidence: 0.8,
+      thinking: 'Generated via real OpenAI streaming',
+      functionCalls,
+    };
+
+    console.log('🎯 OpenAI streaming response completed', {
+      hasContent: !!fullContent,
+      contentLength: fullContent.length,
+      hasFunctionCalls: !!functionCalls && functionCalls.length > 0,
+      functionCallsCount: functionCalls.length,
+      functionCallNames: functionCalls.map(fc => fc.name),
+      responseKeys: Object.keys(streamingResult),
+      fullResponse: JSON.stringify(streamingResult, null, 2),
+    });
+    logger.info('🎯 OpenAI streaming response completed', {
+      hasContent: !!fullContent,
+      contentLength: fullContent.length,
+      hasFunctionCalls: !!functionCalls && functionCalls.length > 0,
+      functionCallsCount: functionCalls.length,
+      functionCallNames: functionCalls.map(fc => fc.name),
+      responseKeys: Object.keys(streamingResult),
+      fullResponse: JSON.stringify(streamingResult, null, 2),
+    });
+
+    return streamingResult;
+  }
+
+  /**
+   * Placeholder for Anthropic streaming (to be implemented)
+   */
+  private async generateAnthropicStreamingResponse(
+    messages: BaseMessage[],
+    context: Web3Context,
+    intent?: Web3Intent,
+    tools?: FunctionSchema[],
+    onChunk?: (chunk: StreamingLLMResponse) => void
+  ): Promise<LLMResponse> {
+    logger.warn('Anthropic streaming not yet implemented, falling back to simulated streaming');
+    return await this.generateSimulatedStreamingResponse(messages, context, intent, tools, onChunk);
+  }
+
+  /**
+   * Placeholder for Gemini streaming (to be implemented)
+   */
+  private async generateGeminiStreamingResponse(
+    messages: BaseMessage[],
+    context: Web3Context,
+    intent?: Web3Intent,
+    tools?: FunctionSchema[],
+    onChunk?: (chunk: StreamingLLMResponse) => void
+  ): Promise<LLMResponse> {
+    logger.warn('Gemini streaming not yet implemented, falling back to simulated streaming');
+    return await this.generateSimulatedStreamingResponse(messages, context, intent, tools, onChunk);
+  }
+
+  /**
+   * Placeholder for Groq streaming (to be implemented)
+   */
+  private async generateGroqStreamingResponse(
+    messages: BaseMessage[],
+    context: Web3Context,
+    intent?: Web3Intent,
+    tools?: FunctionSchema[],
+    onChunk?: (chunk: StreamingLLMResponse) => void
+  ): Promise<LLMResponse> {
+    logger.warn('Groq streaming not yet implemented, falling back to simulated streaming');
+    return await this.generateSimulatedStreamingResponse(messages, context, intent, tools, onChunk);
   }
 }
 
@@ -2051,7 +2607,8 @@ export async function createLLMInstance(
     // Wrap with Web3LLM for Web3-specific functionality
     const web3LLM = new Web3LLM(baseModel, providerType, modelName, {
       enableMultiAgent: options?.enableMultiAgent,
-      context: options?.context
+      context: options?.context,
+      providerConfig: providerConfig // Pass provider config for API key access
     });
     logger.info(`Created Web3LLM instance for ${providerType}/${modelName}`, {
       multiAgentEnabled: options?.enableMultiAgent

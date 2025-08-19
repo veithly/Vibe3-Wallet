@@ -129,6 +129,11 @@ export class Web3Agent extends EventEmitter {
 
   private config: Web3AgentConfig;
   private state: Web3AgentState;
+  private activeTabId?: number;
+
+  public setActiveTabId(tabId: number) {
+    this.activeTabId = tabId;
+  }
 
   constructor(
     context: AgentContext,
@@ -173,7 +178,7 @@ export class Web3Agent extends EventEmitter {
 
     // Initialize Element Selection Agent
     this.elementSelectionAgent = elementSelectionAgent;
-    
+
     // Initialize Multi-Agent System
     this.initializeMultiAgentSystem();
 
@@ -292,7 +297,11 @@ export class Web3Agent extends EventEmitter {
     console.log(`Web3Agent initialized with session: ${this.state.sessionId}`);
   }
 
-  async processUserInstruction(instruction: string): Promise<AgentResponse> {
+  async processUserInstruction(
+    instruction: string,
+    enableStreaming: boolean = false,
+    onChunk?: (chunk: StreamingLLMResponse) => void
+  ): Promise<AgentResponse> {
     try {
       const startTime = Date.now();
 
@@ -376,12 +385,24 @@ export class Web3Agent extends EventEmitter {
       // Step 6: Generate LLM response with enhanced prompt and error recovery
       let llmResponse: LLMResponse;
       try {
-        llmResponse = await this.llm.generateResponse(
-          enhancedPrompt.messages,
-          enhancedPrompt.context,
-          enhancedPrompt.intent,
-          enhancedPrompt.tools
-        );
+        if (enableStreaming && onChunk && this.llm.generateStreamingResponse) {
+          // Use streaming response generation
+          llmResponse = await this.llm.generateStreamingResponse(
+            enhancedPrompt.messages,
+            enhancedPrompt.context,
+            enhancedPrompt.intent,
+            enhancedPrompt.tools,
+            onChunk
+          );
+        } else {
+          // Use regular response generation
+          llmResponse = await this.llm.generateResponse(
+            enhancedPrompt.messages,
+            enhancedPrompt.context,
+            enhancedPrompt.intent,
+            enhancedPrompt.tools
+          );
+        }
       } catch (error) {
         logger.error('LLM generation failed:', error);
 
@@ -395,25 +416,37 @@ export class Web3Agent extends EventEmitter {
         if (recovery.success) {
           // Retry with recovered context
           try {
-            llmResponse = await this.llm.generateResponse(
-              this.state.conversationHistory,
-              this.state.currentContext,
-              intent
-            );
+            if (enableStreaming && onChunk && this.llm.generateStreamingResponse) {
+              // Use streaming response generation for retry
+              llmResponse = await this.llm.generateStreamingResponse(
+                this.state.conversationHistory,
+                this.state.currentContext,
+                intent,
+                undefined, // no tools for retry
+                onChunk
+              );
+            } else {
+              // Use regular response generation for retry
+              llmResponse = await this.llm.generateResponse(
+                this.state.conversationHistory,
+                this.state.currentContext,
+                intent
+              );
+            }
           } catch (retryError) {
-            // Use fallback response
-            llmResponse =
-              recovery.result || (await this.generateFallbackResponse(error));
+            // Surface raw provider error rather than preset fallback
+            const raw = retryError instanceof Error ? retryError.message : JSON.stringify(retryError);
+            throw new Error(raw);
           }
         } else if (recovery.fallback) {
-          // Use fallback plan
-          llmResponse = await this.generateFallbackResponse(
-            error,
-            recovery.fallback
+          // Surface fallback reason explicitly
+          throw new Error(
+            typeof recovery.fallback === 'string' ? recovery.fallback : JSON.stringify(recovery.fallback)
           );
         } else {
-          // Final fallback
-          llmResponse = await this.generateFallbackResponse(error);
+          // No recovery — propagate original error to UI
+          const raw = error instanceof Error ? error.message : JSON.stringify(error);
+          throw new Error(raw);
         }
 
         const errorMessage = llmResponse.response;
@@ -1487,21 +1520,17 @@ export class Web3Agent extends EventEmitter {
   }
 
   private generateErrorResponse(error: any): string {
-    if (error.message?.includes('insufficient funds')) {
-      return '❌ Insufficient funds for this transaction. Please check your balance and try again.';
-    }
+    // Prefer raw provider error payloads; avoid fixed/templated replies
+    const raw = error instanceof Error ? error.message : String(error);
 
-    if (error.message?.includes('user rejected')) {
-      return "❌ Transaction was rejected. Please try again when you're ready.";
+    // If the error message contains JSON (e.g., OpenAI invalid_request_error), pretty-print it
+    try {
+      const parsed = JSON.parse(raw);
+      return JSON.stringify(parsed, null, 2);
+    } catch (_) {
+      // Not JSON; return plain message without extra prefixes/suffixes
+      return raw || 'Unknown error';
     }
-
-    if (error.message?.includes('network')) {
-      return '❌ Network error occurred. Please check your connection and try again.';
-    }
-
-    return `❌ An error occurred: ${
-      error.message || 'Unknown error'
-    }. Please try again or contact support if the problem persists.`;
   }
 
   private async updateWeb3Context(): Promise<void> {
@@ -1526,14 +1555,23 @@ export class Web3Agent extends EventEmitter {
     enableStreaming: boolean = false,
     onChunk?: (chunk: StreamingLLMResponse) => void,
     onThinking?: (thinking: any) => void,
-    onReActStatus?: (status: any) => void
+    onReActStatus?: (status: any) => void,
+    onToolCalls?: (payload: { content?: string; functionCalls?: FunctionCall[] }) => void
   ): Promise<AgentResponse> {
     try {
       const startTime = Date.now();
 
-      // Add user message to conversation history
-      const userMessage = new HumanMessage(instruction);
-      this.state.conversationHistory.push(userMessage);
+      // Add user message to conversation history (avoid consecutive duplicates)
+      let userMessage = new HumanMessage(instruction);
+      const lastMsg = this.state.conversationHistory[this.state.conversationHistory.length - 1] as any;
+      const lastType = lastMsg?._getType?.();
+      const lastContent = lastMsg?.content;
+      if (!(lastType === 'human' && String(lastContent) === String(instruction))) {
+        this.state.conversationHistory.push(userMessage);
+      } else {
+        // Reuse the last human message to keep IDs consistent
+        userMessage = lastMsg;
+      }
 
       // Initialize ReAct status
       if (onReActStatus) {
@@ -1547,7 +1585,7 @@ export class Web3Agent extends EventEmitter {
           timestamp: Date.now(),
         });
       }
-      
+
       // Store initial thinking message
       await this.storeReActStatusMessage('Analyzing your request...');
 
@@ -1572,7 +1610,7 @@ export class Web3Agent extends EventEmitter {
           timestamp: Date.now(),
         });
       }
-      
+
       // Store intent recognition message
       await this.storeReActStatusMessage(`Intent recognized: ${intent.action}`);
 
@@ -1661,19 +1699,125 @@ export class Web3Agent extends EventEmitter {
           timestamp: Date.now(),
         });
       }
-      
+
       // Store tool preparation message
       await this.storeReActStatusMessage('Preparing to execute tools...');
 
       // First turn: ask for tool calls
       // Ensure provider receives tool schemas
       ;(this.llm as any).attachToolsForProvider?.(availableTools);
-      llmResponse = await this.llm.generateResponse(
-        generatedPrompt.messages,
-        generatedPrompt.context,
-        generatedPrompt.intent,
-        generatedPrompt.tools
-      );
+
+      logger.info('🔍 Web3Agent first turn LLM call decision', {
+        enableStreaming,
+        hasOnChunk: !!onChunk,
+        hasGenerateStreamingResponse: !!this.llm.generateStreamingResponse,
+        llmType: this.llm.constructor.name,
+        llmMethods: Object.getOwnPropertyNames(Object.getPrototypeOf(this.llm)),
+      });
+
+      if (enableStreaming && onChunk) {
+        logger.info('🚀 Web3Agent: FORCING streaming response generation for first turn');
+
+        // FORCE streaming by directly calling the method, even if it doesn't exist
+        if (this.llm.generateStreamingResponse) {
+          logger.info('✅ Using existing generateStreamingResponse method');
+          try {
+            llmResponse = await this.llm.generateStreamingResponse(
+              generatedPrompt.messages,
+              generatedPrompt.context,
+              generatedPrompt.intent,
+              generatedPrompt.tools,
+              onChunk
+            );
+            logger.info('✅ First turn streaming completed successfully', {
+              hasResponse: !!llmResponse.response,
+              responseLength: llmResponse.response?.length || 0,
+              hasFunctionCalls: !!llmResponse.functionCalls && llmResponse.functionCalls.length > 0,
+              functionCallsCount: llmResponse.functionCalls?.length || 0,
+            });
+          } catch (streamingError) {
+            logger.error('❌ First turn streaming failed', streamingError);
+            throw streamingError;
+          }
+        } else {
+          logger.error('❌ generateStreamingResponse method not found, this should not happen!');
+          logger.info('🔧 Available methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(this.llm)));
+
+          // Fallback to regular response but simulate streaming
+          llmResponse = await this.llm.generateResponse(
+            generatedPrompt.messages,
+            generatedPrompt.context,
+            generatedPrompt.intent,
+            generatedPrompt.tools
+          );
+
+          // Simulate streaming by sending the response as chunks
+          if (llmResponse.response) {
+            onChunk({
+              id: `simulated_${Date.now()}`,
+              type: 'content',
+              content: llmResponse.response,
+              timestamp: Date.now(),
+            });
+          }
+        }
+      } else {
+        logger.warn('⚠️ Web3Agent: Using regular response generation for first turn', {
+          enableStreaming,
+          hasOnChunk: !!onChunk,
+          hasGenerateStreamingResponse: !!this.llm.generateStreamingResponse,
+        });
+        // Use regular response generation for first turn
+        llmResponse = await this.llm.generateResponse(
+          generatedPrompt.messages,
+          generatedPrompt.context,
+          generatedPrompt.intent,
+          generatedPrompt.tools
+        );
+
+        // Send first turn response content via streaming if available (for non-streaming fallback)
+        if (enableStreaming && onChunk && llmResponse.response) {
+          onChunk({
+            id: `first-turn-response-${Date.now()}`,
+            type: 'content',
+            content: llmResponse.response,
+            timestamp: Date.now(),
+          });
+        }
+      }
+
+      // Emit non-streaming tool/function calls to UI if present (support both OpenAI tool_calls and internal functionCalls)
+      if (onToolCalls) {
+        const openAIToolCalls = (llmResponse as any)?.tool_calls || [];
+        const internalCalls = (llmResponse as any)?.functionCalls || [];
+        const hasCalls = (openAIToolCalls && openAIToolCalls.length > 0) || (internalCalls && internalCalls.length > 0);
+        if (hasCalls) {
+          const nowTs = Date.now();
+          const normalized = (openAIToolCalls.length > 0
+            ? openAIToolCalls.map((tc: any, idx: number) => ({
+                id: tc.id || `call_${tc.function?.name || 'fn'}_${nowTs}_${idx}`,
+                name: tc.function?.name,
+                arguments: (() => {
+                  try { return tc.function?.arguments ? JSON.parse(tc.function.arguments) : {}; } catch { return { raw: tc.function?.arguments }; }
+                })(),
+                status: 'executing',
+                timestamp: nowTs,
+              }))
+            : internalCalls.map((fc: any, idx: number) => ({
+                id: fc.id || `call_${fc.name || 'fn'}_${nowTs}_${idx}`,
+                name: fc.name,
+                arguments: fc.arguments || {},
+                status: 'executing',
+                timestamp: nowTs,
+              }))
+          ) as any[];
+
+          onToolCalls({
+            content: (llmResponse as any).response || (llmResponse as any).content || '',
+            functionCalls: normalized as any,
+          });
+        }
+      }
 
       // 🚨🚨🚨 CRITICAL DEBUGGING: Check LLM response before extraction
       console.log('🚨🚨🚨 LLM RESPONSE BEFORE EXTRACTION:', {
@@ -1714,7 +1858,7 @@ export class Web3Agent extends EventEmitter {
             timestamp: Date.now(),
           });
         }
-        
+
         // Store tool execution message
         const toolNames = extractedFunctionCalls.map(fc => fc.name).join(', ');
         await this.storeReActStatusMessage(`Executing tools: ${toolNames}`, `Running ${toolNames}`, false, true);
@@ -1737,6 +1881,15 @@ export class Web3Agent extends EventEmitter {
         );
         accumulatedActions.push(...firstTurnActions);
 
+        console.log('🔧 First turn actions executed', {
+          actionsCount: firstTurnActions.length,
+          actions: firstTurnActions.map(action => ({
+            type: action.type,
+            status: action.status,
+            hasResult: !!action.result,
+          })),
+        });
+
         // Append tool results as ToolMessages
         for (let i = 0; i < firstTurnActions.length; i++) {
           const step = firstTurnActions[i];
@@ -1752,9 +1905,26 @@ export class Web3Agent extends EventEmitter {
             tool_call_id: fc?.id || `${step.type || 'tool'}_${i}`,
           });
           this.state.conversationHistory.push(toolMsg);
+
+          console.log('📝 Added tool result to conversation history', {
+            toolName: step.type,
+            toolCallId: fc?.id,
+            success: step.status === 'completed',
+            hasResult: !!step.result,
+            toolContent: toolContent.substring(0, 200),
+            conversationLength: this.state.conversationHistory.length,
+          });
         }
 
         // Second turn: let the model incorporate results into a final answer
+        console.log('🔄 Preparing second turn prompt', {
+          conversationHistoryLength: this.state.conversationHistory.length,
+          lastMessages: this.state.conversationHistory.slice(-3).map(msg => ({
+            type: msg.constructor.name,
+            content: msg.content.substring(0, 100),
+          })),
+        });
+
         const secondPrompt = await this.promptManager.createPrompt({
           messages: this.state.conversationHistory,
           context: this.state.currentContext,
@@ -1764,12 +1934,113 @@ export class Web3Agent extends EventEmitter {
           availableActions: this.actionRegistry.getAvailableActions(),
         });
         ;(this.llm as any).attachToolsForProvider?.(availableTools);
-        llmResponse = await this.llm.generateResponse(
-          secondPrompt.messages,
-          secondPrompt.context,
-          secondPrompt.intent,
-          secondPrompt.tools
-        );
+
+        // Generate second turn response with streaming support
+        logger.info('🔍 Web3Agent second turn LLM call decision', {
+          enableStreaming,
+          hasOnChunk: !!onChunk,
+          hasGenerateStreamingResponse: !!this.llm.generateStreamingResponse,
+        });
+
+        if (enableStreaming && onChunk) {
+          logger.info('🚀 Web3Agent: FORCING streaming response generation for second turn');
+
+          // FORCE streaming by directly calling the method, even if it doesn't exist
+          if (this.llm.generateStreamingResponse) {
+            logger.info('✅ Using existing generateStreamingResponse method for second turn');
+            try {
+              llmResponse = await this.llm.generateStreamingResponse(
+                secondPrompt.messages,
+                secondPrompt.context,
+                secondPrompt.intent,
+                secondPrompt.tools,
+                onChunk
+              );
+              logger.info('✅ Second turn streaming completed successfully', {
+                hasResponse: !!llmResponse.response,
+                responseLength: llmResponse.response?.length || 0,
+                hasFunctionCalls: !!llmResponse.functionCalls && llmResponse.functionCalls.length > 0,
+                functionCallsCount: llmResponse.functionCalls?.length || 0,
+              });
+            } catch (streamingError) {
+              logger.error('❌ Second turn streaming failed', streamingError);
+              throw streamingError;
+            }
+          } else {
+            logger.error('❌ generateStreamingResponse method not found for second turn!');
+
+            // Fallback to regular response but simulate streaming
+            llmResponse = await this.llm.generateResponse(
+              secondPrompt.messages,
+              secondPrompt.context,
+              secondPrompt.intent,
+              secondPrompt.tools
+            );
+
+            // Simulate streaming by sending the response as chunks
+            if (llmResponse.response) {
+              onChunk({
+                id: `simulated_second_${Date.now()}`,
+                type: 'content',
+                content: llmResponse.response,
+                timestamp: Date.now(),
+              });
+            }
+          }
+        } else {
+          logger.warn('⚠️ Web3Agent: Using regular response generation for second turn', {
+            enableStreaming,
+            hasOnChunk: !!onChunk,
+            hasGenerateStreamingResponse: !!this.llm.generateStreamingResponse,
+          });
+          // Use regular response generation for second turn
+          llmResponse = await this.llm.generateResponse(
+            secondPrompt.messages,
+            secondPrompt.context,
+            secondPrompt.intent,
+            secondPrompt.tools
+          );
+
+          // Send the second turn response content via streaming (for non-streaming fallback)
+          if (enableStreaming && onChunk && llmResponse.response) {
+            onChunk({
+              id: `second-turn-response-${Date.now()}`,
+              type: 'content',
+              content: llmResponse.response,
+              timestamp: Date.now(),
+            });
+          }
+        }
+        // Emit non-streaming tool_calls for second-turn as well
+        if (onToolCalls) {
+          const openAIToolCalls2 = (llmResponse as any)?.tool_calls || [];
+          const internalCalls2 = (llmResponse as any)?.functionCalls || [];
+          const hasCalls2 = (openAIToolCalls2 && openAIToolCalls2.length > 0) || (internalCalls2 && internalCalls2.length > 0);
+          if (hasCalls2) {
+            const nowTs2 = Date.now();
+            const normalized2 = (openAIToolCalls2.length > 0
+              ? openAIToolCalls2.map((tc: any, idx: number) => ({
+                  id: tc.id || `call_${tc.function?.name || 'fn'}_${nowTs2}_${idx}`,
+                  name: tc.function?.name,
+                  arguments: (() => { try { return tc.function?.arguments ? JSON.parse(tc.function.arguments) : {}; } catch { return { raw: tc.function?.arguments }; } })(),
+                  status: 'executing',
+                  timestamp: nowTs2,
+                }))
+              : internalCalls2.map((fc: any, idx: number) => ({
+                  id: fc.id || `call_${fc.name || 'fn'}_${nowTs2}_${idx}`,
+                  name: fc.name,
+                  arguments: fc.arguments || {},
+                  status: 'executing',
+                  timestamp: nowTs2,
+                }))
+            ) as any[];
+
+            onToolCalls({
+              content: (llmResponse as any).response || (llmResponse as any).content || '',
+              functionCalls: normalized2 as any,
+            });
+          }
+        }
       }
 
       // Step 5: Execute function calls if any (second turn)
@@ -1912,7 +2183,7 @@ export class Web3Agent extends EventEmitter {
           logger.error(`[${stepExecutionId}] Tool not found: ${functionCall.name}`, {
             availableTools: Array.from(toolRegistry.getAllTools()).map(t => t.name),
           });
-          
+
           // Store failed tool call message
           await this.storeToolCallMessage(functionCall, 'failed');
           throw new Error(`Tool not found: ${functionCall.name}`);
@@ -1921,7 +2192,7 @@ export class Web3Agent extends EventEmitter {
         // Check and recover permissions if tool requires them
         if (toolExists.requiredPermissions && toolExists.requiredPermissions.length > 0) {
           const permissionCheck = await this.checkAndRecoverPermissions(toolExists.requiredPermissions);
-          
+
           if (!permissionCheck.hasAllPermissions) {
             const errorMessage = this.createPermissionErrorMessage(permissionCheck.missingPermissions);
             logger.error(`[${stepExecutionId}] Permission check failed for ${functionCall.name}`, {
@@ -1929,14 +2200,14 @@ export class Web3Agent extends EventEmitter {
               recoverySuccessful: permissionCheck.recoverySuccessful,
               error: permissionCheck.error
             });
-            
+
             // Store failed tool call message with permission error
             await this.storeToolCallMessage(functionCall, 'failed', {
               success: false,
               error: errorMessage,
               permissionError: true
             });
-            
+
             throw new Error(`Permission required: ${errorMessage}`);
           }
         }
@@ -2033,7 +2304,7 @@ export class Web3Agent extends EventEmitter {
             paramCount: Object.keys(functionCall.arguments).length,
           }
         );
-        
+
         // Store failed tool call message
         await this.storeToolCallMessage(functionCall, 'failed', {
           success: false,
@@ -2063,7 +2334,7 @@ export class Web3Agent extends EventEmitter {
           error: outerError instanceof Error ? outerError.message : String(outerError),
           functionName: functionCall.name,
         });
-        
+
         // Create failed action step for unexpected errors
         const actionStep: ActionStep = {
           id: `func_${functionCall.name}_${Date.now()}`,
@@ -2113,21 +2384,21 @@ export class Web3Agent extends EventEmitter {
         // Check permissions if required
         if (toolExists.requiredPermissions && toolExists.requiredPermissions.length > 0) {
           const permissionCheck = await this.checkAndRecoverPermissions(toolExists.requiredPermissions);
-          
+
           if (!permissionCheck.hasAllPermissions) {
             const errorMessage = this.createPermissionErrorMessage(permissionCheck.missingPermissions);
             logger.error(`Permission check failed for parallel execution of ${functionCall.name}`, {
               missingPermissions: permissionCheck.missingPermissions,
               recoverySuccessful: permissionCheck.recoverySuccessful
             });
-            
+
             // Store failed tool call message with permission error
             await this.storeToolCallMessage(functionCall, 'failed', {
               success: false,
               error: errorMessage,
               permissionError: true
             });
-            
+
             throw new Error(`Permission required for ${functionCall.name}: ${errorMessage}`);
           }
         }
@@ -2808,7 +3079,7 @@ export class Web3Agent extends EventEmitter {
     try {
       // Get current permissions
       const currentPermissions = await chrome.permissions.getAll();
-      
+
       // Check which permissions are missing
       const missingPermissions = requiredPermissions.filter(permission => {
         return !currentPermissions.permissions?.includes(permission as any);
@@ -2886,26 +3157,26 @@ export class Web3Agent extends EventEmitter {
           false,
           false
         );
-        return { 
-          success: false, 
-          error: 'User denied permission request. Please grant the required permissions in extension settings.' 
+        return {
+          success: false,
+          error: 'User denied permission request. Please grant the required permissions in extension settings.'
         };
       }
 
     } catch (error) {
       logger.error('Permission recovery failed with error', error);
       const errorMessage = error instanceof Error ? error.message : String(error);
-      
+
       await this.storeReActStatusMessage(
         'Permission recovery failed',
         `Unable to recover permissions: ${errorMessage}`,
         false,
         false
       );
-      
-      return { 
-        success: false, 
-        error: `Failed to recover permissions: ${errorMessage}. Please check extension permissions.` 
+
+      return {
+        success: false,
+        error: `Failed to recover permissions: ${errorMessage}. Please check extension permissions.`
       };
     }
   }

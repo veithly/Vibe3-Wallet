@@ -1,4 +1,6 @@
 import { createLogger } from '@/utils/logger';
+import { toolRegistry } from './agent/tools/ToolRegistry';
+
 import { llmProviderStore, agentModelStore } from './agent/storage/index';
 import { Executor } from './agent/executor';
 import type { AgentExecutorBridge } from './agent/executor';
@@ -162,7 +164,7 @@ class AgentService {
    */
   private async getWeb3LLM(agentName: AgentNameEnum): Promise<IWeb3LLM> {
     const cacheKey = `${agentName}_${this.getConfigVersion()}`;
-    
+
     // Check if we have a cached instance for this agent with current config
     if (this.llmInstanceCache.has(cacheKey)) {
       logger.debug('AgentService', `Using cached LLM instance for ${agentName} (version ${this.getConfigVersion()})`);
@@ -185,7 +187,7 @@ class AgentService {
       // Create LLM instance
       const { createLLMInstance } = await import('./agent/llm/factory');
       const llm = await createLLMInstance(providerConfig, agentModel);
-      
+
       // Wrap with Web3LLM if needed
       let web3LLM: IWeb3LLM;
       if ('generateResponse' in llm) {
@@ -200,10 +202,10 @@ class AgentService {
 
       // Cache the instance with version key
       this.llmInstanceCache.set(cacheKey, web3LLM);
-      
+
       // Clean up old cached instances
       this.cleanupOldCacheEntries(agentName);
-      
+
       logger.info('AgentService', `Created and cached LLM instance for ${agentName}`, {
         provider: providerConfig.type,
         model: agentModel.modelName,
@@ -250,18 +252,18 @@ class AgentService {
   public async reloadAgentModel(agentName: AgentNameEnum): Promise<void> {
     try {
       logger.info('AgentService', `Reloading model for ${agentName}`);
-      
+
       // Increment configuration version to invalidate cache
       this.incrementConfigVersion();
-      
+
       // Clear all cached instances for this agent
       this.cleanupOldCacheEntries(agentName);
-      
+
       // If this is the current Web3Agent's LLM, refresh it
       if (this.web3Agent) {
         await this.refreshLLM();
       }
-      
+
       logger.info('AgentService', `Successfully reloaded model for ${agentName} (version ${this.getConfigVersion()})`);
     } catch (error) {
       logger.error('AgentService', `Failed to reload model for ${agentName}`, error);
@@ -275,16 +277,16 @@ class AgentService {
   public async reloadAllAgentModels(): Promise<void> {
     try {
       logger.info('AgentService', 'Reloading all agent models');
-      
+
       // Increment configuration version to invalidate all cache
       this.incrementConfigVersion();
-      
+
       // Clear all cached instances
       this.clearLLMCache();
-      
+
       // Refresh LLM and Web3Agent
       await this.refreshLLM();
-      
+
       logger.info('AgentService', `Successfully reloaded all agent models (version ${this.getConfigVersion()})`);
     } catch (error) {
       logger.error('AgentService', 'Failed to reload all agent models', error);
@@ -367,7 +369,7 @@ class AgentService {
     try {
       // Clear LLM cache before refresh
       this.clearLLMCache();
-      
+
       const llm = await this.initializeLLM();
 
       // Wrap to Web3LLM if needed
@@ -778,6 +780,10 @@ class AgentService {
           await this.reloadAgentModel(message.agent);
           break;
 
+        case 'continue_with_tool_results':
+          await this.handleContinueWithToolResults(message, port);
+          break;
+
         default:
           logger.warn('Unknown message type:', message.type);
           port.postMessage({
@@ -1043,12 +1049,38 @@ class AgentService {
     // Check if we should use function calling
     const supportsFunctionCalling = await this.web3Agent.supportsFunctionCalling();
 
+    // Generate consistent task ID for both paths
+    const currentTaskId = `task_${Date.now()}`;
+
     if (supportsFunctionCalling) {
+
+      // Send streaming start event
+      port.postMessage({
+        type: 'streaming_start',
+        taskId: currentTaskId,
+        timestamp: Date.now(),
+      });
+
       // Use enhanced function calling capabilities with thinking support
+
+      // Propagate tabId to Web3Agent and ToolRegistry for element-selection tools
+      try {
+        this.web3Agent.setActiveTabId(tabId);
+        toolRegistry.setLastActiveTabId(tabId);
+      } catch {}
+
       const response = await this.web3Agent.processUserInstructionWithFunctionCalling(
         task,
-        false, // streaming disabled for now
-        undefined, // no streaming callback
+        true, // Enable streaming for tool call responses
+        (chunk) => {
+          // Send streaming chunk to client
+          port.postMessage({
+            type: 'streaming_chunk',
+            taskId: currentTaskId,
+            chunk,
+            timestamp: Date.now(),
+          });
+        },
         (thinking) => {
           // Send thinking message to client
           port.postMessage({
@@ -1073,26 +1105,110 @@ class AgentService {
             timestamp: Date.now(),
             data: reactStatus,
           });
+        },
+        (toolCalls) => {
+          // Non-streaming tool_calls emission for UI rendering
+          const content = toolCalls?.content || '';
+          const fcs = toolCalls?.functionCalls || [];
+
+          // 1) Dedicated function_call event (for Function Call card)
+          port.postMessage({
+            type: 'function_call',
+            actor: 'assistant',
+            state: 'ACT_START',
+            timestamp: Date.now(),
+            data: {
+              details: content,
+              functionCalls: fcs,
+            },
+          });
+
+          // 2) Also emit an execution event carrying actions so existing execution handler renders it too
+          port.postMessage({
+            type: 'execution',
+            actor: 'assistant',
+            state: 'ACT_START',
+            timestamp: Date.now(),
+            data: {
+              details: content,
+              actions: fcs.map((c: any) => ({ type: c.name, params: c.arguments, status: c.status })),
+            },
+          });
         }
       );
 
-      // Send response back to client with enhanced fallback
-      await this.ensureMessageDisplayed({
-        type: 'execution',
-        actor: Actors.SYSTEM,
-        state: 'TASK_OK',
+      // Send streaming complete event
+      port.postMessage({
+        type: 'streaming_complete',
+        taskId: currentTaskId,
         timestamp: Date.now(),
         data: {
-          details: response.message,
-          actions: response.actions,
-          plan: response.plan,
-          simulation: response.simulation,
-          functionCalling: true,
+          details: response?.message || '',
+          content: response?.message || '',
+          functionCalls: [],
+          actions: response?.actions || [],
         },
-      }, port, 'web3_task_response');
+      });
+
+      // Send response back to client; if failed, surface raw error instead of preset text
+      if (!response?.success) {
+        await this.ensureMessageDisplayed({
+          type: 'error',
+          error: response?.error || response?.message || 'LLM request failed',
+          timestamp: Date.now(),
+          originalType: 'web3_task_response',
+        }, port, 'web3_task_error');
+      } else {
+        await this.ensureMessageDisplayed({
+          type: 'execution',
+          actor: Actors.SYSTEM,
+          state: 'TASK_OK',
+          timestamp: Date.now(),
+          data: {
+            details: response.message,
+            actions: response.actions,
+            plan: response.plan,
+            simulation: response.simulation,
+            functionCalling: true,
+          },
+        }, port, 'web3_task_response');
+      }
     } else {
-      // Fall back to traditional processing
-      const response = await this.web3Agent.processUserInstruction(task);
+      // Fall back to traditional processing with streaming support
+      // Send streaming start event
+      port.postMessage({
+        type: 'streaming_start',
+        taskId: currentTaskId,
+        timestamp: Date.now(),
+      });
+
+      // Use traditional processing but with streaming chunks
+      const response = await this.web3Agent.processUserInstruction(
+        task,
+        true, // Enable streaming
+        (chunk) => {
+          // Send streaming chunk to client
+          port.postMessage({
+            type: 'streaming_chunk',
+            taskId: currentTaskId,
+            chunk,
+            timestamp: Date.now(),
+          });
+        }
+      );
+
+      // Send streaming complete event
+      port.postMessage({
+        type: 'streaming_complete',
+        taskId: currentTaskId,
+        timestamp: Date.now(),
+        data: {
+          details: response?.message || '',
+          content: response?.message || '',
+          functionCalls: [],
+          actions: response?.actions || [],
+        },
+      });
 
       // Send response back to client with enhanced fallback
       await this.ensureMessageDisplayed({
@@ -1198,19 +1314,57 @@ class AgentService {
           });
         },
         undefined, // thinking callback (optional)
-        () => {
-          // Completion callback - called when streaming is finished
-          if (!isCompleted) {
-            isCompleted = true;
-            clearTimeout(streamingTimeout);
-            logger.info('AgentService', 'Streaming completed naturally', {
-              task,
-              tabId,
-              chunkCount,
-            });
-          }
+        (reactStatus) => {
+          // Forward ReAct status updates to client
+          port.postMessage({
+            type: 'react_status',
+            actor: Actors.SYSTEM,
+            state: 'REACT_STATUS',
+            timestamp: Date.now(),
+            data: reactStatus,
+          });
+        },
+        (toolCalls) => {
+          // Forward function calls to client for UI rendering
+          const content = toolCalls?.content || '';
+          const fcs = toolCalls?.functionCalls || [];
+
+          // 1) Dedicated function_call event (for Function Call card)
+          port.postMessage({
+            type: 'function_call',
+            actor: 'assistant',
+            state: 'ACT_START',
+            timestamp: Date.now(),
+            data: {
+              details: content,
+              functionCalls: fcs,
+            },
+          });
+
+          // 2) Also emit an execution event carrying actions so existing execution handler renders it too
+          port.postMessage({
+            type: 'execution',
+            actor: 'assistant',
+            state: 'ACT_START',
+            timestamp: Date.now(),
+            data: {
+              details: content,
+              actions: fcs.map((c: any) => ({ type: c.name, params: c.arguments, status: c.status })),
+            },
+          });
         }
       );
+
+      // Mark streaming as completed after process returns
+      if (!isCompleted) {
+        isCompleted = true;
+        clearTimeout(streamingTimeout);
+        logger.info('AgentService', 'Streaming completed naturally', {
+          task,
+          tabId,
+          chunkCount,
+        });
+      }
 
       // Ensure completion state is properly set
       if (!isCompleted) {
@@ -1302,7 +1456,7 @@ class AgentService {
     message: AgentMessage,
     port: chrome.runtime.Port
   ) {
-    const { task } = message;
+    const { task, tabId } = message;
 
     if (!task) {
       throw new Error('Missing required parameters for follow-up task');
@@ -1310,12 +1464,41 @@ class AgentService {
 
     logger.info(`Processing follow-up task: ${task}`);
 
-    if (this.executor) {
-      this.executor.addFollowUpTask(task);
+    // Use Web3Agent for follow-up tasks instead of old executor
+    if (this.web3Agent) {
+      // Determine task type and route accordingly
+      const taskType = this.analyzeTaskType(task);
+
+      try {
+        switch (taskType) {
+          case 'web3':
+            // Use the same streaming-enabled Web3 task handler
+            await this.handleWeb3Task(task, tabId || 0, port);
+            break;
+          case 'automation':
+          default:
+            await this.handleAutomationTask(task, tabId || 0, port);
+            break;
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error('AgentService', 'Follow-up task failed', {
+          error: errorMessage,
+          task,
+          tabId,
+        });
+
+        port.postMessage({
+          type: 'error',
+          error: `Follow-up task failed: ${errorMessage}`,
+          timestamp: Date.now(),
+        });
+      }
     } else {
       port.postMessage({
         type: 'error',
-        error: 'No active task to follow-up on',
+        error: 'Web3 Agent not available for follow-up task',
+        timestamp: Date.now(),
       });
     }
   }
@@ -1643,7 +1826,7 @@ class AgentService {
       if (currentLLM) {
         // Get current LLM instance with latest configuration
         const latestLLM = await this.getWeb3LLM(AgentNameEnum.Planner);
-        
+
         // Update Web3Agent with the latest LLM if needed
         if (currentLLM !== latestLLM) {
           this.web3Agent?.setLLM(latestLLM);
@@ -1799,6 +1982,106 @@ class AgentService {
       'AgentService',
       `Cleanup completed. Disconnected ${disconnectedPorts} ports, cleared ${this.connectionStatus.size} connection statuses`
     );
+  }
+
+  /**
+   * Handle continuing conversation with tool results
+   */
+  private async handleContinueWithToolResults(
+    message: AgentMessage,
+    port: chrome.runtime.Port
+  ) {
+    logger.info('AgentService', 'Handling continue with tool results', {
+      taskId: message.taskId,
+      sessionId: message.data?.sessionId,
+      toolResultsCount: message.data?.toolResults?.length || 0,
+    });
+
+    try {
+      if (!this.web3Agent) {
+        throw new Error('Web3 Agent not available');
+      }
+
+      const { toolResults, sessionId } = message.data || {};
+
+      if (!toolResults || !Array.isArray(toolResults)) {
+        throw new Error('Invalid tool results provided');
+      }
+
+      // Format tool results as user message content
+      const toolResultsContent = toolResults.map((result: any) =>
+        `Tool "${result.toolName}" result: ${JSON.stringify(result.result, null, 2)}`
+      ).join('\n\n');
+
+      // Create a user message with the tool results
+      const userMessage = `Tool execution results:\n\n${toolResultsContent}`;
+
+      // Continue the conversation with the tool results using function calling
+      const response = await this.web3Agent.processUserInstructionWithFunctionCalling(
+        userMessage,
+        true, // Enable streaming
+        // Streaming callback
+        (chunk: any) => {
+          port.postMessage({
+            type: 'streaming_chunk',
+            taskId: message.taskId,
+            chunk,
+          });
+        },
+        // Thinking callback
+        undefined,
+        // ReAct status callback
+        undefined,
+        // Tool calls callback
+        (toolCalls: any) => {
+          port.postMessage({
+            type: 'function_call',
+            actor: 'assistant',
+            state: 'ACT_START',
+            timestamp: Date.now(),
+            data: {
+              details: toolCalls?.content || '',
+              functionCalls: toolCalls?.functionCalls || [],
+              finish_reason: 'tool_calls',
+            },
+          });
+        }
+      );
+
+      // Send the final response
+      port.postMessage({
+        type: 'streaming_complete',
+        taskId: message.taskId,
+        data: {
+          details: response.message,
+          content: response.message,
+          functionCalls: [], // Function calls are handled separately in the callback
+          actions: response.actions || [],
+        },
+      });
+
+      logger.info('AgentService', 'Tool results continuation completed successfully', {
+        taskId: message.taskId,
+        responseLength: response.message?.length || 0,
+        actionsCount: response.actions?.length || 0,
+      });
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('AgentService', 'Error handling tool results continuation', {
+        error: errorMessage,
+        taskId: message.taskId,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+
+      // Send error response
+      await this.sendWithFallback(port, {
+        type: 'streaming_error',
+        taskId: message.taskId,
+        error: `Failed to continue with tool results: ${errorMessage}`,
+        timestamp: Date.now(),
+      });
+    }
   }
 }
 

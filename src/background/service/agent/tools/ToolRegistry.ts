@@ -28,11 +28,17 @@ export class ToolRegistry {
   private executionTracker = new Map<string, number>();
   private lastHighlightedByTabId = new Map<number, any[]>();
 
+  private lastActiveTabId?: number;
+
   constructor() {
     this.initializeWeb3Tools();
     this.initializeBrowserTools();
     this.initializeUtilityTools();
     this.initializeSystemTools();
+  }
+
+  public setLastActiveTabId(tabId: number) {
+    this.lastActiveTabId = tabId;
   }
 
   private initializeWeb3Tools(): void {
@@ -963,117 +969,7 @@ export class ToolRegistry {
       requiresConfirmation: false,
     });
 
-    // Element selection tools
-    this.registerTool({
-      name: 'activateElementSelector',
-      description: 'Activate element selection mode to highlight interactive elements on the page',
-      parameters: [
-        {
-          type: 'string',
-          description: 'Selection mode (highlight, select, analyze)',
-          enum: ['highlight', 'select', 'analyze'],
-        },
-        {
-          type: 'string',
-          description: 'Optional: CSS filter to limit which elements are highlighted',
-        },
-        {
-          type: 'boolean',
-          description: 'Optional: Only highlight visible elements',
-        },
-      ],
-      required: ['mode'],
-      handler: this.createElementSelectionHandler('activateElementSelector'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
-
-    this.registerTool({
-      name: 'deactivateElementSelector',
-      description: 'Deactivate element selection mode and remove highlights',
-      parameters: [],
-      required: [],
-      handler: this.createElementSelectionHandler('deactivateElementSelector'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
-
-    this.registerTool({
-      name: 'getHighlightedElements',
-      description: 'Get information about currently highlighted elements on the page',
-      parameters: [
-        {
-          type: 'string',
-          description: 'Optional: Filter elements by CSS selector',
-        },
-        {
-          type: 'boolean',
-          description: 'Optional: Include element attributes in response',
-        },
-      ],
-      required: [],
-      handler: this.createElementSelectionHandler('getHighlightedElements'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
-
-    this.registerTool({
-      name: 'analyzeElement',
-      description: 'Analyze a specific web element to understand its properties and interactions',
-      parameters: [
-        {
-          type: 'string',
-          description: 'CSS selector for the element to analyze',
-        },
-        {
-          type: 'boolean',
-          description: 'Optional: Include detailed accessibility information',
-        },
-        {
-          type: 'boolean',
-          description: 'Optional: Include event listeners and interactions',
-        },
-      ],
-      required: ['selector'],
-      handler: this.createElementSelectionHandler('analyzeElement'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
-
-    this.registerTool({
-      name: 'findElementsByText',
-      description: 'Find elements containing specific text content',
-      parameters: [
-        {
-          type: 'string',
-          description: 'Text content to search for',
-        },
-        {
-          type: 'string',
-          description: 'Optional: Limit search to specific element type',
-        },
-        {
-          type: 'boolean',
-          description: 'Optional: Use case-sensitive search',
-        },
-        {
-          type: 'boolean',
-          description: 'Optional: Return only visible elements',
-        },
-      ],
-      required: ['text'],
-      handler: this.createElementSelectionHandler('findElementsByText'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
-
-
-
+    // Element selection tool (only one): highlightElement
     this.registerTool({
       name: 'highlightElement',
       description: "Highlight elements with numbered wireframe boxes. 'interactiveOnly' can be a kind string to control which elements: 'button' | 'clickable' | 'input' | 'link' | 'all'. Optionally pass 'selector' to highlight only one element, and 'limit' to cap results.",
@@ -1093,37 +989,6 @@ export class ToolRegistry {
       ],
       required: [],
       handler: this.createElementSelectionHandler('highlightElement'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
-
-    this.registerTool({
-      name: 'captureElementScreenshot',
-      description: 'Take a screenshot of a specific element',
-      parameters: [
-        {
-          type: 'string',
-          description: 'CSS selector for the element',
-        },
-        {
-          type: 'boolean',
-          description: 'Optional: Include element highlights in screenshot',
-        },
-      ],
-      required: ['selector'],
-      handler: this.createElementSelectionHandler('captureElementScreenshot'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
-
-    this.registerTool({
-      name: 'highlightDeFiElements',
-      description: 'Highlight DeFi-specific elements (wallet connections, swaps, approvals, etc.)',
-      parameters: [],
-      required: [],
-      handler: this.createElementSelectionHandler('highlightDeFiElements'),
       category: 'browser',
       riskLevel: 'low',
       requiresConfirmation: false,
@@ -1297,18 +1162,24 @@ export class ToolRegistry {
       const startTime = Date.now();
       const executionId = `browser_${actionName}_${Date.now()}`;
 
-      // Prevent duplicate executions within 5 seconds
-      const duplicateKey = `${actionName}_${JSON.stringify(params)}`;
-      const lastExecution = this.executionTracker.get(duplicateKey);
-      if (lastExecution && (Date.now() - lastExecution) < 5000) {
-        logger.warn(`Preventing duplicate execution of ${actionName}`, {
-          params,
-          timeSinceLastExecution: Date.now() - lastExecution
-        });
-        throw new Error(`Duplicate execution prevented for ${actionName}`);
+      // Prevent accidental duplicate executions (skip for highlightElement to allow rapid refresh)
+      if (actionName !== 'highlightElement') {
+        const normalizedUrl = (params && typeof params.url === 'string') ? String(params.url).trim().toLowerCase() : '';
+        const duplicateKey = actionName === 'navigateToUrl'
+          ? `${actionName}_${normalizedUrl}`
+          : `${actionName}_${JSON.stringify(params)}`;
+        const lastExecution = this.executionTracker.get(duplicateKey);
+        const duplicateInterval = actionName === 'navigateToUrl' ? 5000 : 1500; // 5s for navigation, 1.5s for others
+        if (lastExecution && (Date.now() - lastExecution) < duplicateInterval) {
+          logger.warn(`Preventing duplicate execution of ${actionName}`, {
+            params,
+            timeSinceLastExecution: Date.now() - lastExecution,
+            duplicateInterval
+          });
+          throw new Error(`Duplicate execution prevented for ${actionName}`);
+        }
+        this.executionTracker.set(duplicateKey, Date.now());
       }
-
-      this.executionTracker.set(duplicateKey, Date.now());
 
       try {
         logger.info(`[${executionId}] Starting browser automation action: ${actionName}`, {
@@ -1458,6 +1329,16 @@ export class ToolRegistry {
         // Execute browser action
         const result = await browserController.executeAction(actionStep);
 
+        // Ensure browser actions settle before LLM continues
+        if (
+          actionName === 'navigateToUrl' ||
+          actionName === 'openNewTab' ||
+          actionName === 'switchTab' ||
+          (actionName === 'clickElement' && (params?.waitForNavigation === true))
+        ) {
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+
         const executionTime = Date.now() - startTime;
 
         // Enhanced result debugging for navigateToUrl
@@ -1499,7 +1380,16 @@ export class ToolRegistry {
         };
       } catch (error) {
         // Remove from tracker on error to allow retries
-        this.executionTracker.delete(duplicateKey);
+        try {
+          // duplicateKey only exists when not highlightElement; guard
+          if (actionName !== 'highlightElement') {
+            const normalizedUrl = (params && typeof params.url === 'string') ? String(params.url).trim().toLowerCase() : '';
+            const duplicateKey = actionName === 'navigateToUrl'
+              ? `${actionName}_${normalizedUrl}`
+              : `${actionName}_${JSON.stringify(params)}`;
+            this.executionTracker.delete(duplicateKey);
+          }
+        } catch {}
 
         const executionTime = Date.now() - startTime;
         logger.error(`[${executionId}] Browser automation action failed: ${actionName}`, {
@@ -1574,21 +1464,6 @@ export class ToolRegistry {
       try {
         logger.info(`Executing element selection action: ${actionName}`, params);
 
-        // Check Chrome extension permissions
-        try {
-          const permissions = await chrome.permissions.getAll();
-          const hasRequiredPermissions = permissions.permissions?.includes('activeTab') &&
-                                        permissions.permissions?.includes('scripting');
-
-          if (!hasRequiredPermissions) {
-            logger.error('Missing required permissions for element selection', permissions);
-            throw new Error('Missing required permissions: activeTab and scripting are required');
-          }
-        } catch (permError) {
-          logger.error('Failed to check permissions', permError);
-          throw new Error(`Failed to check permissions: ${permError.message}`);
-        }
-
         // Determine target tab
         let targetTab: chrome.tabs.Tab;
         try {
@@ -1603,19 +1478,57 @@ export class ToolRegistry {
             targetTab = t;
             logger.info('Using provided tabId for element selection', { tabId: targetTab.id, url: targetTab.url });
           } else {
-            targetTab = await this.getOrCreateActiveTab();
+            if (this.lastActiveTabId) {
+              try {
+                const t = await chrome.tabs.get(this.lastActiveTabId);
+                if (t && t.id) {
+                  targetTab = t;
+                  logger.info('Using lastActiveTabId for element selection', { tabId: t.id, url: t.url });
+                } else {
+                  targetTab = await this.getOrCreateActiveTab();
+                }
+              } catch (e) {
+                logger.warn('Failed to use lastActiveTabId; falling back to active tab', e);
+                targetTab = await this.getOrCreateActiveTab();
+              }
+            } else {
+              targetTab = await this.getOrCreateActiveTab();
+            }
           }
         } catch (tabError: any) {
           logger.error('Failed to resolve target tab', tabError);
           throw new Error(`Failed to resolve target tab: ${tabError.message || tabError}`);
         }
 
-        // Ensure content script is available
+        // Fast path: if content script is already reachable, do not require 'scripting' permission
+        let reachable = false;
         try {
-          await this.ensureContentScriptAvailable(targetTab.id!);
-        } catch (scriptError) {
-          logger.error('Failed to ensure content script availability', scriptError);
-          throw new Error(`Content script not available: ${scriptError.message}`);
+          await chrome.tabs.sendMessage(targetTab.id!, { type: 'PING' });
+          reachable = true;
+          logger.info('Content script reachable (fast path)', { tabId: targetTab.id });
+        } catch {}
+
+        if (!reachable) {
+          // Check permissions only when we actually need to inject
+          let hasScripting = false;
+          try {
+            const permissions = await chrome.permissions.getAll();
+            hasScripting = permissions.permissions?.includes('scripting') === true;
+          } catch (permError) {
+            logger.warn('Permission query failed; will attempt to proceed', permError);
+          }
+
+          if (!hasScripting) {
+            throw new Error('Content script not available and missing "scripting" permission. Please open a regular web page and/or grant scripting permission.');
+          }
+
+          // Attempt to inject/ensure availability now that we confirmed permission
+          try {
+            await this.ensureContentScriptAvailable(targetTab.id!);
+          } catch (scriptError: any) {
+            logger.error('Failed to ensure content script availability', scriptError);
+            throw new Error(`Content script not available: ${scriptError.message || scriptError}`);
+          }
         }
 
         // Map action names to message types
@@ -1624,11 +1537,7 @@ export class ToolRegistry {
           deactivateElementSelector: 'ELEMENT_SELECTOR_DEACTIVATE',
           getHighlightedElements: 'ELEMENT_SELECTOR_GET_HIGHLIGHTS',
           analyzeElement: 'ELEMENT_ANALYZE',
-          findElementsByText: 'ELEMENT_FIND_BY_TEXT',
-          getInteractiveElements: 'ELEMENT_GET_INTERACTIVE',
           highlightElement: 'ELEMENT_HIGHLIGHT',
-          captureElementScreenshot: 'ELEMENT_SCREENSHOT',
-          highlightDeFiElements: 'ELEMENT_HIGHLIGHT_DEFIELEMENTS',
         };
 
         const messageType = messageTypes[actionName] || actionName.toUpperCase();
@@ -1999,7 +1908,28 @@ export class ToolRegistry {
     try {
       logger.info(`Executing tool: ${name}`, params);
       const result = await tool.handler(params);
+
+      // Monitor tab state after tool execution
+      await this.monitorTabStateAfterTool(name, result);
       logger.info(`Tool execution completed: ${name}`);
+
+      // Append tool result to chat history as a 'user' message (global guarantee)
+      try {
+        const { chatHistoryStore } = await import('../chatHistory');
+        const { Actors } = await import('@/ui/views/Agent/types/message');
+        const current = await chatHistoryStore.getCurrentSession();
+        if (current && current.id) {
+          const safeContent = JSON.stringify({ tool: name, params: params || {}, result });
+          await chatHistoryStore.addMessage(current.id, {
+            actor: Actors.USER,
+            content: safeContent,
+            timestamp: Date.now(),
+          });
+        }
+      } catch (appendErr) {
+        logger.warn('ToolRegistry: Failed to append tool result to chat history', appendErr);
+      }
+
       return result;
     } catch (error) {
       logger.error(`Tool execution failed: ${name}`, error);
@@ -2012,15 +1942,7 @@ export class ToolRegistry {
    */
   private isElementSelectionTool(toolName: string): boolean {
     const elementSelectionTools = [
-      'activateElementSelector',
-      'deactivateElementSelector',
-      'getHighlightedElements',
-      'analyzeElement',
-      'findElementsByText',
-      'getInteractiveElements',
-      'highlightElement',
-      'captureElementScreenshot',
-      'highlightDeFiElements'
+      'highlightElement'
     ];
 
     return elementSelectionTools.includes(toolName);
@@ -2450,6 +2372,79 @@ export class ToolRegistry {
       },
       requiresConfirmation: tools.filter((t) => t.requiresConfirmation).length,
     };
+  }
+
+  /**
+   * Monitor tab state after tool execution and notify LLM of results
+   */
+  private async monitorTabStateAfterTool(toolName: string, result: any): Promise<void> {
+    try {
+      // Wait for tab to stabilize
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Get current active tab
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const activeTab = tabs[0];
+
+      if (!activeTab?.id) return;
+
+      // Check if tab is still loading
+      let isLoading = activeTab.status === 'loading';
+      let attempts = 0;
+      const maxAttempts = 10;
+
+      while (isLoading && attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const updatedTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        isLoading = updatedTabs[0]?.status === 'loading';
+        attempts++;
+      }
+
+      // Prepare success message for LLM
+      let successMessage = `Tool "${toolName}" executed successfully.`;
+
+      if (toolName === 'highlightElement' && result?.elements) {
+        const elements = result.elements;
+        successMessage += ` Found ${elements.length} interactive elements on the page:`;
+        elements.slice(0, 10).forEach((el: any, idx: number) => {
+          successMessage += `\n${idx + 1}. ${el.tag} - "${el.text.slice(0, 50)}${el.text.length > 50 ? '...' : ''}"`;
+        });
+        if (elements.length > 10) {
+          successMessage += `\n... and ${elements.length - 10} more elements.`;
+        }
+        if (elements.length < 5) {
+          successMessage += '\nNote: Few elements found. Consider using scrollPage tool to reveal more content.';
+        }
+      } else if (toolName === 'navigateToUrl' && result?.data?.url) {
+        successMessage += ` Successfully navigated to: ${result.data.url}`;
+        if (result.data.title) {
+          successMessage += ` (Page title: "${result.data.title}")`;
+        }
+      } else if (toolName === 'clickElement') {
+        successMessage += ` Element clicked successfully.`;
+      } else if (toolName === 'fillForm') {
+        successMessage += ` Form filled successfully.`;
+      }
+
+      // Send success notification to LLM via chat history
+      try {
+        const { chatHistoryStore } = await import('../chatHistory');
+        const { Actors } = await import('@/ui/views/Agent/types/message');
+        const current = await chatHistoryStore.getCurrentSession();
+        if (current?.id) {
+          await chatHistoryStore.addMessage(current.id, {
+            actor: Actors.USER,
+            content: successMessage,
+            timestamp: Date.now(),
+          });
+        }
+      } catch (chatErr) {
+        logger.warn('Failed to send success message to chat history', chatErr);
+      }
+
+    } catch (error) {
+      logger.warn('Failed to monitor tab state after tool execution', error);
+    }
   }
 }
 

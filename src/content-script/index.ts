@@ -684,31 +684,11 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return Promise.resolve({ success: true, type: 'PONG', timestamp: Date.now() });
   }
 
-  if (message.type === 'ELEMENT_SELECTOR_ACTIVATE') {
-    elementSelector.activate(message.options);
-    return Promise.resolve();
-  } else if (message.type === 'ELEMENT_SELECTOR_DEACTIVATE') {
-    elementSelector.deactivate();
-    return Promise.resolve();
-  } else if (message.type === 'ELEMENT_SELECTOR_GET_HIGHLIGHTS') {
-    const highlights = elementSelector.getHighlightedElements();
-    return Promise.resolve({ success: true, highlights });
-  } else if (message.type === 'ELEMENT_SELECTOR_CLEAR') {
-    elementSelector.clearHighlights();
-    return Promise.resolve();
-  } else if (message.type === 'ELEMENT_ANALYZE') {
-    const result = elementSelector.analyzeElement(message.params.selector);
-    return Promise.resolve({ success: true, data: result });
-  } else if (message.type === 'ELEMENT_FIND_BY_TEXT') {
-    const result = elementSelector.findElementsByText(message.params.text, message.params.options || {});
-    return Promise.resolve({ success: true, data: result });
-  } else if (message.type === 'ELEMENT_GET_INTERACTIVE') {
-    const result = elementSelector.getInteractiveElements(message.params.options || {});
-    return Promise.resolve({ success: true, data: result });
-  } else if (message.type === 'ELEMENT_HIGHLIGHT') {
+
+  if (message.type === 'ELEMENT_HIGHLIGHT') {
     try {
       const rawKind = message.params?.interactiveOnly;
-      const kind = typeof rawKind === 'string' ? rawKind.toLowerCase() : (rawKind ? 'button' : 'all');
+      const kind = typeof rawKind === 'string' ? rawKind.toLowerCase() : (rawKind === false ? 'all' : 'clickable');
       const limit = Math.max(1, Math.min(500, Number(message.params?.limit) || (kind === 'clickable' || kind === 'button' || kind === 'input' ? 100 : 200)));
       const overlayId = 'vibe3-debug-overlay';
       let overlay = document.getElementById(overlayId) as HTMLElement | null;
@@ -749,7 +729,9 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       const filteredAll = candidates.filter(visible);
-      const filtered = filteredAll.slice(0, limit);
+      let filtered = filteredAll.slice(0, limit);
+
+      // Note: Removed auto-scroll logic - LLM should explicitly use scrollPage tool if needed
 
       // Draw wireframe with index labels
       filtered.forEach((el, idx) => {
@@ -794,8 +776,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const result = elementSelector.captureElementScreenshot(message.params.selector);
     return Promise.resolve({ success: true, data: result });
   } else if (message.type === 'ELEMENT_HIGHLIGHT_DEFIELEMENTS') {
-    const result = elementSelector.highlightDeFiElements();
-    return Promise.resolve({ success: true, data: { defiElementCount: result } });
+
   } else if (message.type === 'ELEMENT_CLICK_SELECTOR') {
     try {
       const sel = message.params?.selector;

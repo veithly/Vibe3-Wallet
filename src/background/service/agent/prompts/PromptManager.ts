@@ -570,13 +570,13 @@ Please help with element selection and analysis. {{additionalContext}}`,
       }
 
       // Check for element selection tools
-      const elementSelectionTools = tools.filter(tool => 
-        tool.name.includes('Element') || 
+      const elementSelectionTools = tools.filter(tool =>
+        tool.name.includes('Element') ||
         tool.name.includes('element') ||
         tool.name.includes('highlight') ||
         tool.name.includes('analyze')
       );
-      
+
       if (elementSelectionTools.length > 0) {
         return (
           this.getTemplate('element_selection') ||
@@ -605,8 +605,8 @@ Please help with element selection and analysis. {{additionalContext}}`,
       const recentMessages = context.conversationHistory.slice(-3);
       const hasDeFiKeywords = recentMessages.some(msg => {
         const content = (msg.content || '').toLowerCase();
-        return content.includes('defi') || 
-               content.includes('swap') || 
+        return content.includes('defi') ||
+               content.includes('swap') ||
                content.includes('stake') ||
                content.includes('liquidity') ||
                content.includes('approve') ||
@@ -663,32 +663,32 @@ Please help with element selection and analysis. {{additionalContext}}`,
     if (intent && intent.action) {
       const action = intent.action.toLowerCase();
       variables.userIntent = action;
-      
+
       if (action.includes('connect') || action.includes('wallet')) {
         variables.dappType = this.detectDAppType(context.currentUrl) || 'Unknown';
         variables.requiredNetwork = this.getNetworkName(context.currentChain);
       }
-      
+
       if (action.includes('swap') || action.includes('exchange')) {
         variables.dexType = this.detectDEXType(context.currentUrl) || 'Unknown';
         variables.fromToken = this.extractTokenFromIntent(intent, 'from');
         variables.toToken = this.extractTokenFromIntent(intent, 'to');
         variables.swapAmount = this.extractAmountFromIntent(intent);
       }
-      
+
       if (action.includes('approve')) {
         variables.token = this.extractTokenFromIntent(intent, 'token');
         variables.spender = this.extractContractFromIntent(intent);
         variables.amount = this.extractAmountFromIntent(intent);
         variables.purpose = this.extractPurposeFromIntent(intent);
       }
-      
+
       if (action.includes('liquidity')) {
         variables.actionType = action.includes('add') || action.includes('provide') ? 'add' : 'remove';
         variables.tokenPair = this.extractTokenPairFromIntent(intent);
         variables.amount = this.extractAmountFromIntent(intent);
       }
-      
+
       if (action.includes('stake') || action.includes('farm')) {
         variables.actionType = action.includes('unstake') || action.includes('withdraw') ? 'unstake' : 'stake';
         variables.token = this.extractTokenFromIntent(intent, 'token');
@@ -708,13 +708,13 @@ Please help with element selection and analysis. {{additionalContext}}`,
     }
 
     // Add element selection variables if needed
-    const elementSelectionTools = promptContext.tools?.filter(tool => 
-      tool.name.includes('Element') || 
+    const elementSelectionTools = promptContext.tools?.filter(tool =>
+      tool.name.includes('Element') ||
       tool.name.includes('element') ||
       tool.name.includes('highlight') ||
       tool.name.includes('analyze')
     );
-    
+
     if (elementSelectionTools && elementSelectionTools.length > 0) {
       variables.selectionMode = 'highlight';
       variables.availableElements = 'Interactive elements will be identified';
@@ -781,15 +781,60 @@ Please help with element selection and analysis. {{additionalContext}}`,
   ): BaseMessage[] {
     const messages: BaseMessage[] = [];
 
-    // Proper OpenAI-style roles: system → history → user
+    // Proper OpenAI-style roles: system → history → user (avoid duplicate user message)
     messages.push(new SystemMessage(systemPrompt));
 
     // Include only recent history to manage context size
-    const recentHistory = conversationHistory.slice(-10);
-    messages.push(...recentHistory);
+    const recentHistoryRaw = conversationHistory.slice(-10);
 
-    // Current turn user message
-    messages.push(new HumanMessage(userPrompt));
+    // Collapse consecutive duplicate human messages by content
+    const recentHistory: BaseMessage[] = [];
+    for (const m of recentHistoryRaw) {
+      const prev = recentHistory[recentHistory.length - 1];
+      const prevType = (prev as any)?._getType?.();
+      const currType = (m as any)?._getType?.();
+      const prevContent = (prev as any)?.content;
+      const currContent = (m as any)?.content;
+      const bothHumanSameContent = prev && prevType === 'human' && currType === 'human' && String(prevContent) === String(currContent);
+      if (bothHumanSameContent) continue; // skip duplicate
+      recentHistory.push(m);
+    }
+
+    // Detect if the last message is a human message (the raw user input)
+    const lastMsg = recentHistory[recentHistory.length - 1];
+    const isLastHuman = lastMsg && (lastMsg as any)._getType?.() === 'human';
+
+    // Detect if there are recent tool results; if so, we should not append a fresh templated user prompt
+    const hasRecentToolActivity = recentHistory.some((m) => {
+      const type = (m as any)._getType?.();
+      const hasToolId = (m as any)?.tool_call_id || (m as any)?.additional_kwargs?.tool_call_id;
+      // LangChain ToolMessage returns type 'tool'; assistant tool_calls are AIMessage with additional_kwargs.tool_calls
+      const hasAssistantToolCalls = Array.isArray((m as any)?.additional_kwargs?.tool_calls) && (m as any).additional_kwargs.tool_calls.length > 0;
+      return type === 'tool' || !!hasToolId || hasAssistantToolCalls;
+    });
+
+    // Build history without duplicating the user message when adding the templated user prompt
+    if (hasRecentToolActivity) {
+      // After tools executed, keep full recent history and DO NOT add a new templated user prompt
+      messages.push(...recentHistory);
+    } else {
+      // Normal first-turn: replace the latest HumanMessage anywhere in recent history
+      let lastHumanIndex = -1;
+      for (let i = recentHistory.length - 1; i >= 0; i--) {
+        const t = (recentHistory[i] as any)?._getType?.();
+        if (t === 'human') { lastHumanIndex = i; break; }
+      }
+
+      if (lastHumanIndex >= 0) {
+        const withoutLastHuman = [...recentHistory.slice(0, lastHumanIndex), ...recentHistory.slice(lastHumanIndex + 1)];
+        messages.push(...withoutLastHuman);
+      } else {
+        messages.push(...recentHistory);
+      }
+
+      // Current turn user message (templated)
+      messages.push(new HumanMessage(userPrompt));
+    }
 
     return messages;
   }
@@ -949,7 +994,7 @@ Please help with element selection and analysis. {{additionalContext}}`,
    */
   private detectDAppType(url: string): string {
     if (!url) return 'Unknown';
-    
+
     const lowerUrl = url.toLowerCase();
     if (lowerUrl.includes('uniswap') || lowerUrl.includes('sushi')) return 'DEX';
     if (lowerUrl.includes('aave') || lowerUrl.includes('compound')) return 'Lending';
@@ -961,7 +1006,7 @@ Please help with element selection and analysis. {{additionalContext}}`,
 
   private detectDEXType(url: string): string {
     if (!url) return 'Unknown';
-    
+
     const lowerUrl = url.toLowerCase();
     if (lowerUrl.includes('uniswap')) return 'Uniswap';
     if (lowerUrl.includes('sushi')) return 'SushiSwap';
@@ -983,7 +1028,7 @@ Please help with element selection and analysis. {{additionalContext}}`,
         return intent.entities.tokenA;
       }
     }
-    
+
     // Fallback to text extraction from intent
     const text = intent.action.toLowerCase();
     if (type === 'from' && text.includes('from')) {
@@ -994,7 +1039,7 @@ Please help with element selection and analysis. {{additionalContext}}`,
       const match = text.match(/to\s+([a-zA-Z0-9]+)/);
       return match ? match[1] : 'Unknown';
     }
-    
+
     return 'Unknown';
   }
 
@@ -1002,7 +1047,7 @@ Please help with element selection and analysis. {{additionalContext}}`,
     if (intent.entities && intent.entities.amount) {
       return intent.entities.amount;
     }
-    
+
     // Extract amount from action text
     const text = intent.action.toLowerCase();
     const amountMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:eth|usdc|usdt|dai|btc|matic)/);

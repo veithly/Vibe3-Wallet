@@ -30,9 +30,9 @@ export default memo(function MessageList({
         return false;
       }
 
-      // Validate required fields
-      if (!message.actor || !message.content) {
-        logger.warn('MessageList', `Message missing required fields at index ${index}`, { message });
+      // Validate required fields (actor and timestamp are required)
+      if (!message.actor) {
+        logger.warn('MessageList', `Message missing actor at index ${index}`, { message });
         return false;
       }
 
@@ -40,6 +40,23 @@ export default memo(function MessageList({
       if (!message.timestamp || typeof message.timestamp !== 'number') {
         logger.warn('MessageList', `Invalid timestamp at index ${index}`, { message });
         return false;
+      }
+
+      // Allow messages without textual content if they carry structured data
+      // such as function calls, react status, or recognized message types from the LLM
+      const hasText = typeof message.content === 'string'; // empty string is allowed
+      const hasStructured = (message.functionCalls && message.functionCalls.length > 0) || !!message.reactStatus;
+      const recognizedTypes = new Set([
+        'standard', 'thinking', 'function_call', 'reasoning', 'react_status',
+        'execution', 'error', 'streaming_start', 'streaming_chunk', 'streaming_complete',
+        'streaming_error', 'speech_to_text_error', 'fallback', 'fallback_complete',
+        'tool_result', 'assistant_content'
+      ]);
+      const hasType = !!message.messageType && recognizedTypes.has(message.messageType);
+
+      if (!hasText && !hasStructured && !hasType) {
+        logger.warn('MessageList', `Message has no displayable data at index ${index}`, { message });
+        // Still include to avoid dropping potential LLM outputs in edge cases
       }
 
       return true;
@@ -142,7 +159,35 @@ function MessageBlock({
   const isStreaming = message.messageType === 'streaming_chunk' || message.isStreaming;
   const isStreamingComplete = message.messageType === 'streaming_complete';
   const isStreamingError = message.messageType === 'streaming_error';
-  const isFunctionCall = message.messageType === 'function_call' || (message.functionCalls && message.functionCalls.length > 0);
+  const isToolResult = message.messageType === 'tool_result';
+  const isAssistantContent = message.messageType === 'assistant_content';
+
+  // Map OpenAI tool_calls to UI FunctionCall format when needed
+  const mapOpenAIToolCalls = (toolCalls?: any[]) => {
+    if (!Array.isArray(toolCalls)) return [] as any[];
+    const now = Date.now();
+    return toolCalls.map((tc: any, idx: number) => {
+      let args: any = {};
+      try {
+        args = typeof tc?.function?.arguments === 'string'
+          ? JSON.parse(tc.function.arguments)
+          : (tc?.function?.arguments || {});
+      } catch {
+        args = { raw: tc?.function?.arguments };
+      }
+      return {
+        id: tc?.id || `call_${tc?.function?.name || 'fn'}_${now}_${idx}`,
+        name: tc?.function?.name || 'function',
+        arguments: args,
+        status: 'executing',
+        timestamp: now,
+      };
+    });
+  };
+
+  const openAiCalls = (message as any)?.tool_calls ? mapOpenAIToolCalls((message as any).tool_calls) : [];
+  const effectiveFunctionCalls = (message.functionCalls && message.functionCalls.length > 0) ? message.functionCalls : openAiCalls;
+  const isFunctionCall = message.messageType === 'function_call' || (effectiveFunctionCalls && effectiveFunctionCalls.length > 0);
 
   // Get function call status for styling
   const getFunctionCallStatus = () => {
@@ -150,15 +195,18 @@ function MessageBlock({
     return message.functionCalls[0].status;
   };
 
-  // Enhanced content validation
+  // Enhanced content validation (avoid placeholder like "[No content]")
   const content = React.useMemo(() => {
-    if (!message.content) {
-      return '[No content]';
+    // Prefer actual string content
+    if (typeof message.content === 'string' && message.content.length > 0) {
+      return message.content;
     }
-    if (typeof message.content !== 'string') {
-      return String(message.content);
+    // If content is an object or non-string, stringify
+    if (message.content && typeof message.content !== 'string') {
+      try { return JSON.stringify(message.content); } catch { return String(message.content); }
     }
-    return message.content;
+    // Otherwise, no content string; return empty to avoid showing placeholders
+    return '';
   }, [message.content]);
 
   // Log message rendering for debugging
@@ -174,7 +222,7 @@ function MessageBlock({
   }, [message, messageIndex, totalMessages, content]);
 
   return (
-    <div className={`flex gap-3 max-w-full ${!isSameActor ? 'pt-4 mt-4 border-t border-gray-100 dark:border-gray-800' : ''} ${isThinking ? 'p-2 bg-purple-50 rounded-lg opacity-80 dark:bg-purple-900/10' : ''} ${isReActStatus ? 'p-2 bg-green-50 rounded-lg opacity-90 dark:bg-green-900/10 border-l-3 border-l-green-300' : ''} ${isStreamingError ? 'p-2 bg-red-50 rounded-lg dark:bg-red-900/10' : ''} ${isFunctionCall ? 'p-2 bg-blue-50 rounded-lg opacity-90 dark:bg-blue-900/10 border-l-3 border-l-blue-300' : ''}`}>
+    <div className={`flex gap-3 max-w-full ${!isSameActor ? 'pt-4 mt-4 border-t border-gray-100 dark:border-gray-800' : ''} ${isThinking ? 'p-2 bg-purple-50 rounded-lg opacity-80 dark:bg-purple-900/10' : ''} ${isReActStatus ? 'p-2 bg-green-50 rounded-lg opacity-90 dark:bg-green-900/10 border-l-3 border-l-green-300' : ''} ${isStreamingError ? 'p-2 bg-red-50 rounded-lg dark:bg-red-900/10' : ''} ${isFunctionCall ? 'p-2 bg-blue-50 rounded-lg opacity-90 dark:bg-blue-900/10 border-l-3 border-l-blue-300' : ''} ${isToolResult ? 'p-2 bg-green-50 rounded-lg opacity-90 dark:bg-green-900/10 border-l-3 border-l-green-400' : ''} ${isAssistantContent ? 'p-2 bg-gray-50 rounded-lg dark:bg-gray-900/10' : ''}`}>
       {!isSameActor && (
         <div
           className="flex flex-shrink-0 justify-center items-center w-24 h-24 rounded-full shadow-md"
@@ -198,7 +246,7 @@ function MessageBlock({
 
       <div className="flex-1 min-w-0">
         <div>
-          <div className={`text-sm ${isThinking ? 'italic text-gray-600 dark:text-gray-300' : ''} ${isReActStatus ? 'text-gray-700 dark:text-gray-300' : ''} ${isStreamingError ? 'text-red-700 dark:text-red-300' : ''} ${isFunctionCall ? 'text-blue-700 dark:text-blue-300' : ''}`}>
+          <div className={`text-sm ${isThinking ? 'italic text-gray-600 dark:text-gray-300' : ''} ${isReActStatus ? 'text-gray-700 dark:text-gray-300' : ''} ${isStreamingError ? 'text-red-700 dark:text-red-300' : ''} ${isFunctionCall ? 'text-blue-700 dark:text-blue-300' : ''} ${isToolResult ? 'text-green-700 dark:text-green-300' : ''} ${isAssistantContent ? 'text-gray-800 dark:text-gray-200' : ''}`}>
             {isProgress ? (
               <div className="overflow-hidden h-1 bg-gray-200 rounded-full dark:bg-gray-700">
                 <div className="h-full bg-blue-500 animate-pulse" style={{ animation: 'progress-animation 2s linear infinite' }} />
@@ -228,7 +276,52 @@ function MessageBlock({
                 <div className="text-lg">❌</div>
                 <div className="flex-1 text-red-700 dark:text-red-300">{content}</div>
               </div>
-            ) : isFunctionCall && message.functionCalls ? (
+            ) : isToolResult ? (
+              <div className="space-y-2">
+                <div className="flex gap-2 items-start">
+                  <div className="text-lg">✅</div>
+                  <div className="flex-1">
+                    <div className="font-medium text-green-700 dark:text-green-300">Tool Result</div>
+                    <div className="text-sm text-gray-600 dark:text-gray-300">{content}</div>
+                  </div>
+                </div>
+                {message.toolResults && message.toolResults.map((result, index) => (
+                  <div key={index} className="p-2 ml-8 bg-white rounded border border-green-200 dark:bg-gray-800 dark:border-green-700">
+                    <div className="flex gap-2 items-center mb-1">
+                      <span className="font-mono text-sm font-medium text-green-600 dark:text-green-400">{result.toolName}</span>
+                      <span className={`px-2 py-1 text-xs rounded-full ${
+                        result.success ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+                        'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                      }`}>
+                        {result.success ? 'Success' : 'Failed'}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-600 dark:text-gray-400">
+                      <div className="mb-1 font-medium">Result:</div>
+                      <pre className="overflow-x-auto text-xs">
+                        {typeof result.result === 'object' ? JSON.stringify(result.result, null, 2) : String(result.result)}
+                      </pre>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : isAssistantContent ? (
+              <div className="flex gap-2 items-start">
+                <div className="text-lg">🤖</div>
+                <div className="flex-1">
+                  <div className="max-w-none prose prose-sm dark:prose-invert">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {content}
+                    </ReactMarkdown>
+                  </div>
+                  {message.finishReason && (
+                    <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                      Finish reason: {message.finishReason}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : isFunctionCall ? (
               <div className="space-y-2">
                 <div className="flex gap-2 items-start">
                   <div className="text-lg">🔧</div>
@@ -237,7 +330,7 @@ function MessageBlock({
                     <div className="text-sm text-gray-600 dark:text-gray-300">{content}</div>
                   </div>
                 </div>
-                {message.functionCalls.map((call, index) => (
+                {effectiveFunctionCalls.map((call, index) => (
                   <div key={call.id || index} className="p-2 ml-8 bg-white rounded border border-blue-200 dark:bg-gray-800 dark:border-blue-700">
                     <div className="flex gap-2 items-center mb-1">
                       <span className="font-mono text-sm font-medium text-blue-600 dark:text-blue-400">{call.name}</span>
