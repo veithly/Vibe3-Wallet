@@ -29,7 +29,7 @@ const Approval: React.FC<{
       return null;
     }
     setApproval(approval);
-    document.title = 'Rabby Wallet Notification';
+    document.title = 'Vibe3 Wallet Notification';
     const account = approval.data.account || (await wallet.getCurrentAccount());
     if (!account) {
       rejectApproval();

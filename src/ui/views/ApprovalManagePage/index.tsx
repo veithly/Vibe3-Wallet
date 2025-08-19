@@ -1193,7 +1193,7 @@ function TableByEIP7702({
 }
 
 const ApprovalManagePage = () => {
-  useTitle('Approvals - Rabby Wallet');
+  useTitle('Approvals - Vibe3 Wallet');
 
   useReloadPageOnCurrentAccountChanged();
 
