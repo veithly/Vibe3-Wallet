@@ -20,6 +20,7 @@ const CustomModal = (props) => (
     footer={null}
     centered
     closeIcon={closeIcon}
+    className="mt-32"
     {...props}
   />
 );
