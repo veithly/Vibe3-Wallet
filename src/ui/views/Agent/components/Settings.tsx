@@ -366,7 +366,7 @@ export default function Settings({ onClose }: SettingsProps) {
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-lg font-semibold text-gray-900">Custom Providers</h3>
             <button
-              className="px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-md hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
+              className="px-3 py-1.5 text-sm font-medium text-green-600 bg-green-50 rounded-md hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-green-500 transition-colors"
               onClick={() => setShowAddProvider(true)}
             >
               + Add Provider

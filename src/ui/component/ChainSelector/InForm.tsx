@@ -103,7 +103,7 @@ const ChainWrapper = styled.div`
 
     &:hover {
       &::before {
-        border: 1px solid var(--r-blue-default, #7084ff);
+        border: 1px solid var(--r-blue-default, #468585);
       }
     }
 

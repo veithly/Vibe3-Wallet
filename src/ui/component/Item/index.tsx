@@ -43,7 +43,7 @@ const ItemWrapper = styled.div<{
       ? css`
           &:hover {
             background-color: ${p.hoverBgColor};
-            border-color: var(--r-blue-default, #7084ff);
+            border-color: var(--r-blue-default, #468585);
           }
         `
       : ''}
@@ -124,7 +124,7 @@ export const Item = (props: PropsWithChildren<ItemProps>) => {
 const BlueHeaderWrapper = styled.div<{ fixed?: boolean }>`
   position: relative;
   height: 56px;
-  background: var(--r-blue-default, #7084ff);
+  background: var(--r-blue-default, #468585);
   display: flex;
   justify-content: center;
   align-items: center;

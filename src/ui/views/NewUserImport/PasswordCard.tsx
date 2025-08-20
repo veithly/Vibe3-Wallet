@@ -47,7 +47,7 @@ const Container = styled.div`
 
   .ant-input:focus,
   .ant-input-focused {
-    border-color: var(--r-blue-default, #7084ff);
+    border-color: var(--r-blue-default, #468585);
   }
 
   .ant-form-item-has-error {
@@ -61,7 +61,7 @@ const Container = styled.div`
     &:hover,
     &-focused,
     &-focused:hover {
-      border: 2px solid var(--r-blue-default, #7084ff);
+      border: 2px solid var(--r-blue-default, #468585);
       border-right-width: 2px !important;
       border-bottom-width: 2px !important;
     }

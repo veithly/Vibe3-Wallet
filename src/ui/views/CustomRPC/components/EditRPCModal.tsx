@@ -50,7 +50,7 @@ const EditRPCWrapped = styled.div`
     font-size: 15px;
     /* font-weight: 500; */
     &:focus {
-      border-color: var(--r-blue-default, #7084ff) !important;
+      border-color: var(--r-blue-default, #468585) !important;
     }
     &.has-error {
       border-color: #ec5151 !important;

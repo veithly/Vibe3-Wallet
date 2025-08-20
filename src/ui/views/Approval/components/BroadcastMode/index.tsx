@@ -108,10 +108,10 @@ const Wrapper = styled(Card)`
           cursor: pointer;
 
           &:hover {
-            border-color: var(--r-blue-default, #7084ff);
+            border-color: var(--r-blue-default, #468585);
           }
           &.is-selected {
-            border-color: var(--r-blue-default, #7084ff);
+            border-color: var(--r-blue-default, #468585);
             background: var(--r-blue-light-1, #eef1ff);
           }
         }
@@ -134,11 +134,11 @@ const OptionList = styled.div`
     }
 
     &.is-selected {
-      border: 1px solid var(--r-blue-default, #7084ff);
+      border: 1px solid var(--r-blue-default, #468585);
       background: var(--r-blue-light-1, #eef1ff);
     }
     &:not(.is-disabled):hover {
-      border: 1px solid var(--r-blue-default, #7084ff);
+      border: 1px solid var(--r-blue-default, #468585);
     }
 
     &.is-disabled {

@@ -109,7 +109,7 @@ const RuleDrawerWrapper = styled.div`
         }
         &.checked {
           .vibe3-checkbox {
-            background-color: var(--r-blue-default, #7084ff) !important;
+            background-color: var(--r-blue-default, #468585) !important;
             border: none;
           }
         }

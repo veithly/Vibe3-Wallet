@@ -122,7 +122,7 @@ const Wrapper = styled.div<{
     }
     &:hover,
     &:focus {
-      border-color: var(--r-blue-default, #7084ff);
+      border-color: var(--r-blue-default, #468585);
     }
 
     &.red,
@@ -170,7 +170,7 @@ const Wrapper = styled.div<{
 
       .toSwap {
         cursor: pointer;
-        color: #7084ff;
+        color: #468585;
         text-decoration-line: underline;
       }
     }

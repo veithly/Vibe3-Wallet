@@ -46,7 +46,7 @@ export const ProcessActions: React.FC<Props> = ({
                     '--gas-theme-color': gasLessThemeColor,
                     '--gas-bg-color': isGasNotEnough
                       ? 'var(--r-blue-disable)'
-                      : 'var(--r-blue-default, #7084ff)',
+                      : 'var(--r-blue-default, #468585)',
                   }
                 : {}
             }

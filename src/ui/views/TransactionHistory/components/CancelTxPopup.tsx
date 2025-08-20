@@ -25,13 +25,13 @@ const OptionsList = styled.div`
     }
 
     /* &.is-selected {
-      border: 1px solid var(--r-blue-default, #7084ff);
-      background: var(--r-blue-light-1, #eef1ff);
+      border: 1px solid var(--r-blue-default, #468585);
+      background: var(--r-blue-light-1, #DEF9C4);
     } */
 
     &:not(.is-disabled):hover {
-      border: 1px solid var(--r-blue-default, #7084ff);
-      background: var(--r-blue-light-1, #eef1ff);
+      border: 1px solid var(--r-blue-default, #468585);
+      background: var(--r-blue-light-1, #DEF9C4);
     }
 
     &.is-disabled {

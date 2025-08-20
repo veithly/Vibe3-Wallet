@@ -34,7 +34,7 @@ const Footer = styled.div`
     }
     &:hover {
       background: var(--r-blue-light-1, #eef1ff);
-      border: 1px solid var(--r-blue-default, #7084ff);
+      border: 1px solid var(--r-blue-default, #468585);
     }
   }
 `;
