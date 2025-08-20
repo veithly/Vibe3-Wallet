@@ -523,10 +523,18 @@ class RealChatModel implements IBaseChatModel {
         const entry: any = { role: 'assistant', content: msg.content };
         const toolCalls = (msg as any)?.additional_kwargs?.tool_calls;
         if (Array.isArray(toolCalls) && toolCalls.length > 0) {
-          entry.tool_calls = toolCalls;
-          // Track tool_call ids so that subsequent tool messages are valid
-          for (const tc of toolCalls) {
-            if (tc?.id) seenToolCallIds.add(tc.id);
+          // Filter out duplicate tool_call ids that were already introduced by earlier assistant messages
+          const seenAssistantIds: Set<string> = (this as any)._seenAssistantToolCallIds || new Set();
+          const ids = toolCalls.map((tc: any) => tc?.id).filter((id: any) => typeof id === 'string');
+          const newIds = ids.filter((id: any) => !seenAssistantIds.has(id));
+          const filteredCalls = toolCalls.filter((tc: any) => newIds.includes(tc?.id));
+          if (filteredCalls.length > 0) {
+            entry.tool_calls = filteredCalls;
+            // Track tool_call ids so that subsequent tool messages are valid
+            for (const tc of filteredCalls) {
+              if (tc?.id) { seenToolCallIds.add(tc.id); seenAssistantIds.add(tc.id); }
+            }
+            (this as any)._seenAssistantToolCallIds = seenAssistantIds;
           }
         }
         payloadMessagesRaw.push(entry);
@@ -555,9 +563,71 @@ class RealChatModel implements IBaseChatModel {
       payloadMessagesRaw.push({ role: explicitRole || 'user', content: msg.content });
     }
 
+    // Merge consecutive assistant messages that contain tool_calls into a single assistant entry
+    // This enforces the requirement that assistant tool_calls are followed by tool messages before another assistant message
+    const mergedRaw: any[] = [];
+    for (let i = 0; i < payloadMessagesRaw.length; i++) {
+      const cur = payloadMessagesRaw[i];
+      if (cur.role === 'assistant' && Array.isArray((cur as any).tool_calls) && (cur as any).tool_calls.length > 0) {
+        let combined = [...(cur as any).tool_calls];
+        let j = i + 1;
+        while (
+          j < payloadMessagesRaw.length &&
+          payloadMessagesRaw[j].role === 'assistant' &&
+          Array.isArray((payloadMessagesRaw[j] as any).tool_calls) &&
+          (payloadMessagesRaw[j] as any).tool_calls.length > 0
+        ) {
+          combined = combined.concat((payloadMessagesRaw[j] as any).tool_calls);
+          j++;
+        }
+        // Dedupe by id while preserving order
+        const seen = new Set<string>();
+        const deduped = combined.filter((tc: any) => {
+          const id = tc?.id;
+          if (typeof id !== 'string' || seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+        mergedRaw.push({ ...cur, tool_calls: deduped });
+        i = j - 1; // skip merged assistants
+      } else {
+        mergedRaw.push(cur);
+      }
+    }
+
+    // Ensure assistant.tool_calls have matching tool messages later in the list
+    const toolPositionsById = new Map<string, number[]>();
+    mergedRaw.forEach((m, i) => {
+      if (m.role === 'tool' && typeof (m as any).tool_call_id === 'string') {
+        const id = (m as any).tool_call_id as string;
+        const arr = toolPositionsById.get(id) || [];
+        arr.push(i);
+        toolPositionsById.set(id, arr);
+      }
+    });
+
+    const filteredRaw: any[] = [];
+    mergedRaw.forEach((m, i) => {
+      if (m.role === 'assistant' && Array.isArray((m as any).tool_calls) && (m as any).tool_calls.length > 0) {
+        const calls = (m as any).tool_calls;
+        const matchedIds = calls
+          .map((tc: any) => tc?.id)
+          .filter((id: any) => typeof id === 'string')
+          .filter((id: string) => {
+            const positions = toolPositionsById.get(id) || [];
+            return positions.some((pos) => pos > i);
+          });
+        if (matchedIds.length === 0) {
+          return; // drop this assistant entry entirely
+        }
+        (m as any).tool_calls = calls.filter((tc: any) => matchedIds.includes(tc?.id));
+      }
+      filteredRaw.push(m);
+    });
+
     // Deduplicate consecutive identical user messages to avoid duplicates
     const payloadMessages: any[] = [];
-    for (const m of payloadMessagesRaw) {
+    for (const m of filteredRaw) {
       const prev = payloadMessages[payloadMessages.length - 1];
       if (prev && prev.role === 'user' && m.role === 'user' && String(prev.content) === String(m.content)) {
         continue;
@@ -943,7 +1013,8 @@ class Web3LLM implements IWeb3LLM {
     tools: FunctionSchema[],
     intent?: Web3Intent
   ): Promise<LLMResponse> {
-    const maxSteps = 5;
+    // Use Web3Agent runtime config if available via context; fallback to high cap
+    const maxSteps = Math.min(50, (context as any)?.reactConfig?.maxSteps ?? 50);
     let currentMessages = [...messages];
     let finalResponse = '';
     let allActions: LLMAction[] = [];
@@ -976,37 +1047,60 @@ class Web3LLM implements IWeb3LLM {
       const functionCalls = reasoningResult.toolCalls || this.parseFunctionCalls(reasoningResult.content, tools);
 
       if (functionCalls.length > 0) {
-        logger.debug(`Executing ${functionCalls.length} function calls in step ${step + 1}`);
+        const externalToolExecution = (context as any)?.externalToolExecution === true;
+        if (externalToolExecution) {
+          // Defer tool execution to Web3Agent/AgentService for consistent UI callbacks
+          logger.debug(`Deferring ${functionCalls.length} function calls to external executor (step ${step + 1})`);
 
-        // Execute tools and get results
-        const toolResults = await this.executeToolCalls(functionCalls);
+          // Do NOT inject assistant tool_calls here; Web3Agent will inject tool_calls and append ToolMessages
+          // This avoids OpenAI schema error when tool_call ids are not paired with tool messages
 
-        // Add action and results to conversation
-        currentMessages.push(new AIMessage(
-          `Executing ${functionCalls.length} actions: ${functionCalls.map(fc => fc.name).join(', ')}`,
-          { tool_calls: functionCalls.map(fc => ({
-            id: fc.id || `call_${step}_${Date.now()}`,
-            type: 'function',
-            function: {
-              name: fc.name,
-              arguments: JSON.stringify(fc.arguments)
-            }
-          })) }
-        ));
+          const actions = this.convertFunctionCallsToActions(functionCalls);
+          allActions.push(...actions);
+          allFunctionCalls.push(...functionCalls);
 
-        // Add tool results as ToolMessage objects
-        currentMessages.push(...toolResults);
+          // Return early with functionCalls so Web3Agent can execute them and continue
+          const confidence = this.calculateConfidence(actions, reasoningResult.content);
+          return {
+            response: reasoningResult.content,
+            actions: allActions,
+            confidence,
+            thinking: `ReAct reasoning (deferred execution)`,
+            functionCalls: allFunctionCalls,
+          };
+        } else {
+          logger.debug(`Executing ${functionCalls.length} function calls in step ${step + 1}`);
 
-        // Convert to actions and function calls
-        const actions = this.convertFunctionCallsToActions(functionCalls);
-        allActions.push(...actions);
-        allFunctionCalls.push(...functionCalls);
+          // Execute tools and get results
+          const toolResults = await this.executeToolCalls(functionCalls);
 
-        // Check if we should continue (tool results might indicate we need more steps)
-        const shouldContinue = this.shouldContinueReActLoop(toolResults, step, maxSteps);
-        if (!shouldContinue) {
-          finalResponse = reasoningResult.content;
-          break;
+          // Add action and results to conversation
+          currentMessages.push(new AIMessage(
+            `Executing ${functionCalls.length} actions: ${functionCalls.map(fc => fc.name).join(', ')}`,
+            { tool_calls: functionCalls.map(fc => ({
+              id: fc.id || `call_${step}_${Date.now()}`,
+              type: 'function',
+              function: {
+                name: fc.name,
+                arguments: JSON.stringify(fc.arguments)
+              }
+            })) }
+          ));
+
+          // Add tool results as ToolMessage objects
+          currentMessages.push(...toolResults);
+
+          // Convert to actions and function calls
+          const actions = this.convertFunctionCallsToActions(functionCalls);
+          allActions.push(...actions);
+          allFunctionCalls.push(...functionCalls);
+
+          // Check if we should continue (tool results might indicate we need more steps)
+          const shouldContinue = this.shouldContinueReActLoop(toolResults, step, maxSteps);
+          if (!shouldContinue) {
+            finalResponse = reasoningResult.content;
+            break;
+          }
         }
       } else {
         // No more actions needed, generate final response
@@ -1047,13 +1141,91 @@ class Web3LLM implements IWeb3LLM {
     currentStep: number,
     maxSteps: number
   ): Promise<{ content: string; toolCalls?: FunctionCall[] }> {
+    // Prune messages for provider schema safety: remove dangling tool_calls and orphan tool msgs
+    const pruneForProvider = (list: BaseMessage[]): BaseMessage[] => {
+      let pruned = [...list];
+      const toRemove = new Set<number>();
+      const toReplace = new Map<number, BaseMessage>();
+
+      const assistantEntries: Array<{ index: number; ids: string[]; message: any }> = [];
+      const toolMessagesById = new Map<string, number[]>();
+
+      pruned.forEach((m: any, idx: number) => {
+        const toolCalls = m?.additional_kwargs?.tool_calls;
+        if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+          const ids = toolCalls.map((tc: any) => tc?.id).filter((id: any) => typeof id === 'string');
+          if (ids.length) assistantEntries.push({ index: idx, ids, message: m });
+        }
+        const toolId = m?.additional_kwargs?.tool_call_id;
+        if (typeof toolId === 'string') {
+          const arr = toolMessagesById.get(toolId) || [];
+          arr.push(idx);
+          toolMessagesById.set(toolId, arr);
+        }
+      });
+
+      for (const entry of assistantEntries) {
+        const { index, ids, message } = entry;
+        const matchedIds = ids.filter((id) => {
+          const positions = toolMessagesById.get(id) || [];
+          return positions.some((pos) => pos > index);
+        });
+        if (matchedIds.length === 0) {
+          toRemove.add(index);
+          continue;
+        }
+        if (matchedIds.length < ids.length) {
+          const origCalls = message?.additional_kwargs?.tool_calls || [];
+          const filteredCalls = origCalls.filter((tc: any) => matchedIds.includes(tc?.id));
+          const cloned = new AIMessage(message.content || '', {
+            ...(message.additional_kwargs || {}),
+            tool_calls: filteredCalls,
+          });
+          toReplace.set(index, cloned);
+        }
+      }
+
+      const remainingAssistantIds = new Map<string, number>();
+      pruned.forEach((m: any, idx: number) => {
+        if (toRemove.has(idx)) return;
+        const msg = toReplace.get(idx) || m;
+        const toolCalls = msg?.additional_kwargs?.tool_calls;
+        if (Array.isArray(toolCalls)) {
+          for (const tc of toolCalls) {
+            const id = tc?.id;
+            if (typeof id === 'string') remainingAssistantIds.set(id, idx);
+          }
+        }
+      });
+
+      pruned.forEach((m: any, idx: number) => {
+        const toolId = m?.additional_kwargs?.tool_call_id;
+        if (typeof toolId === 'string') {
+          const aIdx = remainingAssistantIds.get(toolId);
+          if (aIdx === undefined || aIdx >= idx) {
+            toRemove.add(idx);
+          }
+        }
+      });
+
+      const finalMsgs: BaseMessage[] = [];
+      pruned.forEach((m: any, idx: number) => {
+        if (toRemove.has(idx)) return;
+        finalMsgs.push(toReplace.get(idx) || m);
+      });
+
+      return finalMsgs;
+    };
+
+    const safeMessages = pruneForProvider(messages);
+
     const systemPrompt = this.createReActSystemPrompt(context, tools, intent, currentStep, maxSteps);
-    const userPrompt = this.createReActUserPrompt(messages, context, currentStep, maxSteps);
+    const userPrompt = this.createReActUserPrompt(safeMessages, context, currentStep, maxSteps);
 
     // Create proper message array with system prompt
     const reasoningMessages: BaseMessage[] = [
       new (await import('../llm/messages')).SystemMessage(systemPrompt),
-      ...messages.slice(-10), // Include recent conversation history
+      ...safeMessages.slice(-10), // Include recent conversation history
       new (await import('../llm/messages')).HumanMessage(userPrompt)
     ];
 
@@ -1530,8 +1702,9 @@ Summarize what you've accomplished and provide any additional insights or recomm
     messages: any[]
   ): { payloadMessages: any[]; tools: any[] } {
     const payloadMessagesRaw: any[] = [];
+    const assistantEntries: Array<{ index: number; ids: string[] } > = [];
 
-    for (const msg of messages) {
+    for (const [idx, msg] of messages.entries()) {
       const lcType = (msg as any)?._getType?.();
       const type = lcType || (msg as any)?.type;
 
@@ -1548,6 +1721,8 @@ Summarize what you've accomplished and provide any additional insights or recomm
         const toolCalls = (msg as any)?.additional_kwargs?.tool_calls;
         if (Array.isArray(toolCalls) && toolCalls.length > 0) {
           entry.tool_calls = toolCalls;
+          const ids = toolCalls.map((tc: any) => tc?.id).filter((id: any) => typeof id === 'string');
+          if (ids.length) assistantEntries.push({ index: payloadMessagesRaw.length, ids });
         }
         payloadMessagesRaw.push(entry);
         continue;
@@ -1569,8 +1744,42 @@ Summarize what you've accomplished and provide any additional insights or recomm
       payloadMessagesRaw.push({ role: explicitRole || 'user', content: msg.content });
     }
 
+    // Post-process to enforce OpenAI tool_call schema within the payload slice
+    // 1) Build map from tool_call_id -> positions of tool messages
+    const toolPositionsById = new Map<string, number[]>();
+    payloadMessagesRaw.forEach((m, i) => {
+      if (m.role === 'tool' && typeof (m as any).tool_call_id === 'string') {
+        const id = (m as any).tool_call_id as string;
+        const arr = toolPositionsById.get(id) || [];
+        arr.push(i);
+        toolPositionsById.set(id, arr);
+      }
+    });
+
+    // 2) For each assistant with tool_calls, filter to ids that have a tool message later in the list
+    const toRemoveAssistant = new Set<number>();
+    assistantEntries.forEach(({ index, ids }) => {
+      const entry = payloadMessagesRaw[index] as any;
+      const calls = entry.tool_calls || [];
+      const matchedIds = ids.filter((id) => {
+        const positions = toolPositionsById.get(id) || [];
+        return positions.some((pos) => pos > index);
+      });
+      if (matchedIds.length === 0) {
+        // No matched ids -> drop the assistant message to avoid schema error
+        toRemoveAssistant.add(index);
+      } else if (matchedIds.length < ids.length) {
+        // Partially matched -> only keep matched tool_calls
+        entry.tool_calls = calls.filter((tc: any) => matchedIds.includes(tc?.id));
+      }
+    });
+
+    // 3) Remove assistant entries flagged above
+    const filteredRaw: any[] = payloadMessagesRaw.filter((_, i) => !toRemoveAssistant.has(i));
+
+    // 4) Deduplicate consecutive identical user messages
     const payloadMessages: any[] = [];
-    for (const m of payloadMessagesRaw) {
+    for (const m of filteredRaw) {
       const prev = payloadMessages[payloadMessages.length - 1];
       if (prev && prev.role === 'user' && m.role === 'user' && String(prev.content) === String(m.content)) {
         continue;

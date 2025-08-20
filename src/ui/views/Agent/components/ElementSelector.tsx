@@ -133,11 +133,11 @@ export const ElementSelector: React.FC<ElementSelectorProps> = ({
       // Prefer backend DOM service (nanobrowser-style). It will inject buildDomTree if missing and draw overlay.
       let items: any[] = [];
       try {
-        const toolRes = await executeTool('getClickableElementsDOM', { showHighlightElements: true, debugMode: false });
+        const toolRes = await executeTool('getClickableElements', { showHighlightElements: true, debugMode: false });
         const data = toolRes?.data || toolRes;
         items = Array.isArray(data?.items) ? data.items : [];
       } catch (e) {
-        logger.warn('getClickableElementsDOM tool execution failed', e);
+        logger.warn('getClickableElements tool execution failed', e);
       }
 
       setElements(items);

@@ -47,11 +47,6 @@ enum ConnectionState {
 const COMPONENT_NAME = 'SidePanelApp';
 
 export const SidePanelApp = () => {
-  logger.info(COMPONENT_NAME, 'component_mount', {
-    timestamp: Date.now(),
-    readyState: document.readyState,
-  });
-
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputEnabled, setInputEnabled] = useState(true);
   const [showStopButton, setShowStopButton] = useState(false);
@@ -303,36 +298,47 @@ export const SidePanelApp = () => {
       }
 
       if (content) {
-        // Treat as streaming update only if backend marks it as streaming AND we have an active streaming message
-        const isStreamingResponse = !!(data?.isStreaming && streamingMessageId);
+        // Treat as streaming update if backend marks it as streaming
+        const isStreamingResponse = !!data?.isStreaming;
 
         if (isStreamingResponse) {
-          logger.debug(COMPONENT_NAME, 'Updating existing streaming message', {
-            streamingMessageId,
-            contentLength: content.length,
+          // Ensure there is an active streaming message; create one if missing
+          let activeId = streamingMessageId;
+          if (!activeId) {
+            const messageId = `streaming_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+            activeId = messageId;
+            setStreamingMessageId(messageId);
+            appendMessage({
+              actor: Actors.ASSISTANT,
+              content: '',
+              timestamp: Date.now(),
+              isStreaming: true,
+              messageId,
+              functionCalls: [],
+              messageType: 'streaming_start',
+            });
+            logger.debug(COMPONENT_NAME, 'Initialized streaming message for execution updates', { messageId });
+          }
+
+          logger.debug(COMPONENT_NAME, 'Appending execution streaming chunk to active message', {
+            streamingMessageId: activeId,
+            chunkLength: content.length,
           });
 
-          // If we have an active streaming message, update it instead of creating a new one
-          setMessages((prev) => {
-            const updatedMessages = prev.map((msg) =>
-              msg.messageId === streamingMessageId
+          // Append content to the active streaming message and keep it streaming until streaming_complete
+          setMessages(prev =>
+            prev.map(msg =>
+              msg.messageId === activeId
                 ? {
                     ...msg,
-                    content: content,
-                    isStreaming: false,
-                    messageType: 'execution' as const,
+                    content: (msg.content || '') + content,
+                    isStreaming: true,
+                    messageType: 'streaming_chunk' as const,
                   }
                 : msg
-            );
-
-            logger.debug(COMPONENT_NAME, 'Streaming message updated via execution', {
-              wasStreaming: true,
-              newContentLength: content.length,
-            });
-
-            return updatedMessages;
-          });
-          setStreamingMessageId(null);
+            )
+          );
+          // Do NOT clear streamingMessageId here; wait for explicit streaming_complete
         } else {
           logger.debug(COMPONENT_NAME, 'Adding regular execution message', {
             actor,
@@ -391,36 +397,18 @@ export const SidePanelApp = () => {
             ? (data.contents as any[]).filter((s) => typeof s === 'string' && s.trim().length > 0)
             : (hasContent ? [content] : []);
 
-          if (contentsArr.length > 0) {
-            logger.debug(COMPONENT_NAME, 'Appending assistant contents individually', {
-              count: contentsArr.length,
-            });
-            contentsArr.forEach((c, idx) => {
-              appendMessage({
-                actor: actor as Actors,
-                content: c,
-                timestamp: timestamp + idx,
-                messageType: 'assistant_content',
-                finishReason: data?.finish_reason,
-              });
+          // 执行类(EXECUTION)消息中，如果包含 functionCalls，交由专门的 'function_call' 事件处理，避免重复
+          if (!hasFunctionCalls && contentsArr.length > 0) {
+            appendMessage({
+              actor: actor as Actors,
+              content: contentsArr[0],
+              timestamp: timestamp,
+              messageType: 'assistant_content',
+              finishReason: data?.finish_reason,
             });
           }
 
-          if (hasFunctionCalls) {
-            logger.debug(COMPONENT_NAME, 'Appending function calls individually', {
-              functionCallsCount: functionCalls!.length,
-            });
-            functionCalls!.forEach((call, idx) => {
-              appendMessage({
-                actor: actor as Actors,
-                content: `Executing function ${call.name}...`,
-                timestamp: timestamp + contentsArr.length + idx,
-                messageType: 'function_call',
-                functionCalls: [call],
-                finishReason: data?.finish_reason,
-              });
-            });
-          }
+          // 注意：此处不再追加 function_call 卡片，统一由 message.type === 'function_call' 分支去创建/更新
 
           if (contentsArr.length === 0 && !hasFunctionCalls) {
             // Fallback: Only content (possibly empty) and no function calls
@@ -556,37 +544,43 @@ export const SidePanelApp = () => {
             : (message.data?.functionCall ? [message.data.functionCall] : []);
           const baseTs = message.timestamp || Date.now();
 
-          // 先输出细节内容（如果有）
-          if (message.data?.details) {
-            appendMessage({
-              actor: Actors.ASSISTANT,
-              content: message.data.details,
-              timestamp: baseTs,
-              messageType: 'assistant_content',
-              finishReason: message.data?.finish_reason,
-            });
-          }
-
-          // 将每个函数调用拆分成独立消息
+          // 对于 function_call：只创建或更新卡片，不再重复展示 details 内容
           calls.forEach((call, idx) => {
-            appendMessage({
-              actor: Actors.ASSISTANT,
-              content: `Executing function ${call?.name || 'function'}...`,
-              timestamp: baseTs + (message.data?.details ? 1 : 0) + idx,
-              messageType: 'function_call' as const,
-              functionCalls: [call],
-              finishReason: message.data?.finish_reason,
-            });
+            const callId = call?.id;
+            let updated = false;
+
+            if (callId) {
+              // 更新已存在的 function_call 卡片
+              setMessages(prev => prev.map(msg => {
+                if (msg.messageType === 'function_call' && msg.functionCalls && msg.functionCalls[0]?.id === callId) {
+                  updated = true;
+                  const prevCall = msg.functionCalls[0];
+                  return {
+                    ...msg,
+                    functionCalls: [{ ...prevCall, ...call }]
+                  };
+                }
+                return msg;
+              }));
+            }
+
+            if (!updated) {
+              appendMessage({
+                actor: Actors.ASSISTANT,
+                content: `Executing function ${call?.name || 'function'}...`,
+                timestamp: baseTs + idx,
+                messageType: 'function_call' as const,
+                functionCalls: [call],
+                finishReason: message.data?.finish_reason,
+              });
+            }
           });
 
-          // If this is a tool_calls finish reason, we need to handle the results
+          // tool_calls 的结果会由后端以 tool_result 推送；无需前端轮询
           if (message.data?.finish_reason === 'tool_calls' && message.data?.functionCalls?.length > 0) {
             logger.info(COMPONENT_NAME, 'Function call with tool_calls finish reason detected', {
               functionCallsCount: message.data.functionCalls.length,
             });
-
-            // Monitor for tool execution completion
-            // This will be handled when we receive tool results from the backend
           }
         } else if (message && message.type === 'tool_result') {
           logger.debug(COMPONENT_NAME, 'Received tool_result event', {
@@ -822,7 +816,110 @@ export const SidePanelApp = () => {
               return updatedMessages;
             });
           } else {
-            logger.warn(COMPONENT_NAME, 'Received streaming chunk but no active streaming message', {
+            // Fallback: create a streaming message on-the-fly and apply this chunk immediately
+            const messageId = `streaming_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+            setStreamingMessageId(messageId);
+            appendMessage({
+              actor: Actors.ASSISTANT,
+              content: '',
+              timestamp: Date.now(),
+              isStreaming: true,
+              messageId,
+              functionCalls: [],
+              messageType: 'streaming_start',
+            });
+
+            // Normalize and extract from this first chunk
+            const toChunkObjects = (raw: any): any[] => {
+              if (!raw) return [];
+              if (typeof raw !== 'string') return [raw];
+              try {
+                const lines = raw.split('\n').map((l: string) => l.trim()).filter(Boolean);
+                const objs: any[] = [];
+                for (const line of lines) {
+                  if (!line.startsWith('data:')) continue;
+                  const payload = line.slice(5).trim();
+                  if (payload === '[DONE]') continue;
+                  try { objs.push(JSON.parse(payload)); } catch {}
+                }
+                return objs;
+              } catch { return []; }
+            };
+            const extractToolCalls = (chunk: any) => {
+              const calls: any[] = [];
+              try {
+                const choices = chunk?.choices;
+                if (Array.isArray(choices)) {
+                  choices.forEach((ch: any) => {
+                    const arr = ch?.delta?.tool_calls || ch?.tool_calls;
+                    if (Array.isArray(arr)) calls.push(...arr);
+                  });
+                }
+                const directDelta = chunk?.delta?.tool_calls;
+                if (Array.isArray(directDelta)) calls.push(...directDelta);
+                const direct = chunk?.tool_calls;
+                if (Array.isArray(direct)) calls.push(...direct);
+              } catch {}
+              return calls;
+            };
+
+            const rawChunk = (message as any).chunk;
+            let chunkObjs: any[];
+            if (typeof rawChunk === 'string') {
+              chunkObjs = toChunkObjects(rawChunk);
+            } else if (rawChunk && typeof rawChunk.raw === 'string') {
+              chunkObjs = toChunkObjects(rawChunk.raw);
+            } else if (Array.isArray(rawChunk)) {
+              chunkObjs = rawChunk as any[];
+            } else if (rawChunk && typeof rawChunk === 'object') {
+              chunkObjs = [rawChunk];
+            } else {
+              chunkObjs = [];
+            }
+
+            // Append any text content
+            const textPieces: string[] = [];
+            try {
+              chunkObjs.forEach((co: any) => {
+                if (typeof co?.content === 'string') textPieces.push(co.content);
+                if (co?.delta && typeof co.delta?.content === 'string') textPieces.push(co.delta.content);
+                if (Array.isArray(co?.choices)) {
+                  co.choices.forEach((ch: any) => {
+                    const d = ch?.delta || {};
+                    if (typeof d?.content === 'string') textPieces.push(d.content);
+                  });
+                }
+              });
+            } catch {}
+            const textToAppend = textPieces.join('');
+
+            // Extract tool calls and add dedicated function_call cards if new
+            const toolCallsArr = chunkObjs.flatMap(extractToolCalls);
+            if (toolCallsArr.length > 0) {
+              toolCallsArr.forEach((tc: any) => {
+                const idx = typeof tc?.index === 'number' ? tc.index : (tc?.index ? Number(tc.index) : undefined);
+                const name = tc?.function?.name || 'function';
+                let id = tc?.id as string | undefined;
+                if (!id) id = `call_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+                if (id && !seenToolCallIdsRef.current.has(id)) {
+                  seenToolCallIdsRef.current.add(id);
+                  appendMessage({
+                    actor: Actors.ASSISTANT,
+                    content: `Executing function ${name}...`,
+                    timestamp: Date.now(),
+                    messageType: 'function_call' as const,
+                    functionCalls: [{ id, name, arguments: {}, status: 'executing' as const, timestamp: Date.now() }],
+                  });
+                }
+              });
+            }
+
+            // Update the newly created streaming message with the text
+            if (textToAppend) {
+              setMessages(prev => prev.map(msg => msg.messageId === messageId ? { ...msg, content: (msg.content || '') + textToAppend } : msg));
+            }
+
+            logger.warn(COMPONENT_NAME, 'Received streaming chunk without active streaming; initialized fallback message', {
               hasStreamingMessageId: !!streamingMessageId,
               hasChunk: !!message.chunk,
             });
@@ -1570,6 +1667,9 @@ export const SidePanelApp = () => {
       }
 
       try {
+        // Ensure we accept backend updates for this new task
+        try { ignoreStreamingRef.current = false; } catch {}
+
         logger.debug(COMPONENT_NAME, 'Starting message send process');
 
         // Ensure connection is ready
@@ -1605,9 +1705,8 @@ export const SidePanelApp = () => {
         appendMessage(userMessage, sessionId || undefined);
         logger.debug(COMPONENT_NAME, 'User message appended');
 
-        // Check if we should use streaming based on agent capabilities
-        // Default to streaming to ensure compatibility with backend
-        const useStreaming = agentCapabilities?.streaming !== false;
+        // Force non-streaming mode for AI Sidebar
+        const useStreaming = false;
 
         // Prepare and send message
         const messageId = generateMessageId();

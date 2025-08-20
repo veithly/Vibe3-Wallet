@@ -36,6 +36,9 @@ class AgentService {
   private currentStreamingTask: { id: string | number | null; cancelled: boolean } = { id: null, cancelled: false };
   // Track tool_call IDs within an active streaming task to emit strong-signal events once per call
   private currentStreamingToolCallIds: Set<string> = new Set();
+    // Map function name -> last seen tool_call id for this task (non-streaming fallback)
+    private currentFunctionCallIdByName: Map<string, string> = new Map();
+
   private currentToolCallIndexToId: Record<number, string> = {};
   private ports: Map<string, AgentPort> = new Map();
   private executor: AgentExecutorBridge | null = null;
@@ -49,6 +52,81 @@ class AgentService {
   private llmInstanceCache: Map<string, IWeb3LLM> = new Map();
   private configVersion: number = 0;
   private configCache: Map<string, { config: any; version: number }> = new Map();
+
+
+  // Buffer tool results per task to optionally force a second-turn continuation if model fails to produce it
+  private taskToolResults: Map<string, Array<{ toolCallId: string; toolName: string; result: any; success: boolean }>> = new Map();
+
+
+  // Guard to avoid duplicate forced continuation per task
+  private forcedContinuationForTask: Set<string> = new Set();
+  private toolResultTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+
+  /**
+   * Force-continue the conversation with buffered tool results in case the
+   * model/provider didn't perform a second turn automatically.
+   */
+  private async forceContinueWithBufferedResults(taskId: string, port: chrome.runtime.Port) {
+    try {
+      if (this.forcedContinuationForTask.has(taskId)) return;
+      const results = this.taskToolResults.get(taskId) || [];
+      if (!results.length) return;
+      this.forcedContinuationForTask.add(taskId);
+
+      if (!this.web3Agent) throw new Error('Web3 Agent not available');
+
+      // Append tool messages for previous assistant tool_calls to satisfy OpenAI schema
+      await this.web3Agent.ingestExternalToolResults(results);
+
+      const toolResultsContent = results.map(r => `Tool "${r.toolName}" result: ${JSON.stringify(r.result)}`).join('\n\n');
+      const userMessage = `Tool execution results:\n\n${toolResultsContent}`;
+
+      const response = await this.web3Agent.processUserInstructionWithFunctionCalling(
+        userMessage,
+        false,
+        undefined,
+        // thinking
+        (thinking) => {
+          port.postMessage({
+            type: 'thinking',
+            actor: Actors.SYSTEM,
+            state: 'THINKING',
+            timestamp: Date.now(),
+            data: { details: thinking?.content, thinkingType: thinking?.type, functionCalling: true, fromModel: true },
+          });
+        },
+        // react status
+        (reactStatus) => {
+          port.postMessage({ type: 'react_status', actor: Actors.SYSTEM, state: 'REACT_STATUS', timestamp: Date.now(), data: reactStatus });
+        },
+        // forward tool_calls if any for UI
+        (toolCalls) => {
+          const content = toolCalls?.content || '';
+          const fcs = (toolCalls?.functionCalls || []) as any[];
+          fcs.forEach((c: any) => {
+            const id = c?.id || `call_${c?.name || 'fn'}_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+            port.postMessage({
+              type: 'function_call', actor: 'assistant', state: 'ACT_START', timestamp: Date.now(),
+              data: { details: content, functionCalls: [{ id, name: c?.name || 'function', arguments: c?.arguments || {}, status: c?.status || 'executing', timestamp: Date.now() }] }
+            });
+          });
+        }
+      );
+
+      await this.ensureMessageDisplayed({
+        type: 'execution', actor: Actors.SYSTEM, state: 'TASK_OK', timestamp: Date.now(),
+        data: { details: response.message, actions: response.actions, plan: response.plan, simulation: response.simulation, functionCalling: true }
+      }, port, 'web3_task_forced_continuation');
+
+      // cleanup
+      this.taskToolResults.delete(taskId);
+      const t = this.toolResultTimers.get(taskId); if (t) clearTimeout(t);
+      this.toolResultTimers.delete(taskId);
+    } catch (e) {
+      // Don't crash the agent on fallback failure; surface as error event
+      await this.ensureMessageDisplayed({ type: 'error', error: e instanceof Error ? e.message : String(e), timestamp: Date.now(), originalType: 'forced_continuation_error' }, port, 'forced_continuation_error');
+    }
+  }
 
   constructor() {
     console.log('🔥🔥🔥 AGENT SERVICE CONSTRUCTOR CALLED! 🔥🔥🔥', {
@@ -1059,14 +1137,7 @@ class AgentService {
 
     if (supportsFunctionCalling) {
 
-      // Send streaming start event
-      port.postMessage({
-        type: 'streaming_start',
-        taskId: currentTaskId,
-        timestamp: Date.now(),
-      });
-
-      // Use enhanced function calling capabilities with thinking support
+      // Use enhanced function calling capabilities without streaming
 
       // Propagate tabId to Web3Agent and ToolRegistry for element-selection tools
       try {
@@ -1074,45 +1145,31 @@ class AgentService {
         toolRegistry.setLastActiveTabId(tabId);
       } catch {}
 
+      // Reset tool_call tracking for this task (used for de-duplication of UI cards)
+      this.currentStreamingToolCallIds = new Set();
+      this.currentFunctionCallIdByName = new Map();
+
       const response = await this.web3Agent.processUserInstructionWithFunctionCalling(
         task,
-        true, // Enable streaming for tool call responses
-        (chunk) => {
-          // Normalize and ensure chunk field is always present; avoid placing data under other keys
-          try {
-            const safeChunk = typeof chunk === 'string' ? { raw: chunk } : chunk;
-            port.postMessage({
-              type: 'streaming_chunk',
-              taskId: currentTaskId,
-              chunk: safeChunk,
-              timestamp: Date.now(),
-            });
-          } catch (e) {
-            port.postMessage({
-              type: 'streaming_chunk',
-              taskId: currentTaskId,
-              chunk: { error: 'chunk_serialization_error' },
-              timestamp: Date.now(),
-            });
-          }
-        },
+        false,
+        undefined, // no streaming chunks in non-streaming mode
         (thinking) => {
-          // Send thinking message to client
+          // Emit thinking messages (only rendered if fromModel === true)
           port.postMessage({
             type: 'thinking',
             actor: Actors.SYSTEM,
             state: 'THINKING',
             timestamp: Date.now(),
             data: {
-              details: thinking.content,
-              thinkingType: thinking.type,
+              details: thinking?.content,
+              thinkingType: thinking?.type,
               functionCalling: true,
               fromModel: true,
             },
           });
         },
         (reactStatus) => {
-          // Send ReAct status message to client
+          // Emit ReAct status messages
           port.postMessage({
             type: 'react_status',
             actor: Actors.SYSTEM,
@@ -1122,56 +1179,56 @@ class AgentService {
           });
         },
         (toolCalls) => {
-          // Non-streaming tool_calls emission for UI rendering (strong-signal per call)
+          // Emit non-streaming tool_calls for UI + buffer tool results for forced-continuation if needed
           const content = toolCalls?.content || '';
           const fcs = (toolCalls?.functionCalls || []) as any[];
-
           fcs.forEach((c: any) => {
-            const id = c?.id || `call_${c?.name || 'fn'}_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
-            // Deduplicate per streaming session
-            if (!this.currentStreamingToolCallIds.has(id)) {
-              this.currentStreamingToolCallIds.add(id);
-              // Dedicated function_call event (for Function Call card)
-              port.postMessage({
-                type: 'function_call',
-                actor: 'assistant',
-                state: 'ACT_START',
-                timestamp: Date.now(),
-                data: {
-                  details: content || `Executing function ${c?.name || 'function'}...`,
-                  functionCalls: [{ id, name: c?.name || 'function', arguments: c?.arguments || {}, status: c?.status || 'executing', timestamp: Date.now() }],
-                  finish_reason: 'tool_call_start',
-                },
-              });
+            // Preserve a stable id per function name if provider omitted it
+            let id = c?.id as string | undefined;
+            const fnName = c?.name || 'function';
+            if (!id && this.currentFunctionCallIdByName.has(fnName)) {
+              id = this.currentFunctionCallIdByName.get(fnName)!;
+            }
+            if (!id) {
+              id = `call_${fnName}_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+              this.currentFunctionCallIdByName.set(fnName, id);
+            }
+            const status = c?.status || 'executing';
+            const fcPayload = { id, name: fnName, arguments: c?.arguments || {}, status, timestamp: Date.now(), ...(c?.result ? { result: c.result } : {}) };
 
-              // Also emit an execution event carrying actions so existing execution handler renders it too
-              port.postMessage({
-                type: 'execution',
-                actor: 'assistant',
-                state: 'ACT_START',
-                timestamp: Date.now(),
-                data: {
-                  details: content,
-                  actions: [{ type: c?.name, params: c?.arguments, status: c?.status || 'executing' }],
-                },
-              });
+            const hasEmitted = this.currentStreamingToolCallIds.has(id);
+            if (!hasEmitted) this.currentStreamingToolCallIds.add(id);
+
+            // 1) Emit/Update function_call card
+            port.postMessage({
+              type: 'function_call', actor: 'assistant', state: status === 'executing' ? 'ACT_START' : 'ACT_END', timestamp: Date.now(),
+              data: { details: content || (status === 'executing' ? `Executing function ${fcPayload.name}...` : `Finished ${fcPayload.name}`), functionCalls: [fcPayload], finish_reason: status === 'executing' ? 'tool_call_start' : 'tool_call_update' },
+            });
+
+            // 2) If finished, emit tool_result and buffer for potential forced continuation
+            if (status !== 'executing') {
+              const resultPayload = { toolCallId: id, toolName: fcPayload.name, result: c?.result, success: status === 'completed' };
+              port.postMessage({ type: 'tool_result', actor: 'assistant', state: 'ACT_END', timestamp: Date.now(), data: resultPayload });
+
+              // Buffer by current task id (if known via closure); here we use the generated currentTaskId
+              const list = this.taskToolResults.get(currentTaskId) || [];
+              list.push(resultPayload);
+              this.taskToolResults.set(currentTaskId, list);
+
+              // Debounce: give model/provider up to 1.5s to continue by itself; then force-continue
+              const prevTimer = this.toolResultTimers.get(currentTaskId);
+              if (prevTimer) clearTimeout(prevTimer);
+              const timer = setTimeout(() => {
+                this.forceContinueWithBufferedResults(currentTaskId, port).catch(() => {});
+              }, 15000);
+              this.toolResultTimers.set(currentTaskId, timer);
+            } else if (!hasEmitted) {
+              // Also emit execution event carrying actions so existing execution handler renders it too
+              port.postMessage({ type: 'execution', actor: 'assistant', state: 'ACT_START', timestamp: Date.now(), data: { details: content, actions: [{ type: fcPayload.name, params: fcPayload.arguments, status: fcPayload.status }] } });
             }
           });
         }
       );
-
-      // Send streaming complete event
-      port.postMessage({
-        type: 'streaming_complete',
-        taskId: currentTaskId,
-        timestamp: Date.now(),
-        data: {
-          details: response?.message || '',
-          content: response?.message || '',
-          functionCalls: [],
-          actions: response?.actions || [],
-        },
-      });
 
       // Send response back to client; if failed, surface raw error instead of preset text
       if (!response?.success) {
@@ -1197,41 +1254,11 @@ class AgentService {
         }, port, 'web3_task_response');
       }
     } else {
-      // Fall back to traditional processing with streaming support
-      // Send streaming start event
-      port.postMessage({
-        type: 'streaming_start',
-        taskId: currentTaskId,
-        timestamp: Date.now(),
-      });
-
-      // Use traditional processing but with streaming chunks
+      // Fall back to traditional processing without streaming
       const response = await this.web3Agent.processUserInstruction(
         task,
-        true, // Enable streaming
-        (chunk) => {
-          // Send streaming chunk to client
-          port.postMessage({
-            type: 'streaming_chunk',
-            taskId: currentTaskId,
-            chunk,
-            timestamp: Date.now(),
-          });
-        }
+        false
       );
-
-      // Send streaming complete event
-      port.postMessage({
-        type: 'streaming_complete',
-        taskId: currentTaskId,
-        timestamp: Date.now(),
-        data: {
-          details: response?.message || '',
-          content: response?.message || '',
-          functionCalls: [],
-          actions: response?.actions || [],
-        },
-      });
 
       // Send response back to client with enhanced fallback
       await this.ensureMessageDisplayed({

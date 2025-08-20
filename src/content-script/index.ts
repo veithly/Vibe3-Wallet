@@ -782,19 +782,20 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'ELEMENT_SELECTOR_ACTIVATE':
       elementSelector.activate(message.options);
       return Promise.resolve();
-    
+
     case 'ELEMENT_SELECTOR_DEACTIVATE':
       elementSelector.deactivate();
       return Promise.resolve();
-    
+
     case 'ELEMENT_SELECTOR_GET_HIGHLIGHTS':
       const highlights = elementSelector.getHighlightedElements();
       return Promise.resolve({ success: true, highlights });
-    
+
     case 'ELEMENT_SELECTOR_CLEAR':
       elementSelector.clearHighlights();
       return Promise.resolve();
-    
+
+
     // ... 其他 ELEMENT_ 相关处理 ...
     default:
       // 即使是 ELEMENT_ 消息，如果不识别也返回 undefined

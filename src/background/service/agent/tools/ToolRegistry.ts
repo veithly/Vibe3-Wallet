@@ -1,6 +1,6 @@
 // Function calling tool registry for dynamic Web3 tool management
 import { FunctionSchema, ParameterSchema } from '../llm/types';
-import { web3ActionSchemas } from '../actions/web3-schemas';
+// import { web3ActionSchemas } from '../actions/web3-schemas';
 import { createLogger } from '@/utils/logger';
 import { Web3Action } from '../actions/web3-actions';
 import { BrowserAutomationController } from '../automation/BrowserAutomationController';
@@ -8,7 +8,7 @@ import type { AgentContext } from '../types';
 import preferenceService from '@/background/service/preference';
 import keyringService from '@/background/service/keyring';
 
-import { getClickableElements } from '@/background/browser/dom/service';
+import { getClickableElements, removeHighlights as domRemoveHighlights, getScrollInfo as domGetScrollInfo } from '@/background/browser/dom/service';
 const logger = createLogger('ToolRegistry');
 
 export interface ToolDefinition {
@@ -1012,7 +1012,7 @@ export class ToolRegistry {
 
     // Enhanced DOM clickable elements builder (nanobrowser-aligned)
     this.registerTool({
-      name: 'getClickableElementsDOM',
+      name: 'getClickableElements',
       description: 'Build comprehensive DOM tree and return interactive elements via enhanced background DOM service (nanobrowser-aligned with shadowRoot, enhanced XPath, performance metrics)',
       parameters: [
         { type: 'boolean', description: 'showHighlightElements: Draw overlay with numbered highlights (default: true)' },
@@ -1022,16 +1022,28 @@ export class ToolRegistry {
       ],
       required: [],
       handler: async (params: any) => {
-        // Resolve target tab and URL
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tab?.id) throw new Error('No active tab available');
-        const url = tab.url || 'about:blank';
+        // Resolve target tab and URL (robust)
+        let targetTab: chrome.tabs.Tab | undefined;
+        try {
+          if (this.lastActiveTabId) {
+            const t = await chrome.tabs.get(this.lastActiveTabId);
+            if (t && t.id) targetTab = t;
+          }
+        } catch {}
+        if (!targetTab || !targetTab.id) {
+          const validation = await this.validateElementSelectionPrerequisites();
+          if (!validation.valid) {
+            return { success: false, error: validation.error, action: 'getClickableElements', params };
+          }
+          targetTab = await this.getOrCreateActiveTab();
+        }
+        const url = targetTab.url || 'about:blank';
         const showHighlight = params?.[0] ?? params?.showHighlightElements ?? true;
         const focusIndex = params?.[1] ?? params?.focusElement ?? -1;
         const viewportExpansion = params?.[2] ?? params?.viewportExpansion ?? 0;
         const debugMode = params?.[3] ?? params?.debugMode ?? false;
 
-        const domState = await getClickableElements(tab.id, url, showHighlight, focusIndex, viewportExpansion, debugMode);
+        const domState = await getClickableElements(targetTab.id!, url, showHighlight, focusIndex, viewportExpansion, debugMode);
 
         // Enhanced serialization with better element data
         const items: any[] = [];
@@ -1486,27 +1498,39 @@ export class ToolRegistry {
             throw new Error('url parameter is required for navigateToUrl');
           }
 
-          // CRITICAL: Check for "of" corruption
-          if (params.url === 'of') {
-            console.error(`🚨🚨🚨 [${executionId}] URL CORRUPTION DETECTED: URL parameter is "of"`, {
-              params,
-              executionId,
-              actionName,
-              corruptionPoint: 'ToolRegistry parameter validation',
-              timestamp: Date.now(),
-            });
-            throw new Error(`URL parameter corruption detected: url is "of" instead of a valid URL`);
+          // Normalize common issues (e.g., missing protocol, SSE/JSON corruption)
+          let normalizedUrl = String(params.url).trim();
+
+          // Case: corrupted to 'of' or quoted fragments — try to extract a URL from any param string
+          if (normalizedUrl === 'of') {
+            try {
+              const raw = JSON.stringify(params);
+              const m = raw.match(/https?:\/\/[^\s"']+/);
+              if (m) normalizedUrl = m[0];
+            } catch {}
           }
 
-          // Validate URL format
-          if (!params.url.startsWith('http')) {
+          // If still no protocol but looks like a domain, prefix https://
+          if (!/^https?:\/\//i.test(normalizedUrl)) {
+            const looksLikeDomain = /^(?:[\w-]+\.)+[a-z]{2,}(?:\/.*)?$/i.test(normalizedUrl);
+            if (looksLikeDomain) {
+              normalizedUrl = `https://${normalizedUrl}`;
+            }
+          }
+
+          // Final validation
+          if (!/^https?:\/\//i.test(normalizedUrl)) {
             logger.warn(`[${executionId}] Invalid URL format detected`, {
               url: params.url,
+              normalizedUrl,
               urlType: typeof params.url,
               executionId,
             });
             throw new Error(`Invalid URL format: ${params.url}. URL must start with http:// or https://`);
           }
+
+          // Apply normalization to processed params for execution
+          processedParams = { ...params, url: normalizedUrl };
         }
 
         // Create action step for compatibility
@@ -1762,7 +1786,8 @@ export class ToolRegistry {
           highlightElement: 'ELEMENT_HIGHLIGHT',
           clearHighlights: 'ELEMENT_SELECTOR_CLEAR',
           highlightElements: 'ELEMENT_HIGHLIGHT_ELEMENTS',
-          getInteractiveElements: 'ELEMENT_DEBUG_SCAN_AND_LOG',
+          // Use a dedicated message that content script actually handles
+          getInteractiveElements: 'ELEMENT_GET_INTERACTIVE_ELEMENTS',
         };
 
         const messageType = messageTypes[actionName] || actionName.toUpperCase();
@@ -2236,9 +2261,12 @@ export class ToolRegistry {
    */
   private isElementSelectionTool(toolName: string): boolean {
     const elementSelectionTools = [
-      'highlightElement'
+      'highlightElement',
+      'clearHighlights',
+      'highlightElements',
+      'getInteractiveElements',
+      'getClickableElementsDOM'
     ];
-
     return elementSelectionTools.includes(toolName);
   }
 

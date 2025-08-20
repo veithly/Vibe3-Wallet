@@ -3,14 +3,12 @@ import {
   BaseMessage,
   HumanMessage,
   SystemMessage,
-  AIMessage,
 } from '../llm/messages';
-import { Web3Context, FunctionSchema, LLMResponse } from '../llm/types';
-import { Web3Intent } from '../intent/IntentRecognizer';
-import { TaskAnalysis } from '../task-analysis/IntelligentTaskAnalyzer';
+import { Web3Context } from '../llm/types';
 import { createLogger } from '@/utils/logger';
 import { defiElementSelectionTemplates } from './defi-interactions';
 
+import { Web3Intent } from '../intent/IntentRecognizer';
 const logger = createLogger('PromptManager');
 
 // Prompt template schemas
@@ -348,11 +346,8 @@ Current element selection context:
 - User intent: {{userIntent}}
 
 Available element selection tools:
-- activateElementSelector: Activate element highlighting mode
-- getHighlightedElements: Get information about highlighted elements
+- getClickableElements: Build DOM and get interactive elements (nanobrowser-aligned)
 - analyzeElement: Analyze specific element properties
-- findElementsByText: Find elements by text content
-- getInteractiveElements: Get all interactive elements
 - highlightElement: Highlight specific elements
 - captureElementScreenshot: Take screenshots of elements
 
@@ -414,7 +409,7 @@ Please help with element selection and analysis. {{additionalContext}}`,
         'getHighlightedElements',
         'analyzeElement',
         'findElementsByText',
-        'getInteractiveElements',
+        'getClickableElements',
         'highlightElement',
         'captureElementScreenshot',
       ],

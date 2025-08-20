@@ -48,7 +48,11 @@ import { DynamicTaskPlanner, PlanningContext } from './agents/TaskPlanner';
 import { AgentMessage } from './agents/AgentTypes';
 import { TaskValidator } from './agents/TaskValidator';
 import { AgentConfigManager } from './agents/schemas/AgentConfig';
-import { elementSelectionAgent, ElementSelectionAgent, ElementSelectionTask } from './element-selection/ElementSelectionAgent';
+import {
+  elementSelectionAgent,
+  ElementSelectionAgent,
+  ElementSelectionTask,
+} from './element-selection/ElementSelectionAgent';
 import { MultiAgentIntegration } from './agents/MultiAgentIntegration';
 import {
   EnhancedIntent,
@@ -58,7 +62,7 @@ import {
   MultiStepExecutor,
   ContextSnapshot,
   RiskAssessment,
-  EnhancedAction
+  EnhancedAction,
 } from './types/BaseTypes';
 
 const logger = createLogger('Web3Agent');
@@ -98,7 +102,6 @@ export interface Web3AgentState {
   coordinationEvents?: CoordinationEvent[];
 }
 
-
 // ReAct runtime configuration loaded from Settings
 interface ReActRuntimeConfig {
   enabled: boolean;
@@ -131,7 +134,7 @@ export class Web3Agent extends EventEmitter {
   private multiStepExecutor: MultiStepExecutor;
   private reactConfig: ReActRuntimeConfig = {
     enabled: true,
-    maxSteps: 10,
+    maxSteps: 50,
     timeoutMs: 30000,
     showThinking: true,
     autoContinue: true,
@@ -154,8 +157,13 @@ export class Web3Agent extends EventEmitter {
   public cancelCurrentTask(): void {
     try {
       this._cancelled = true;
-      try { (this.llm as any)?.cancelStreaming?.(); } catch {}
-      logger.info('Web3Agent', 'cancelCurrentTask called: cancellation flag set');
+      try {
+        (this.llm as any)?.cancelStreaming?.();
+      } catch {}
+      logger.info(
+        'Web3Agent',
+        'cancelCurrentTask called: cancellation flag set'
+      );
     } catch {}
   }
   private ensureNotCancelled(): void {
@@ -181,14 +189,17 @@ export class Web3Agent extends EventEmitter {
   ) {
     super();
     // 🔥🔥🔥 EXTREMELY AGGRESSIVE DEBUGGING - WEB3AGENT CONSTRUCTOR CALLED! 🔥🔥🔥
-    console.log('🔥🔥🔥 WEB3AGENT CONSTRUCTOR INITIALIZED - THIS MUST APPEAR IN CONSOLE! 🔥🔥🔥', {
-      timestamp: Date.now(),
-      contextType: typeof context,
-      llmType: typeof llm,
-      configProvided: !!config,
-      dependenciesProvided: !!dependencies,
-      constructorStack: new Error().stack
-    });
+    console.log(
+      '🔥🔥🔥 WEB3AGENT CONSTRUCTOR INITIALIZED - THIS MUST APPEAR IN CONSOLE! 🔥🔥🔥',
+      {
+        timestamp: Date.now(),
+        contextType: typeof context,
+        llmType: typeof llm,
+        configProvided: !!config,
+        dependenciesProvided: !!dependencies,
+        constructorStack: new Error().stack,
+      }
+    );
 
     this.context = context;
     this.llm = llm;
@@ -238,7 +249,7 @@ export class Web3Agent extends EventEmitter {
       executionHistory: [],
       isExecuting: false,
       startTime: undefined,
-      endTime: undefined
+      endTime: undefined,
     };
 
     this.state = {
@@ -249,7 +260,7 @@ export class Web3Agent extends EventEmitter {
       lastActivity: Date.now(),
       multiStepExecutor: this.multiStepExecutor,
       agentStatus: {},
-      coordinationEvents: []
+      coordinationEvents: [],
     };
   }
 
@@ -261,7 +272,7 @@ export class Web3Agent extends EventEmitter {
       allowances: {},
       gasPrices: {},
       protocols: {},
-      riskLevel: 'LOW'
+      riskLevel: 'LOW',
     };
   }
 
@@ -271,14 +282,22 @@ export class Web3Agent extends EventEmitter {
   private initializeMultiAgentSystem(): void {
     try {
       // Initialize multi-agent system
-      this.multiAgentSystem = new MultiAgentSystem(this.llm, this.state.currentContext);
+      this.multiAgentSystem = new MultiAgentSystem(
+        this.llm,
+        this.state.currentContext
+      );
 
       // Initialize multi-agent integration
-      this.multiAgentIntegration = new MultiAgentIntegration(this.llm, this.state.currentContext);
+      this.multiAgentIntegration = new MultiAgentIntegration(
+        this.llm,
+        this.state.currentContext
+      );
 
       // Initialize individual agents
       this.plannerAgent = new DynamicTaskPlanner(this.llm);
-      this.navigatorAgent = new EnhancedNavigatorAgent(new AgentConfigManager('development'));
+      this.navigatorAgent = new EnhancedNavigatorAgent(
+        new AgentConfigManager('development')
+      );
       this.validatorAgent = new TaskValidator(this.llm);
 
       logger.info('Multi-agent system initialized successfully', {
@@ -287,7 +306,7 @@ export class Web3Agent extends EventEmitter {
         plannerAgent: !!this.plannerAgent,
         navigatorAgent: !!this.navigatorAgent,
         validatorAgent: !!this.validatorAgent,
-        coordinationEnabled: this.coordinationEnabled
+        coordinationEnabled: this.coordinationEnabled,
       });
     } catch (error) {
       logger.error('Failed to initialize multi-agent system:', error);
@@ -351,8 +370,12 @@ export class Web3Agent extends EventEmitter {
         if (cfg && typeof cfg === 'object') {
           this.reactConfig = {
             enabled: cfg.enabled ?? this.reactConfig.enabled,
-            maxSteps: Number.isFinite(cfg.maxSteps) ? cfg.maxSteps : this.reactConfig.maxSteps,
-            timeoutMs: Number.isFinite(cfg.timeoutMs) ? cfg.timeoutMs : this.reactConfig.timeoutMs,
+            maxSteps: Number.isFinite(cfg.maxSteps)
+              ? cfg.maxSteps
+              : this.reactConfig.maxSteps,
+            timeoutMs: Number.isFinite(cfg.timeoutMs)
+              ? cfg.timeoutMs
+              : this.reactConfig.timeoutMs,
             showThinking: cfg.showThinking ?? this.reactConfig.showThinking,
             autoContinue: cfg.autoContinue ?? this.reactConfig.autoContinue,
           };
@@ -364,19 +387,34 @@ export class Web3Agent extends EventEmitter {
               const newVal = changes.reactConfig.newValue || {};
               this.reactConfig = {
                 enabled: newVal.enabled ?? this.reactConfig.enabled,
-                maxSteps: Number.isFinite(newVal.maxSteps) ? newVal.maxSteps : this.reactConfig.maxSteps,
-                timeoutMs: Number.isFinite(newVal.timeoutMs) ? newVal.timeoutMs : this.reactConfig.timeoutMs,
-                showThinking: newVal.showThinking ?? this.reactConfig.showThinking,
-                autoContinue: newVal.autoContinue ?? this.reactConfig.autoContinue,
+                maxSteps: Number.isFinite(newVal.maxSteps)
+                  ? newVal.maxSteps
+                  : this.reactConfig.maxSteps,
+                timeoutMs: Number.isFinite(newVal.timeoutMs)
+                  ? newVal.timeoutMs
+                  : this.reactConfig.timeoutMs,
+                showThinking:
+                  newVal.showThinking ?? this.reactConfig.showThinking,
+                autoContinue:
+                  newVal.autoContinue ?? this.reactConfig.autoContinue,
               };
-              console.log('[Web3Agent] ReAct config updated from storage', this.reactConfig);
+              console.log(
+                '[Web3Agent] ReAct config updated from storage',
+                this.reactConfig
+              );
             }
           });
         } catch {}
-        console.log('[Web3Agent] ReAct config loaded from storage', this.reactConfig);
+        console.log(
+          '[Web3Agent] ReAct config loaded from storage',
+          this.reactConfig
+        );
       }
     } catch (e) {
-      console.warn('[Web3Agent] Failed to load ReAct config, using defaults', e);
+      console.warn(
+        '[Web3Agent] Failed to load ReAct config, using defaults',
+        e
+      );
     }
   }
 
@@ -405,8 +443,14 @@ export class Web3Agent extends EventEmitter {
       });
 
       // Step 2: Check if multi-agent coordination should be used
-      if (this.coordinationEnabled && this.shouldUseMultiAgentCoordination(taskAnalysis)) {
-        return await this.processWithMultiAgentCoordination(instruction, taskAnalysis);
+      if (
+        this.coordinationEnabled &&
+        this.shouldUseMultiAgentCoordination(taskAnalysis)
+      ) {
+        return await this.processWithMultiAgentCoordination(
+          instruction,
+          taskAnalysis
+        );
       }
 
       // Step 3: Enhanced intent extraction with task analysis context
@@ -433,7 +477,7 @@ export class Web3Agent extends EventEmitter {
 
       // Step 4: Generate enhanced prompt with new modules
       const promptContext: PromptContext = {
-        messages: this.state.conversationHistory,
+        messages: this.buildPrunedMessages(),
         context: enhancedContext,
         intent,
         tools: this.llm.getAvailableTools(),
@@ -499,7 +543,11 @@ export class Web3Agent extends EventEmitter {
         if (recovery.success) {
           // Retry with recovered context
           try {
-            if (enableStreaming && onChunk && this.llm.generateStreamingResponse) {
+            if (
+              enableStreaming &&
+              onChunk &&
+              this.llm.generateStreamingResponse
+            ) {
               // Use streaming response generation for retry
               llmResponse = await this.llm.generateStreamingResponse(
                 this.state.conversationHistory,
@@ -518,17 +566,23 @@ export class Web3Agent extends EventEmitter {
             }
           } catch (retryError) {
             // Surface raw provider error rather than preset fallback
-            const raw = retryError instanceof Error ? retryError.message : JSON.stringify(retryError);
+            const raw =
+              retryError instanceof Error
+                ? retryError.message
+                : JSON.stringify(retryError);
             throw new Error(raw);
           }
         } else if (recovery.fallback) {
           // Surface fallback reason explicitly
           throw new Error(
-            typeof recovery.fallback === 'string' ? recovery.fallback : JSON.stringify(recovery.fallback)
+            typeof recovery.fallback === 'string'
+              ? recovery.fallback
+              : JSON.stringify(recovery.fallback)
           );
         } else {
           // No recovery — propagate original error to UI
-          const raw = error instanceof Error ? error.message : JSON.stringify(error);
+          const raw =
+            error instanceof Error ? error.message : JSON.stringify(error);
           throw new Error(raw);
         }
 
@@ -555,7 +609,11 @@ export class Web3Agent extends EventEmitter {
 
       // Step 4: Simulate transactions if simulation is enabled and plan exists (with error recovery)
       let simulation: any;
-      if ((this.config as any).simulationEnabled && plan && plan.requiresConfirmation) {
+      if (
+        (this.config as any).simulationEnabled &&
+        plan &&
+        plan.requiresConfirmation
+      ) {
         try {
           simulation = await this.transactionSimulator.simulatePlan(plan);
           logger.info(
@@ -638,7 +696,11 @@ export class Web3Agent extends EventEmitter {
       this.state.conversationHistory.push(assistantMessage);
 
       // Store in chat history
-      await this.storeConversationStep(userMessage, assistantMessage, executedActions);
+      await this.storeConversationStep(
+        userMessage,
+        assistantMessage,
+        executedActions
+      );
 
       // Update state
       this.state.lastActivity = Date.now();
@@ -690,10 +752,10 @@ export class Web3Agent extends EventEmitter {
       taskAnalysis.requiresBrowserAutomation && taskAnalysis.requiresWeb3,
       taskAnalysis.estimatedSteps > 3,
       taskAnalysis.taskType === 'automation',
-      taskAnalysis.taskType === 'interaction'
+      taskAnalysis.taskType === 'interaction',
     ];
 
-    return coordinationCriteria.some(criterion => criterion);
+    return coordinationCriteria.some((criterion) => criterion);
   }
 
   /**
@@ -707,7 +769,7 @@ export class Web3Agent extends EventEmitter {
       logger.info('Starting multi-agent coordination', {
         instruction,
         taskType: taskAnalysis.taskType,
-        complexity: taskAnalysis.complexity
+        complexity: taskAnalysis.complexity,
       });
 
       const startTime = Date.now();
@@ -728,14 +790,14 @@ export class Web3Agent extends EventEmitter {
           complexity: taskAnalysis.complexity,
           estimatedDuration: taskAnalysis.estimatedSteps * 5000, // Convert steps to milliseconds
           requiredCapabilities: this.getRequiredCapabilities(taskAnalysis),
-          riskLevel: this.getRiskLevel(taskAnalysis)
+          riskLevel: this.getRiskLevel(taskAnalysis),
         },
         executionStrategy: {
           mode: 'adaptive',
           maxConcurrency: 3,
           errorHandling: 'retry',
-          optimization: 'balanced'
-        }
+          optimization: 'balanced',
+        },
       };
 
       // Step 2: Planner Agent creates execution plan
@@ -768,14 +830,16 @@ export class Web3Agent extends EventEmitter {
       this.multiStepExecutor.isExecuting = false;
       this.multiStepExecutor.endTime = Date.now();
       this.multiStepExecutor.currentPlan = executionPlan;
-      this.multiStepExecutor.executionHistory = this.convertActionResultsToEnhancedActions(navigatorResult.data || []);
+      this.multiStepExecutor.executionHistory = this.convertActionResultsToEnhancedActions(
+        navigatorResult.data || []
+      );
 
       // Add to coordination events
       this.recordCoordinationEvent('task_complete', {
         executionPlan,
         navigatorResult,
         validatorResult,
-        duration: Date.now() - startTime
+        duration: Date.now() - startTime,
       });
 
       const assistantMessage = new AIMessage(response.message);
@@ -792,11 +856,12 @@ export class Web3Agent extends EventEmitter {
       return {
         success: response.success,
         message: response.message,
-        actions: this.convertActionResultsToActionSteps(navigatorResult.data || []),
+        actions: this.convertActionResultsToActionSteps(
+          navigatorResult.data || []
+        ),
         sessionId: this.state.sessionId,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       };
-
     } catch (error) {
       logger.error('Multi-agent coordination failed:', error);
 
@@ -846,23 +911,30 @@ export class Web3Agent extends EventEmitter {
    * Convert AgentTaskPlan to ExecutionPlan
    */
   private convertToExecutionPlan(agentTaskPlan: any): ExecutionPlan {
-    const enhancedActions: EnhancedAction[] = agentTaskPlan.steps.map((step: any, index: number) => ({
-      id: step.id || `action_${index}`,
-      name: step.description || `Step ${index + 1}`,
-      description: step.description || '',
-      status: 'pending' as const,
-      type: step.type,
-      params: step.parameters || {},
-      dependencies: step.dependencies || [],
-      riskLevel: 'LOW' as const,
-      agentType: this.getAgentTypeForStep(step.type),
-      priority: agentTaskPlan.priority === 'high' ? 1 : (agentTaskPlan.priority === 'low' ? 3 : 2),
-      retries: 0,
-      maxRetries: step.retries || 3,
-      timeout: step.timeout || 10000,
-      fallbackActions: [],
-      contextRequirements: [],
-    }));
+    const enhancedActions: EnhancedAction[] = agentTaskPlan.steps.map(
+      (step: any, index: number) => ({
+        id: step.id || `action_${index}`,
+        name: step.description || `Step ${index + 1}`,
+        description: step.description || '',
+        status: 'pending' as const,
+        type: step.type,
+        params: step.parameters || {},
+        dependencies: step.dependencies || [],
+        riskLevel: 'LOW' as const,
+        agentType: this.getAgentTypeForStep(step.type),
+        priority:
+          agentTaskPlan.priority === 'high'
+            ? 1
+            : agentTaskPlan.priority === 'low'
+            ? 3
+            : 2,
+        retries: 0,
+        maxRetries: step.retries || 3,
+        timeout: step.timeout || 10000,
+        fallbackActions: [],
+        contextRequirements: [],
+      })
+    );
 
     return {
       id: agentTaskPlan.id,
@@ -884,7 +956,9 @@ export class Web3Agent extends EventEmitter {
   /**
    * Get agent type for step type
    */
-  private getAgentTypeForStep(stepType: string): 'planner' | 'navigator' | 'validator' | 'web3' | 'browser' {
+  private getAgentTypeForStep(
+    stepType: string
+  ): 'planner' | 'navigator' | 'validator' | 'web3' | 'browser' {
     switch (stepType) {
       case 'navigate':
       case 'click':
@@ -955,7 +1029,7 @@ export class Web3Agent extends EventEmitter {
         content: {
           action: 'execute_plan',
           plan: plan.actions,
-          context: this.state.currentContext
+          context: this.state.currentContext,
         },
         timestamp: Date.now(),
       };
@@ -984,15 +1058,15 @@ export class Web3Agent extends EventEmitter {
 
       const validationContext = {
         originalInstruction: intent.parameters.instruction,
-        executedSteps: plan.actions?.map(step => step.description) || [],
+        executedSteps: plan.actions?.map((step) => step.description) || [],
         currentUrl: '', // URL not available in AgentContext
-        executionResults: actionResults.map(result => ({
+        executionResults: actionResults.map((result) => ({
           step: result.metadata?.description || 'Unknown step',
           success: result.success,
           result: result.data,
-          timestamp: Date.now()
+          timestamp: Date.now(),
         })),
-        context: this.state.currentContext
+        context: this.state.currentContext,
       };
 
       const result = await this.validatorAgent.validateTask(
@@ -1012,7 +1086,9 @@ export class Web3Agent extends EventEmitter {
   /**
    * Execute Element Selection Agent
    */
-  private async executeElementSelectionAgentInternal(task: ElementSelectionTask) {
+  private async executeElementSelectionAgentInternal(
+    task: ElementSelectionTask
+  ) {
     try {
       this.emitCoordinationEvent('element_selection_start', { task });
       const result = await this.elementSelectionAgent.executeTask(
@@ -1041,35 +1117,52 @@ export class Web3Agent extends EventEmitter {
     validationResult?: any
   ): Promise<{ success: boolean; message: string }> {
     try {
-      const success = actionResults.every(r => r.success) &&
-                     validationResult?.result?.isValid;
+      const success =
+        actionResults.every((r) => r.success) &&
+        validationResult?.result?.isValid;
 
       if (success) {
         return {
           success: true,
-          message: `✅ Successfully completed ${intent.action} using multi-agent coordination.\n\n` +
-                   `**Plan:** ${plan.name}\n` +
-                   `**Actions:** ${actionResults.length} executed\n` +
-                   `**Validation:** ${validationResult?.confidence ? Math.round(validationResult.confidence * 100) + '% confidence' : 'Completed'}\n\n` +
-                   validationResult?.suggestions?.length ?
-                   `**Recommendations:** ${validationResult.suggestions.join(', ')}` : ''
+          message:
+            `✅ Successfully completed ${intent.action} using multi-agent coordination.\n\n` +
+            `**Plan:** ${plan.name}\n` +
+            `**Actions:** ${actionResults.length} executed\n` +
+            `**Validation:** ${
+              validationResult?.confidence
+                ? Math.round(validationResult.confidence * 100) + '% confidence'
+                : 'Completed'
+            }\n\n` +
+            validationResult?.suggestions?.length
+              ? `**Recommendations:** ${validationResult.suggestions.join(
+                  ', '
+                )}`
+              : '',
         };
       } else {
-        const failedActions = actionResults.filter(r => !r.success).length;
+        const failedActions = actionResults.filter((r) => !r.success).length;
         return {
           success: false,
-          message: `⚠️ Multi-agent execution partially completed.\n\n` +
-                   `**Plan:** ${plan.name}\n` +
-                   `**Failed Actions:** ${failedActions}/${actionResults.length}\n` +
-                   `**Validation:** ${validationResult?.isValid ? 'Passed' : 'Failed'}\n\n` +
-                   validationResult?.suggestions?.length ?
-                   `**Recommendations:** ${validationResult.suggestions.join(', ')}` : ''
+          message:
+            `⚠️ Multi-agent execution partially completed.\n\n` +
+            `**Plan:** ${plan.name}\n` +
+            `**Failed Actions:** ${failedActions}/${actionResults.length}\n` +
+            `**Validation:** ${
+              validationResult?.isValid ? 'Passed' : 'Failed'
+            }\n\n` +
+            validationResult?.suggestions?.length
+              ? `**Recommendations:** ${validationResult.suggestions.join(
+                  ', '
+                )}`
+              : '',
         };
       }
     } catch (error) {
       return {
         success: false,
-        message: `Multi-agent execution completed with errors: ${error instanceof Error ? error.message : 'Unknown error'}`
+        message: `Multi-agent execution completed with errors: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
       };
     }
   }
@@ -1087,9 +1180,10 @@ export class Web3Agent extends EventEmitter {
     // For now, return a simple response
     return {
       success: false,
-      message: 'Multi-agent coordination failed, falling back to traditional processing. Please try again.',
+      message:
+        'Multi-agent coordination failed, falling back to traditional processing. Please try again.',
       sessionId: this.state.sessionId,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
   }
 
@@ -1103,7 +1197,7 @@ export class Web3Agent extends EventEmitter {
       timestamp: Date.now(),
       source: 'Web3Agent',
       data,
-      priority: 'medium'
+      priority: 'medium',
     };
 
     this.state.coordinationEvents?.push(event);
@@ -1120,7 +1214,9 @@ export class Web3Agent extends EventEmitter {
   /**
    * Convert ActionResult[] to EnhancedAction[]
    */
-  private convertActionResultsToEnhancedActions(results: ActionResult[]): EnhancedAction[] {
+  private convertActionResultsToEnhancedActions(
+    results: ActionResult[]
+  ): EnhancedAction[] {
     return results.map((result, index) => ({
       id: `action_${index}_${Date.now()}`,
       name: 'Unknown Action',
@@ -1134,14 +1230,16 @@ export class Web3Agent extends EventEmitter {
       timeout: 30000,
       params: result.data || {},
       dependencies: [],
-      riskLevel: 'MEDIUM'
+      riskLevel: 'MEDIUM',
     }));
   }
 
   /**
    * Convert ActionResult[] to ActionStep[]
    */
-  private convertActionResultsToActionSteps(results: ActionResult[]): ActionStep[] {
+  private convertActionResultsToActionSteps(
+    results: ActionResult[]
+  ): ActionStep[] {
     return results.map((result, index) => ({
       id: `action_${index}_${Date.now()}`,
       name: 'Unknown Action',
@@ -1151,7 +1249,7 @@ export class Web3Agent extends EventEmitter {
       params: result.data || {},
       result: result.data,
       dependencies: [],
-      riskLevel: 'MEDIUM'
+      riskLevel: 'MEDIUM',
     }));
   }
 
@@ -1163,7 +1261,10 @@ export class Web3Agent extends EventEmitter {
       return true;
     }
 
-    if (plan.riskLevel === 'HIGH' && (this.config as any).requireConfirmationHighRisk) {
+    if (
+      plan.riskLevel === 'HIGH' &&
+      (this.config as any).requireConfirmationHighRisk
+    ) {
       return await this.confirmationManager.requestConfirmation(
         plan,
         simulation
@@ -1559,7 +1660,7 @@ export class Web3Agent extends EventEmitter {
       VALIDATE_TASK: 'validate task completion',
       COORDINATE_AGENTS: 'coordinate agents',
       ANALYZE_TASK: 'analyze task complexity',
-      OPTIMIZE_EXECUTION: 'optimize execution strategy'
+      OPTIMIZE_EXECUTION: 'optimize execution strategy',
     };
 
     return descriptions[actionType] || 'perform action';
@@ -1632,6 +1733,155 @@ export class Web3Agent extends EventEmitter {
     };
   }
 
+  /**
+   * Ensure that any assistant tool_calls without matching tool messages are not left dangling
+   * before we proceed to the next LLM turn. This avoids provider schema errors.
+   */
+  private sanitizeDanglingToolCalls(): void {
+    try {
+      const msgs = this.state.conversationHistory;
+      // Find last assistant message containing tool_calls
+      const lastAssistantToolCallsIdx = [...msgs].reverse().findIndex((m: any) => m?.additional_kwargs?.tool_calls);
+      if (lastAssistantToolCallsIdx < 0) return;
+      const idx = msgs.length - 1 - lastAssistantToolCallsIdx;
+      const toolCalls = msgs[idx]?.additional_kwargs?.tool_calls || [];
+      if (!Array.isArray(toolCalls) || toolCalls.length === 0) return;
+
+      // Collect tool_call_ids that already have a matching tool message after it
+      const respondedIds = new Set<string>();
+      for (let i = idx + 1; i < msgs.length; i++) {
+        const m: any = msgs[i];
+        const tcId = m?.additional_kwargs?.tool_call_id;
+        if (m?.type === 'tool' && typeof tcId === 'string') respondedIds.add(tcId);
+      }
+
+      // Remove the assistant tool_calls message if none of its ids have responses,
+      // to avoid schema errors in the next request
+      const allUnresponded = toolCalls.every((tc: any) => !respondedIds.has(tc.id));
+      if (allUnresponded) {
+        msgs.splice(idx, 1);
+      }
+    } catch {}
+  }
+  /**
+   * Build a pruned message list for prompts:
+   * - Drop verbose user messages like "Tool execution results: ..."
+   * - Remove consecutive duplicate human messages
+   * - Keep only the last N messages to control context size
+   */
+  private buildPrunedMessages(maxMessages: number = 20) {
+    const msgs = this.state.conversationHistory || [];
+    const filtered: BaseMessage[] = [] as any;
+
+    // 1) Drop noisy human echoes and consecutive duplicate human messages
+    for (const m of msgs) {
+      if ((m as any).type === 'human') {
+        const content = String((m as any).content || '');
+        if (/^Tool execution results:/i.test(content)) {
+          continue; // tool results are already represented by tool messages
+        }
+        const last = filtered[filtered.length - 1] as any;
+        if (last && last.type === 'human') {
+          const lastContent = String(last.content || '');
+          if (lastContent.trim() === content.trim()) {
+            continue; // skip consecutive duplicate human messages
+          }
+        }
+      }
+      filtered.push(m);
+    }
+
+    // 2) Truncate to last N messages
+    let pruned = filtered;
+    if (pruned.length > maxMessages) {
+      pruned = pruned.slice(pruned.length - maxMessages);
+    }
+
+    // 3) Ensure schema consistency for tool_calls/tool messages within the slice
+    //    - For assistant tool_calls, keep only ids that have a matching tool message later in the slice
+    //    - Drop assistant tool_calls message entirely if no ids remain after filtering
+    //    - Drop any tool messages without a preceding assistant tool_calls in the slice
+    const toRemove = new Set<number>();
+    const toReplace = new Map<number, BaseMessage>();
+
+    // Build maps for lookups
+    const assistantToolCallsEntries: Array<{ index: number; ids: string[]; message: any }> = [];
+    const toolMessagesById = new Map<string, number[]>();
+
+    pruned.forEach((m: any, idx: number) => {
+      const toolCalls = m?.additional_kwargs?.tool_calls;
+      if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+        const ids = toolCalls.map((tc: any) => tc?.id).filter((id: any) => typeof id === 'string');
+        if (ids.length) assistantToolCallsEntries.push({ index: idx, ids, message: m });
+      }
+      const toolId = m?.additional_kwargs?.tool_call_id;
+      if (typeof toolId === 'string') {
+        const arr = toolMessagesById.get(toolId) || [];
+        arr.push(idx);
+        toolMessagesById.set(toolId, arr);
+      }
+    });
+
+    // Filter assistant tool_calls to only those with matching tool results after it
+    for (const entry of assistantToolCallsEntries) {
+      const { index, ids, message } = entry;
+      const matchedIds = ids.filter((id) => {
+        const positions = toolMessagesById.get(id) || [];
+        return positions.some((pos) => pos > index);
+      });
+
+      if (matchedIds.length === 0) {
+        toRemove.add(index);
+        continue;
+      }
+
+      if (matchedIds.length < ids.length) {
+        // Create a shallow clone AIMessage with filtered tool_calls
+        const origCalls = message?.additional_kwargs?.tool_calls || [];
+        const filteredCalls = origCalls.filter((tc: any) => matchedIds.includes(tc?.id));
+        const cloned = new AIMessage(message.content || '', {
+          ...(message.additional_kwargs || {}),
+          tool_calls: filteredCalls,
+        });
+        toReplace.set(index, cloned);
+      }
+    }
+
+    // Build a set of assistant ids that remain (not removed), considering replacements
+    const remainingAssistantIds = new Map<string, number>();
+    pruned.forEach((m: any, idx: number) => {
+      if (toRemove.has(idx)) return;
+      const msg = toReplace.get(idx) || m;
+      const toolCalls = msg?.additional_kwargs?.tool_calls;
+      if (Array.isArray(toolCalls)) {
+        for (const tc of toolCalls) {
+          const id = tc?.id;
+          if (typeof id === 'string') remainingAssistantIds.set(id, idx);
+        }
+      }
+    });
+
+    // Remove tool messages without a preceding assistant tool_calls in slice
+    pruned.forEach((m: any, idx: number) => {
+      const toolId = m?.additional_kwargs?.tool_call_id;
+      if (typeof toolId === 'string') {
+        const aIdx = remainingAssistantIds.get(toolId);
+        if (aIdx === undefined || aIdx >= idx) {
+          toRemove.add(idx);
+        }
+      }
+    });
+
+    // Apply removals and replacements
+    let finalMessages: BaseMessage[] = [];
+    pruned.forEach((m: any, idx: number) => {
+      if (toRemove.has(idx)) return;
+      const replacement = toReplace.get(idx);
+      finalMessages.push(replacement || m);
+    });
+
+    return finalMessages;
+  }
   // Enhanced function calling support
   async processUserInstructionWithFunctionCalling(
     instruction: string,
@@ -1639,19 +1889,29 @@ export class Web3Agent extends EventEmitter {
     onChunk?: (chunk: StreamingLLMResponse) => void,
     onThinking?: (thinking: any) => void,
     onReActStatus?: (status: any) => void,
-    onToolCalls?: (payload: { content?: string; functionCalls?: FunctionCall[] }) => void
+    onToolCalls?: (payload: {
+      content?: string;
+      functionCalls?: FunctionCall[];
+    }) => void
   ): Promise<AgentResponse> {
     try {
       // Reset cancellation flag for new instruction
       this._cancelled = false;
       const startTime = Date.now();
 
+      // Safety: remove any dangling tool_calls from previous turn to avoid provider schema errors
+      try { this.sanitizeDanglingToolCalls(); } catch (e) {}
+
       // Add user message to conversation history (avoid consecutive duplicates)
       let userMessage = new HumanMessage(instruction);
-      const lastMsg = this.state.conversationHistory[this.state.conversationHistory.length - 1] as any;
+      const lastMsg = this.state.conversationHistory[
+        this.state.conversationHistory.length - 1
+      ] as any;
       const lastType = lastMsg?._getType?.();
       const lastContent = lastMsg?.content;
-      if (!(lastType === 'human' && String(lastContent) === String(instruction))) {
+      if (
+        !(lastType === 'human' && String(lastContent) === String(instruction))
+      ) {
         this.state.conversationHistory.push(userMessage);
       } else {
         // Reuse the last human message to keep IDs consistent
@@ -1725,7 +1985,7 @@ export class Web3Agent extends EventEmitter {
               isThinking: true,
               isActing: false,
               currentStep: 3,
-              maxSteps: 5,
+              maxSteps: Math.max(1, this.reactConfig?.maxSteps ?? 10),
               thinkingContent: 'Creating action plan...',
               timestamp: Date.now(),
             });
@@ -1737,13 +1997,17 @@ export class Web3Agent extends EventEmitter {
           if (onThinking && reactPlan) {
             onThinking({
               type: 'planning',
-              content: `I've created a plan with ${reactPlan.actions.length} steps:\n${this.formatPlanSummary(reactPlan)}`,
+              content: `I've created a plan with ${
+                reactPlan.actions.length
+              } steps:\n${this.formatPlanSummary(reactPlan)}`,
               timestamp: Date.now(),
             });
           }
 
           const planMsg = new SystemMessage(
-            `Planned steps (ReAct):\n${this.formatPlanSummary(reactPlan)}\n\nFollow this plan step-by-step using available tools. Ask for any missing parameters before executing risky operations.`
+            `Planned steps (ReAct):\n${this.formatPlanSummary(
+              reactPlan
+            )}\n\nFollow this plan step-by-step using available tools. Ask for any missing parameters before executing risky operations.`
           );
           this.state.conversationHistory.push(planMsg);
         }
@@ -1756,14 +2020,20 @@ export class Web3Agent extends EventEmitter {
 
       // Build prompt with proper system/user messages
       const promptContext: PromptContext = {
-        messages: this.state.conversationHistory,
-        context: this.state.currentContext,
+        messages: this.buildPrunedMessages(),
+        context: {
+          ...this.state.currentContext,
+          reactConfig: this.reactConfig,
+          externalToolExecution: true,
+        },
         intent,
         tools: availableTools,
         conversationHistory: this.state.conversationHistory,
         availableActions: this.actionRegistry.getAvailableActions(),
       };
-      const generatedPrompt = await this.promptManager.createPrompt(promptContext);
+      const generatedPrompt = await this.promptManager.createPrompt(
+        promptContext
+      );
 
       // Step 4: Generate LLM response with function calling (ReAct loop)
       let llmResponse: LLMResponse;
@@ -1773,7 +2043,8 @@ export class Web3Agent extends EventEmitter {
       if (onThinking) {
         onThinking({
           type: 'reasoning',
-          content: 'Now I\'ll use the available tools to help with your request...',
+          content:
+            "Now I'll use the available tools to help with your request...",
           timestamp: Date.now(),
         });
       }
@@ -1785,7 +2056,7 @@ export class Web3Agent extends EventEmitter {
           isThinking: true,
           isActing: false,
           currentStep: 4,
-          maxSteps: 5,
+          maxSteps: Math.max(1, this.reactConfig?.maxSteps ?? 10),
           thinkingContent: 'Preparing to execute tools...',
           timestamp: Date.now(),
         });
@@ -1796,7 +2067,7 @@ export class Web3Agent extends EventEmitter {
 
       // First turn: ask for tool calls
       // Ensure provider receives tool schemas
-      ;(this.llm as any).attachToolsForProvider?.(availableTools);
+      (this.llm as any).attachToolsForProvider?.(availableTools);
 
       logger.info('🔍 Web3Agent first turn LLM call decision', {
         enableStreaming,
@@ -1807,7 +2078,9 @@ export class Web3Agent extends EventEmitter {
       });
 
       if (enableStreaming && onChunk) {
-        logger.info('🚀 Web3Agent: FORCING streaming response generation for first turn');
+        logger.info(
+          '🚀 Web3Agent: FORCING streaming response generation for first turn'
+        );
 
         // FORCE streaming by directly calling the method, even if it doesn't exist
         if (this.llm.generateStreamingResponse) {
@@ -1823,7 +2096,9 @@ export class Web3Agent extends EventEmitter {
             logger.info('✅ First turn streaming completed successfully', {
               hasResponse: !!llmResponse.response,
               responseLength: llmResponse.response?.length || 0,
-              hasFunctionCalls: !!llmResponse.functionCalls && llmResponse.functionCalls.length > 0,
+              hasFunctionCalls:
+                !!llmResponse.functionCalls &&
+                llmResponse.functionCalls.length > 0,
               functionCallsCount: llmResponse.functionCalls?.length || 0,
             });
           } catch (streamingError) {
@@ -1831,8 +2106,13 @@ export class Web3Agent extends EventEmitter {
             throw streamingError;
           }
         } else {
-          logger.error('❌ generateStreamingResponse method not found, this should not happen!');
-          logger.info('🔧 Available methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(this.llm)));
+          logger.error(
+            '❌ generateStreamingResponse method not found, this should not happen!'
+          );
+          logger.info(
+            '🔧 Available methods:',
+            Object.getOwnPropertyNames(Object.getPrototypeOf(this.llm))
+          );
 
           // Fallback to regular response but simulate streaming
           llmResponse = await this.llm.generateResponse(
@@ -1853,11 +2133,14 @@ export class Web3Agent extends EventEmitter {
           }
         }
       } else {
-        logger.warn('⚠️ Web3Agent: Using regular response generation for first turn', {
-          enableStreaming,
-          hasOnChunk: !!onChunk,
-          hasGenerateStreamingResponse: !!this.llm.generateStreamingResponse,
-        });
+        logger.warn(
+          '⚠️ Web3Agent: Using regular response generation for first turn',
+          {
+            enableStreaming,
+            hasOnChunk: !!onChunk,
+            hasGenerateStreamingResponse: !!this.llm.generateStreamingResponse,
+          }
+        );
         // Use regular response generation for first turn
         llmResponse = await this.llm.generateResponse(
           generatedPrompt.messages,
@@ -1881,15 +2164,24 @@ export class Web3Agent extends EventEmitter {
       if (onToolCalls) {
         const openAIToolCalls = (llmResponse as any)?.tool_calls || [];
         const internalCalls = (llmResponse as any)?.functionCalls || [];
-        const hasCalls = (openAIToolCalls && openAIToolCalls.length > 0) || (internalCalls && internalCalls.length > 0);
+        const hasCalls =
+          (openAIToolCalls && openAIToolCalls.length > 0) ||
+          (internalCalls && internalCalls.length > 0);
         if (hasCalls) {
           const nowTs = Date.now();
           const normalized = (openAIToolCalls.length > 0
             ? openAIToolCalls.map((tc: any, idx: number) => ({
-                id: tc.id || `call_${tc.function?.name || 'fn'}_${nowTs}_${idx}`,
+                id:
+                  tc.id || `call_${tc.function?.name || 'fn'}_${nowTs}_${idx}`,
                 name: tc.function?.name,
                 arguments: (() => {
-                  try { return tc.function?.arguments ? JSON.parse(tc.function.arguments) : {}; } catch { return { raw: tc.function?.arguments }; }
+                  try {
+                    return tc.function?.arguments
+                      ? JSON.parse(tc.function.arguments)
+                      : {};
+                  } catch {
+                    return { raw: tc.function?.arguments };
+                  }
                 })(),
                 status: 'executing',
                 timestamp: nowTs,
@@ -1900,11 +2192,13 @@ export class Web3Agent extends EventEmitter {
                 arguments: fc.arguments || {},
                 status: 'executing',
                 timestamp: nowTs,
-              }))
-          ) as any[];
+              }))) as any[];
 
           onToolCalls({
-            content: (llmResponse as any).response || (llmResponse as any).content || '',
+            content:
+              (llmResponse as any).response ||
+              (llmResponse as any).content ||
+              '',
             functionCalls: normalized as any,
           });
         }
@@ -1913,7 +2207,9 @@ export class Web3Agent extends EventEmitter {
       // 🚨🚨🚨 CRITICAL DEBUGGING: Check LLM response before extraction
       console.log('🚨🚨🚨 LLM RESPONSE BEFORE EXTRACTION:', {
         responseKeys: Object.keys(llmResponse),
-        hasFunctionCalls: !!(llmResponse.functionCalls && llmResponse.functionCalls.length > 0),
+        hasFunctionCalls: !!(
+          llmResponse.functionCalls && llmResponse.functionCalls.length > 0
+        ),
         hasToolCalls: !!(llmResponse as any).tool_calls,
         toolCalls: (llmResponse as any).tool_calls,
         functionCalls: llmResponse.functionCalls,
@@ -1921,13 +2217,17 @@ export class Web3Agent extends EventEmitter {
       });
 
       // Extract function calls from LLM response (handles both OpenAI tool_calls and internal functionCalls formats)
-      const extractedFunctionCalls = this.extractFunctionCallsFromResponse(llmResponse);
+      const extractedFunctionCalls = this.extractFunctionCallsFromResponse(
+        llmResponse
+      );
 
       // If model requested tool calls, execute then send tool results back for a second turn
       if (extractedFunctionCalls && extractedFunctionCalls.length > 0) {
         // Send thinking message about executing tools
         if (onThinking) {
-          const toolNames = extractedFunctionCalls.map(fc => fc.name).join(', ');
+          const toolNames = extractedFunctionCalls
+            .map((fc) => fc.name)
+            .join(', ');
           onThinking({
             type: 'function_call',
             content: `I need to execute these tools: ${toolNames}`,
@@ -1937,13 +2237,18 @@ export class Web3Agent extends EventEmitter {
 
         // Update ReAct status for tool execution
         if (onReActStatus) {
-          const toolNames = extractedFunctionCalls.map(fc => fc.name).join(', ');
+          const toolNames = extractedFunctionCalls
+            .map((fc) => fc.name)
+            .join(', ');
           onReActStatus({
             isActive: true,
             isThinking: false,
             isActing: true,
-            currentStep: 5,
-            maxSteps: 5,
+            currentStep: Math.min(
+              5,
+              Math.max(1, this.reactConfig?.maxSteps ?? 10)
+            ),
+            maxSteps: Math.max(1, this.reactConfig?.maxSteps ?? 10),
             thinkingContent: `Executing tools: ${toolNames}`,
             currentAction: `Running ${toolNames}`,
             timestamp: Date.now(),
@@ -1951,8 +2256,15 @@ export class Web3Agent extends EventEmitter {
         }
 
         // Store tool execution message
-        const toolNames = extractedFunctionCalls.map(fc => fc.name).join(', ');
-        await this.storeReActStatusMessage(`Executing tools: ${toolNames}`, `Running ${toolNames}`, false, true);
+        const toolNames = extractedFunctionCalls
+          .map((fc) => fc.name)
+          .join(', ');
+        await this.storeReActStatusMessage(
+          `Executing tools: ${toolNames}`,
+          `Running ${toolNames}`,
+          false,
+          true
+        );
 
         // Record the assistant tool_calls message to keep role structure consistent
         const assistantToolCallMsg = new AIMessage('', {
@@ -1974,7 +2286,7 @@ export class Web3Agent extends EventEmitter {
 
         console.log('🔧 First turn actions executed', {
           actionsCount: firstTurnActions.length,
-          actions: firstTurnActions.map(action => ({
+          actions: firstTurnActions.map((action) => ({
             type: action.type,
             status: action.status,
             hasResult: !!action.result,
@@ -2007,24 +2319,43 @@ export class Web3Agent extends EventEmitter {
           });
         }
 
+        // Notify UI: mark function_call cards as completed/failed with results (first turn)
+        if (onToolCalls) {
+          try {
+            const updates = extractedFunctionCalls.map((fc, i) => ({
+              id: fc.id || `call_${fc.name || 'fn'}_${Date.now()}_${i}`,
+              name: fc.name,
+              arguments: fc.arguments || {},
+              status: firstTurnActions[i]?.status || 'completed',
+              result: firstTurnActions[i]?.result,
+              timestamp: Date.now(),
+            }));
+            onToolCalls({ content: '', functionCalls: updates as any });
+          } catch {}
+        }
+
         // Second turn: let the model incorporate results into a final answer
         console.log('🔄 Preparing second turn prompt', {
           conversationHistoryLength: this.state.conversationHistory.length,
-          lastMessages: this.state.conversationHistory.slice(-3).map(msg => ({
+          lastMessages: this.state.conversationHistory.slice(-3).map((msg) => ({
             type: msg.constructor.name,
             content: msg.content.substring(0, 100),
           })),
         });
 
         const secondPrompt = await this.promptManager.createPrompt({
-          messages: this.state.conversationHistory,
-          context: this.state.currentContext,
+          messages: this.buildPrunedMessages(),
+          context: {
+            ...this.state.currentContext,
+            reactConfig: this.reactConfig,
+            externalToolExecution: true,
+          },
           intent,
           tools: availableTools,
           conversationHistory: this.state.conversationHistory,
           availableActions: this.actionRegistry.getAvailableActions(),
         });
-        ;(this.llm as any).attachToolsForProvider?.(availableTools);
+        (this.llm as any).attachToolsForProvider?.(availableTools);
 
         // Generate second turn response with streaming support
         logger.info('🔍 Web3Agent second turn LLM call decision', {
@@ -2034,11 +2365,15 @@ export class Web3Agent extends EventEmitter {
         });
 
         if (enableStreaming && onChunk) {
-          logger.info('🚀 Web3Agent: FORCING streaming response generation for second turn');
+          logger.info(
+            '🚀 Web3Agent: FORCING streaming response generation for second turn'
+          );
 
           // FORCE streaming by directly calling the method, even if it doesn't exist
           if (this.llm.generateStreamingResponse) {
-            logger.info('✅ Using existing generateStreamingResponse method for second turn');
+            logger.info(
+              '✅ Using existing generateStreamingResponse method for second turn'
+            );
             try {
               llmResponse = await this.llm.generateStreamingResponse(
                 secondPrompt.messages,
@@ -2050,7 +2385,9 @@ export class Web3Agent extends EventEmitter {
               logger.info('✅ Second turn streaming completed successfully', {
                 hasResponse: !!llmResponse.response,
                 responseLength: llmResponse.response?.length || 0,
-                hasFunctionCalls: !!llmResponse.functionCalls && llmResponse.functionCalls.length > 0,
+                hasFunctionCalls:
+                  !!llmResponse.functionCalls &&
+                  llmResponse.functionCalls.length > 0,
                 functionCallsCount: llmResponse.functionCalls?.length || 0,
               });
             } catch (streamingError) {
@@ -2058,7 +2395,9 @@ export class Web3Agent extends EventEmitter {
               throw streamingError;
             }
           } else {
-            logger.error('❌ generateStreamingResponse method not found for second turn!');
+            logger.error(
+              '❌ generateStreamingResponse method not found for second turn!'
+            );
 
             // Fallback to regular response but simulate streaming
             llmResponse = await this.llm.generateResponse(
@@ -2079,11 +2418,15 @@ export class Web3Agent extends EventEmitter {
             }
           }
         } else {
-          logger.warn('⚠️ Web3Agent: Using regular response generation for second turn', {
-            enableStreaming,
-            hasOnChunk: !!onChunk,
-            hasGenerateStreamingResponse: !!this.llm.generateStreamingResponse,
-          });
+          logger.warn(
+            '⚠️ Web3Agent: Using regular response generation for second turn',
+            {
+              enableStreaming,
+              hasOnChunk: !!onChunk,
+              hasGenerateStreamingResponse: !!this.llm
+                .generateStreamingResponse,
+            }
+          );
           // Use regular response generation for second turn
           llmResponse = await this.llm.generateResponse(
             secondPrompt.messages,
@@ -2106,14 +2449,26 @@ export class Web3Agent extends EventEmitter {
         if (onToolCalls) {
           const openAIToolCalls2 = (llmResponse as any)?.tool_calls || [];
           const internalCalls2 = (llmResponse as any)?.functionCalls || [];
-          const hasCalls2 = (openAIToolCalls2 && openAIToolCalls2.length > 0) || (internalCalls2 && internalCalls2.length > 0);
+          const hasCalls2 =
+            (openAIToolCalls2 && openAIToolCalls2.length > 0) ||
+            (internalCalls2 && internalCalls2.length > 0);
           if (hasCalls2) {
             const nowTs2 = Date.now();
             const normalized2 = (openAIToolCalls2.length > 0
               ? openAIToolCalls2.map((tc: any, idx: number) => ({
-                  id: tc.id || `call_${tc.function?.name || 'fn'}_${nowTs2}_${idx}`,
+                  id:
+                    tc.id ||
+                    `call_${tc.function?.name || 'fn'}_${nowTs2}_${idx}`,
                   name: tc.function?.name,
-                  arguments: (() => { try { return tc.function?.arguments ? JSON.parse(tc.function.arguments) : {}; } catch { return { raw: tc.function?.arguments }; } })(),
+                  arguments: (() => {
+                    try {
+                      return tc.function?.arguments
+                        ? JSON.parse(tc.function.arguments)
+                        : {};
+                    } catch {
+                      return { raw: tc.function?.arguments };
+                    }
+                  })(),
                   status: 'executing',
                   timestamp: nowTs2,
                 }))
@@ -2123,11 +2478,13 @@ export class Web3Agent extends EventEmitter {
                   arguments: fc.arguments || {},
                   status: 'executing',
                   timestamp: nowTs2,
-                }))
-            ) as any[];
+                }))) as any[];
 
             onToolCalls({
-              content: (llmResponse as any).response || (llmResponse as any).content || '',
+              content:
+                (llmResponse as any).response ||
+                (llmResponse as any).content ||
+                '',
               functionCalls: normalized2 as any,
             });
           }
@@ -2135,7 +2492,9 @@ export class Web3Agent extends EventEmitter {
       }
 
       // Step 5: Execute function calls if any (second turn)
-      const secondTurnFunctionCalls = this.extractFunctionCallsFromResponse(llmResponse);
+      const secondTurnFunctionCalls = this.extractFunctionCallsFromResponse(
+        llmResponse
+      );
       if (secondTurnFunctionCalls && secondTurnFunctionCalls.length > 0) {
         // Insert an assistant message with tool_calls to satisfy OpenAI schema
         try {
@@ -2151,16 +2510,37 @@ export class Web3Agent extends EventEmitter {
           });
           this.state.conversationHistory.push(assistantToolCallMsg2);
         } catch (e) {
-          logger.warn('Failed to append assistant tool_calls message for second turn', { error: e instanceof Error ? e.message : String(e) });
+          logger.warn(
+            'Failed to append assistant tool_calls message for second turn',
+            { error: e instanceof Error ? e.message : String(e) }
+          );
         }
 
-        const secondTurnActions = await this.executeFunctionCalls(secondTurnFunctionCalls);
+        const secondTurnActions = await this.executeFunctionCalls(
+          secondTurnFunctionCalls
+        );
         accumulatedActions.push(...secondTurnActions);
 
         // Append tool results as ToolMessages (second turn) so the LLM can use them in ReAct
         try {
           for (let i = 0; i < secondTurnActions.length; i++) {
             const step = secondTurnActions[i];
+
+            // Notify UI: mark function_call cards as completed/failed with results (second turn)
+            if (onToolCalls) {
+              try {
+                const updates2 = secondTurnFunctionCalls.map((fc2, i) => ({
+                  id: fc2.id || `call_${fc2.name || 'fn'}_${Date.now()}_${i}`,
+                  name: fc2.name,
+                  arguments: fc2.arguments || {},
+                  status: secondTurnActions[i]?.status || 'completed',
+                  result: secondTurnActions[i]?.result,
+                  timestamp: Date.now(),
+                }));
+                onToolCalls({ content: '', functionCalls: updates2 as any });
+              } catch {}
+            }
+
             const fc2 = secondTurnFunctionCalls[i];
             const toolMsg2 = new ToolMessage({
               content: JSON.stringify({
@@ -2174,95 +2554,132 @@ export class Web3Agent extends EventEmitter {
             this.state.conversationHistory.push(toolMsg2);
           }
         } catch (e) {
-          logger.warn('Failed to append second turn tool results', { error: e instanceof Error ? e.message : String(e) });
+          logger.warn('Failed to append second turn tool results', {
+            error: e instanceof Error ? e.message : String(e),
+          });
         }
       }
 
       // Step 6: Generate final response
 
-        // Multi-turn ReAct loop: continue until no more tool_calls or safety cap reached
-        try {
-          let iterations = 0;
-          const maxIterations = Math.max(1, this.reactConfig?.maxSteps ?? 10); // safety cap to prevent infinite loops
-          while (iterations < maxIterations && (this.reactConfig?.enabled ?? true)) {
-            const nextPrompt = await this.promptManager.createPrompt({
-              messages: this.state.conversationHistory,
-              context: this.state.currentContext,
-              intent,
-              tools: availableTools,
-              conversationHistory: this.state.conversationHistory,
-              availableActions: this.actionRegistry.getAvailableActions(),
-            });
-            ;(this.llm as any).attachToolsForProvider?.(availableTools);
+      // Multi-turn ReAct loop: continue until no more tool_calls or safety cap reached
+      try {
+        let iterations = 0;
+        const maxIterations = Math.max(1, this.reactConfig?.maxSteps ?? 10); // safety cap to prevent infinite loops
+        while (
+          iterations < maxIterations &&
+          (this.reactConfig?.enabled ?? true)
+        ) {
+          const nextPrompt = await this.promptManager.createPrompt({
+            messages: this.buildPrunedMessages(),
+            context: {
+              ...this.state.currentContext,
+              reactConfig: this.reactConfig,
+              externalToolExecution: true,
+            },
+            intent,
+            tools: availableTools,
+            conversationHistory: this.state.conversationHistory,
+            availableActions: this.actionRegistry.getAvailableActions(),
+          });
+          (this.llm as any).attachToolsForProvider?.(availableTools);
 
-            let nextResponse: LLMResponse;
-            if (enableStreaming && onChunk && this.llm.generateStreamingResponse) {
-              nextResponse = await this.llm.generateStreamingResponse(
-                nextPrompt.messages,
-                nextPrompt.context,
-                nextPrompt.intent,
-                nextPrompt.tools,
-                onChunk
-              );
-            } else {
-              nextResponse = await this.llm.generateResponse(
-                nextPrompt.messages,
-                nextPrompt.context,
-                nextPrompt.intent,
-                nextPrompt.tools
-              );
-              if (enableStreaming && onChunk && nextResponse.response) {
-                onChunk({ id: `react-turn-response-${iterations}-${Date.now()}`, type: 'content', content: nextResponse.response, timestamp: Date.now() });
-              }
-            }
-
-            // Update latest response
-            llmResponse = nextResponse;
-
-            // Extract potential new function calls
-            const moreFunctionCalls = this.extractFunctionCallsFromResponse(nextResponse);
-            if (!moreFunctionCalls || moreFunctionCalls.length === 0) {
-              break; // no more tool calls, finish
-            }
-
-            // Insert an assistant message with tool_calls for this turn
-            try {
-              const assistantToolCallsMsg = new AIMessage('', {
-                tool_calls: moreFunctionCalls.map((fc) => ({
-                  id: fc.id || `call_${fc.name}_${Date.now()}`,
-                  type: 'function',
-                  function: { name: fc.name, arguments: JSON.stringify(fc.arguments || {}) },
-                })),
+          let nextResponse: LLMResponse;
+          if (
+            enableStreaming &&
+            onChunk &&
+            this.llm.generateStreamingResponse
+          ) {
+            nextResponse = await this.llm.generateStreamingResponse(
+              nextPrompt.messages,
+              nextPrompt.context,
+              nextPrompt.intent,
+              nextPrompt.tools,
+              onChunk
+            );
+          } else {
+            nextResponse = await this.llm.generateResponse(
+              nextPrompt.messages,
+              nextPrompt.context,
+              nextPrompt.intent,
+              nextPrompt.tools
+            );
+            if (enableStreaming && onChunk && nextResponse.response) {
+              onChunk({
+                id: `react-turn-response-${iterations}-${Date.now()}`,
+                type: 'content',
+                content: nextResponse.response,
+                timestamp: Date.now(),
               });
-              this.state.conversationHistory.push(assistantToolCallsMsg);
-            } catch (e) {
-              logger.warn('Failed to append assistant tool_calls message for ReAct loop', { error: e instanceof Error ? e.message : String(e) });
             }
-
-            // Execute and append tool results
-            const loopTurnActions = await this.executeFunctionCalls(moreFunctionCalls);
-            accumulatedActions.push(...loopTurnActions);
-
-            try {
-              for (let i = 0; i < loopTurnActions.length; i++) {
-                const step = loopTurnActions[i];
-                const fc = moreFunctionCalls[i];
-                const toolMsg = new ToolMessage({
-                  content: JSON.stringify({ success: step.status === 'completed', result: step.result, params: step.params }),
-                  name: step.type || 'tool',
-                  tool_call_id: fc?.id || `${step.type || 'tool'}_${i}`,
-                });
-                this.state.conversationHistory.push(toolMsg);
-              }
-            } catch (e) {
-              logger.warn('Failed to append loop turn tool results', { error: e instanceof Error ? e.message : String(e) });
-            }
-
-            iterations++;
           }
-        } catch (e) {
-          logger.warn('ReAct loop generation failed; continuing to final response', { error: e instanceof Error ? e.message : String(e) });
+
+          // Update latest response
+          llmResponse = nextResponse;
+
+          // Extract potential new function calls
+          const moreFunctionCalls = this.extractFunctionCallsFromResponse(
+            nextResponse
+          );
+          if (!moreFunctionCalls || moreFunctionCalls.length === 0) {
+            break; // no more tool calls, finish
+          }
+
+          // Insert an assistant message with tool_calls for this turn
+          try {
+            const assistantToolCallsMsg = new AIMessage('', {
+              tool_calls: moreFunctionCalls.map((fc) => ({
+                id: fc.id || `call_${fc.name}_${Date.now()}`,
+                type: 'function',
+                function: {
+                  name: fc.name,
+                  arguments: JSON.stringify(fc.arguments || {}),
+                },
+              })),
+            });
+            this.state.conversationHistory.push(assistantToolCallsMsg);
+          } catch (e) {
+            logger.warn(
+              'Failed to append assistant tool_calls message for ReAct loop',
+              { error: e instanceof Error ? e.message : String(e) }
+            );
+          }
+
+          // Execute and append tool results
+          const loopTurnActions = await this.executeFunctionCalls(
+            moreFunctionCalls
+          );
+          accumulatedActions.push(...loopTurnActions);
+
+          try {
+            for (let i = 0; i < loopTurnActions.length; i++) {
+              const step = loopTurnActions[i];
+              const fc = moreFunctionCalls[i];
+              const toolMsg = new ToolMessage({
+                content: JSON.stringify({
+                  success: step.status === 'completed',
+                  result: step.result,
+                  params: step.params,
+                }),
+                name: step.type || 'tool',
+                tool_call_id: fc?.id || `${step.type || 'tool'}_${i}`,
+              });
+              this.state.conversationHistory.push(toolMsg);
+            }
+          } catch (e) {
+            logger.warn('Failed to append loop turn tool results', {
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+
+          iterations++;
         }
+      } catch (e) {
+        logger.warn(
+          'ReAct loop generation failed; continuing to final response',
+          { error: e instanceof Error ? e.message : String(e) }
+        );
+      }
 
       const response = await this.generateFinalResponse(
         instruction,
@@ -2323,11 +2740,63 @@ export class Web3Agent extends EventEmitter {
     }
   }
 
+  /**
+   * Ingest externally executed tool results and append as ToolMessages so that
+   * OpenAI tool_call schema is satisfied before the next assistant turn.
+   * Ensures a preceding assistant tool_calls message exists for the provided ids.
+   */
+  public async ingestExternalToolResults(
+    results: Array<{
+      toolCallId: string;
+      toolName: string;
+      result: any;
+      success: boolean;
+    }>
+  ): Promise<void> {
+    try {
+      if (!Array.isArray(results) || results.length === 0) return;
+
+      // 1) Insert an assistant tool_calls message that references these ids
+      const toolCalls = results
+        .filter((r) => !!r?.toolCallId)
+        .map((r) => ({
+          id: r.toolCallId,
+          type: 'function',
+          function: { name: r.toolName || 'tool', arguments: JSON.stringify({}) },
+        }));
+      if (toolCalls.length > 0) {
+        const assistantToolCalls = new AIMessage('', { tool_calls: toolCalls });
+        this.state.conversationHistory.push(assistantToolCalls);
+      }
+
+      // 2) Append corresponding ToolMessages
+      for (const r of results) {
+        if (!r?.toolCallId) continue;
+        const toolMsg = new ToolMessage({
+          content: JSON.stringify({ success: !!r.success, result: r.result }),
+          name: r.toolName || 'tool',
+          tool_call_id: r.toolCallId,
+        });
+        this.state.conversationHistory.push(toolMsg);
+      }
+    } catch (e) {
+      logger.warn('ingestExternalToolResults failed', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  // =========================
+  // Tool Execution & Utilities
+  // =========================
+
   private async executeFunctionCalls(
     functionCalls: FunctionCall[]
   ): Promise<ActionStep[]> {
     if (functionCalls.length === 0) {
-      logger.warn('executeFunctionCalls called with empty function calls array');
+      logger.warn(
+        'executeFunctionCalls called with empty function calls array'
+      );
       return [];
     }
 
@@ -2336,8 +2805,11 @@ export class Web3Agent extends EventEmitter {
 
     logger.info('executeFunctionCalls starting', {
       count: normalizedFunctionCalls.length,
-      functionNames: normalizedFunctionCalls.map(fc => fc.name),
-      originalFormat: functionCalls.length > 0 && 'function' in functionCalls[0] ? 'OpenAI tool_calls' : 'Internal FunctionCall',
+      functionNames: normalizedFunctionCalls.map((fc) => fc.name),
+      originalFormat:
+        functionCalls.length > 0 && 'function' in functionCalls[0]
+          ? 'OpenAI tool_calls'
+          : 'Internal FunctionCall',
     });
 
     // Check if we can execute in parallel
@@ -2366,15 +2838,20 @@ export class Web3Agent extends EventEmitter {
     const executedActions: ActionStep[] = [];
     const executionId = `sequential_${Date.now()}`;
 
-    logger.info(`[${executionId}] Starting sequential function call execution`, {
-      totalCalls: functionCalls.length,
-      functionNames: functionCalls.map(fc => fc.name),
-      executionId,
-    });
+    logger.info(
+      `[${executionId}] Starting sequential function call execution`,
+      {
+        totalCalls: functionCalls.length,
+        functionNames: functionCalls.map((fc) => fc.name),
+        executionId,
+      }
+    );
 
     for (let i = 0; i < functionCalls.length; i++) {
       if (this._cancelled) {
-        logger.info(`[${executionId}] Cancellation detected before executing step ${i}; aborting remaining function calls`);
+        logger.info(
+          `[${executionId}] Cancellation detected before executing step ${i}; aborting remaining function calls`
+        );
         break;
       }
       const functionCall = functionCalls[i];
@@ -2382,12 +2859,15 @@ export class Web3Agent extends EventEmitter {
       const stepExecutionId = `${executionId}_step_${i}`;
 
       try {
-        logger.info(`[${stepExecutionId}] Executing function call: ${functionCall.name}`, {
-          arguments: functionCall.arguments,
-          callId: functionCall.id,
-          stepIndex: i,
-          totalSteps: functionCalls.length,
-        });
+        logger.info(
+          `[${stepExecutionId}] Executing function call: ${functionCall.name}`,
+          {
+            arguments: functionCall.arguments,
+            callId: functionCall.id,
+            stepIndex: i,
+            totalSteps: functionCalls.length,
+          }
+        );
 
         // Store pending tool call message
         await this.storeToolCallMessage(functionCall, 'pending');
@@ -2395,9 +2875,14 @@ export class Web3Agent extends EventEmitter {
         // Check if tool exists
         const toolExists = toolRegistry.getTool(functionCall.name);
         if (!toolExists) {
-          logger.error(`[${stepExecutionId}] Tool not found: ${functionCall.name}`, {
-            availableTools: Array.from(toolRegistry.getAllTools()).map(t => t.name),
-          });
+          logger.error(
+            `[${stepExecutionId}] Tool not found: ${functionCall.name}`,
+            {
+              availableTools: Array.from(toolRegistry.getAllTools()).map(
+                (t) => t.name
+              ),
+            }
+          );
 
           // Store failed tool call message
           await this.storeToolCallMessage(functionCall, 'failed');
@@ -2405,22 +2890,32 @@ export class Web3Agent extends EventEmitter {
         }
 
         // Check and recover permissions if tool requires them
-        if (toolExists.requiredPermissions && toolExists.requiredPermissions.length > 0) {
-          const permissionCheck = await this.checkAndRecoverPermissions(toolExists.requiredPermissions);
+        if (
+          toolExists.requiredPermissions &&
+          toolExists.requiredPermissions.length > 0
+        ) {
+          const permissionCheck = await this.checkAndRecoverPermissions(
+            toolExists.requiredPermissions
+          );
 
           if (!permissionCheck.hasAllPermissions) {
-            const errorMessage = this.createPermissionErrorMessage(permissionCheck.missingPermissions);
-            logger.error(`[${stepExecutionId}] Permission check failed for ${functionCall.name}`, {
-              missingPermissions: permissionCheck.missingPermissions,
-              recoverySuccessful: permissionCheck.recoverySuccessful,
-              error: permissionCheck.error
-            });
+            const errorMessage = this.createPermissionErrorMessage(
+              permissionCheck.missingPermissions
+            );
+            logger.error(
+              `[${stepExecutionId}] Permission check failed for ${functionCall.name}`,
+              {
+                missingPermissions: permissionCheck.missingPermissions,
+                recoverySuccessful: permissionCheck.recoverySuccessful,
+                error: permissionCheck.error,
+              }
+            );
 
             // Store failed tool call message with permission error
             await this.storeToolCallMessage(functionCall, 'failed', {
               success: false,
               error: errorMessage,
-              permissionError: true
+              permissionError: true,
             });
 
             throw new Error(`Permission required: ${errorMessage}`);
@@ -2429,11 +2924,14 @@ export class Web3Agent extends EventEmitter {
 
         let result;
         try {
-          logger.info(`[${stepExecutionId}] Tool found, validating parameters`, {
-            toolName: functionCall.name,
-            toolCategory: toolExists.category,
-            toolRiskLevel: toolExists.riskLevel,
-          });
+          logger.info(
+            `[${stepExecutionId}] Tool found, validating parameters`,
+            {
+              toolName: functionCall.name,
+              toolCategory: toolExists.category,
+              toolRiskLevel: toolExists.riskLevel,
+            }
+          );
 
           // Validate parameters
           const validation = toolRegistry.validateParameters(
@@ -2449,10 +2947,14 @@ export class Web3Agent extends EventEmitter {
                 requiredParams: toolExists.required,
               }
             );
-            throw new Error(`Parameter validation failed: ${validation.errors.join(', ')}`);
+            throw new Error(
+              `Parameter validation failed: ${validation.errors.join(', ')}`
+            );
           }
 
-          logger.info(`[${stepExecutionId}] Parameter validation successful, executing tool`);
+          logger.info(
+            `[${stepExecutionId}] Parameter validation successful, executing tool`
+          );
 
           // Enhanced tool execution logging
           logger.info(`[${stepExecutionId}] Starting tool execution`, {
@@ -2473,13 +2975,18 @@ export class Web3Agent extends EventEmitter {
           );
 
           const stepExecutionTime = Date.now() - stepStartTime;
-          const resultDataForLog = (result && (result.data !== undefined ? result.data : result.result)) || undefined;
+          const resultDataForLog =
+            (result &&
+              (result.data !== undefined ? result.data : result.result)) ||
+            undefined;
           logger.info(`[${stepExecutionId}] Tool execution completed`, {
             toolName: functionCall.name,
             success: result?.success,
             hasData: !!resultDataForLog,
             executionTime: stepExecutionTime,
-            dataSummary: resultDataForLog ? JSON.stringify(resultDataForLog).substring(0, 200) : undefined,
+            dataSummary: resultDataForLog
+              ? JSON.stringify(resultDataForLog).substring(0, 200)
+              : undefined,
             error: result?.error,
             action: result?.action,
             timestamp: result?.timestamp,
@@ -2488,7 +2995,11 @@ export class Web3Agent extends EventEmitter {
           });
 
           // Store completed tool call message
-          await this.storeToolCallMessage(functionCall, result.success ? 'completed' : 'failed', result);
+          await this.storeToolCallMessage(
+            functionCall,
+            result.success ? 'completed' : 'failed',
+            result
+          );
 
           // Create action step
           const actionStep: ActionStep = {
@@ -2504,52 +3015,60 @@ export class Web3Agent extends EventEmitter {
           };
 
           executedActions.push(actionStep);
-          logger.info(`[${stepExecutionId}] Function call executed successfully: ${functionCall.name}`);
+          logger.info(
+            `[${stepExecutionId}] Function call executed successfully: ${functionCall.name}`
+          );
         } catch (error) {
-        const stepExecutionTime = Date.now() - stepStartTime;
-        logger.error(
-          `[${stepExecutionId}] Function call execution failed: ${functionCall.name}`,
-          {
-            error: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : undefined,
-            arguments: functionCall.arguments,
-            executionTime: stepExecutionTime,
-            stepIndex: i,
-            toolCategory: toolExists.category,
-            toolRiskLevel: toolExists.riskLevel,
-            paramCount: Object.keys(functionCall.arguments).length,
-          }
-        );
+          const stepExecutionTime = Date.now() - stepStartTime;
+          logger.error(
+            `[${stepExecutionId}] Function call execution failed: ${functionCall.name}`,
+            {
+              error: error instanceof Error ? error.message : String(error),
+              stack: error instanceof Error ? error.stack : undefined,
+              arguments: functionCall.arguments,
+              executionTime: stepExecutionTime,
+              stepIndex: i,
+              toolCategory: toolExists.category,
+              toolRiskLevel: toolExists.riskLevel,
+              paramCount: Object.keys(functionCall.arguments).length,
+            }
+          );
 
-        // Store failed tool call message
-        await this.storeToolCallMessage(functionCall, 'failed', {
-          success: false,
-          error: error instanceof Error ? error.message : String(error)
-        });
-
-        // Create failed action step
-        const actionStep: ActionStep = {
-          id: `func_${functionCall.name}_${Date.now()}`,
-          name: `Execute ${functionCall.name}`,
-          type: functionCall.name,
-          description: `Failed to execute ${functionCall.name}`,
-          params: functionCall.arguments,
-          status: 'failed',
-          result: {
+          // Store failed tool call message
+          await this.storeToolCallMessage(functionCall, 'failed', {
             success: false,
             error: error instanceof Error ? error.message : String(error),
-          },
-          dependencies: [],
-          riskLevel: this.getFunctionRiskLevel(functionCall.name),
-        };
+          });
 
-        executedActions.push(actionStep);
+          // Create failed action step
+          const actionStep: ActionStep = {
+            id: `func_${functionCall.name}_${Date.now()}`,
+            name: `Execute ${functionCall.name}`,
+            type: functionCall.name,
+            description: `Failed to execute ${functionCall.name}`,
+            params: functionCall.arguments,
+            status: 'failed',
+            result: {
+              success: false,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            dependencies: [],
+            riskLevel: this.getFunctionRiskLevel(functionCall.name),
+          };
+
+          executedActions.push(actionStep);
         }
       } catch (outerError) {
-        logger.error(`[${stepExecutionId}] Unexpected error in function call execution`, {
-          error: outerError instanceof Error ? outerError.message : String(outerError),
-          functionName: functionCall.name,
-        });
+        logger.error(
+          `[${stepExecutionId}] Unexpected error in function call execution`,
+          {
+            error:
+              outerError instanceof Error
+                ? outerError.message
+                : String(outerError),
+            functionName: functionCall.name,
+          }
+        );
 
         // Create failed action step for unexpected errors
         const actionStep: ActionStep = {
@@ -2561,7 +3080,10 @@ export class Web3Agent extends EventEmitter {
           status: 'failed',
           result: {
             success: false,
-            error: outerError instanceof Error ? outerError.message : String(outerError),
+            error:
+              outerError instanceof Error
+                ? outerError.message
+                : String(outerError),
           },
           dependencies: [],
           riskLevel: this.getFunctionRiskLevel(functionCall.name),
@@ -2572,13 +3094,19 @@ export class Web3Agent extends EventEmitter {
     }
 
     const totalExecutionTime = Date.now() - parseInt(executionId.split('_')[1]);
-    logger.info(`[${executionId}] Sequential function call execution completed`, {
-      totalCalls: functionCalls.length,
-      successfulActions: executedActions.filter(a => a.status === 'completed').length,
-      failedActions: executedActions.filter(a => a.status === 'failed').length,
-      totalExecutionTime,
-      averageTimePerCall: totalExecutionTime / functionCalls.length,
-    });
+    logger.info(
+      `[${executionId}] Sequential function call execution completed`,
+      {
+        totalCalls: functionCalls.length,
+        successfulActions: executedActions.filter(
+          (a) => a.status === 'completed'
+        ).length,
+        failedActions: executedActions.filter((a) => a.status === 'failed')
+          .length,
+        totalExecutionTime,
+        averageTimePerCall: totalExecutionTime / functionCalls.length,
+      }
+    );
 
     return executedActions;
   }
@@ -2593,29 +3121,43 @@ export class Web3Agent extends EventEmitter {
       for (const functionCall of functionCalls) {
         const toolExists = toolRegistry.getTool(functionCall.name);
         if (!toolExists) {
-          logger.error(`Tool not found for parallel execution: ${functionCall.name}`);
+          logger.error(
+            `Tool not found for parallel execution: ${functionCall.name}`
+          );
           throw new Error(`Tool not found: ${functionCall.name}`);
         }
 
         // Check permissions if required
-        if (toolExists.requiredPermissions && toolExists.requiredPermissions.length > 0) {
-          const permissionCheck = await this.checkAndRecoverPermissions(toolExists.requiredPermissions);
+        if (
+          toolExists.requiredPermissions &&
+          toolExists.requiredPermissions.length > 0
+        ) {
+          const permissionCheck = await this.checkAndRecoverPermissions(
+            toolExists.requiredPermissions
+          );
 
           if (!permissionCheck.hasAllPermissions) {
-            const errorMessage = this.createPermissionErrorMessage(permissionCheck.missingPermissions);
-            logger.error(`Permission check failed for parallel execution of ${functionCall.name}`, {
-              missingPermissions: permissionCheck.missingPermissions,
-              recoverySuccessful: permissionCheck.recoverySuccessful
-            });
+            const errorMessage = this.createPermissionErrorMessage(
+              permissionCheck.missingPermissions
+            );
+            logger.error(
+              `Permission check failed for parallel execution of ${functionCall.name}`,
+              {
+                missingPermissions: permissionCheck.missingPermissions,
+                recoverySuccessful: permissionCheck.recoverySuccessful,
+              }
+            );
 
             // Store failed tool call message with permission error
             await this.storeToolCallMessage(functionCall, 'failed', {
               success: false,
               error: errorMessage,
-              permissionError: true
+              permissionError: true,
             });
 
-            throw new Error(`Permission required for ${functionCall.name}: ${errorMessage}`);
+            throw new Error(
+              `Permission required for ${functionCall.name}: ${errorMessage}`
+            );
           }
         }
       }
@@ -2704,199 +3246,254 @@ export class Web3Agent extends EventEmitter {
   /**
    * Extract function calls from LLM response (handles both OpenAI tool_calls and internal functionCalls formats)
    */
-  private extractFunctionCallsFromResponse(llmResponse: LLMResponse): FunctionCall[] {
-    console.log('🚨🚨🚨 CRITICAL DEBUGGING: extractFunctionCallsFromResponse called!', {
-      hasFunctionCalls: !!(llmResponse.functionCalls && llmResponse.functionCalls.length > 0),
-      responseKeys: Object.keys(llmResponse),
-      functionCallsLength: llmResponse.functionCalls?.length || 0,
-      rawResponsePreview: JSON.stringify(llmResponse).substring(0, 1000),
-    });
+  private extractFunctionCallsFromResponse(
+    llmResponse: LLMResponse
+  ): FunctionCall[] {
+    console.log(
+      '🚨🚨🚨 CRITICAL DEBUGGING: extractFunctionCallsFromResponse called!',
+      {
+        hasFunctionCalls: !!(
+          llmResponse.functionCalls && llmResponse.functionCalls.length > 0
+        ),
+        responseKeys: Object.keys(llmResponse),
+        functionCallsLength: llmResponse.functionCalls?.length || 0,
+        rawResponsePreview: JSON.stringify(llmResponse).substring(0, 1000),
+      }
+    );
 
     // Check for OpenAI tool_calls format in the raw response
     const rawResponse = llmResponse as any;
-    if (rawResponse.tool_calls && Array.isArray(rawResponse.tool_calls) && rawResponse.tool_calls.length > 0) {
+    if (
+      rawResponse.tool_calls &&
+      Array.isArray(rawResponse.tool_calls) &&
+      rawResponse.tool_calls.length > 0
+    ) {
       logger.info('Found OpenAI tool_calls format in response', {
         toolCallsCount: rawResponse.tool_calls.length,
-        toolCallNames: rawResponse.tool_calls.map((tc: any) => tc.function?.name || 'unknown'),
+        toolCallNames: rawResponse.tool_calls.map(
+          (tc: any) => tc.function?.name || 'unknown'
+        ),
       });
 
       // Convert OpenAI tool_calls to internal FunctionCall format
-      const functionCalls: FunctionCall[] = rawResponse.tool_calls.map((toolCall: any) => {
-        try {
-          let parsedArguments: Record<string, any> = {};
+      const functionCalls: FunctionCall[] = rawResponse.tool_calls.map(
+        (toolCall: any) => {
+          try {
+            let parsedArguments: Record<string, any> = {};
 
-          if (toolCall.function && toolCall.function.arguments) {
-            const rawArgs = toolCall.function.arguments;
-            logger.info('Processing OpenAI tool call arguments', {
-              rawArgs,
-              rawArgsType: typeof rawArgs,
-              functionName: toolCall.function.name,
-              // Enhanced debugging for URL parameters
-              isNavigateToUrl: toolCall.function.name === 'navigateToUrl',
-              rawArgsLength: rawArgs.length,
-              rawArgsPreview: rawArgs.length > 100 ? rawArgs.substring(0, 100) + '...' : rawArgs,
-            });
+            if (toolCall.function && toolCall.function.arguments) {
+              const rawArgs = toolCall.function.arguments;
+              logger.info('Processing OpenAI tool call arguments', {
+                rawArgs,
+                rawArgsType: typeof rawArgs,
+                functionName: toolCall.function.name,
+                // Enhanced debugging for URL parameters
+                isNavigateToUrl: toolCall.function.name === 'navigateToUrl',
+                rawArgsLength: rawArgs.length,
+                rawArgsPreview:
+                  rawArgs.length > 100
+                    ? rawArgs.substring(0, 100) + '...'
+                    : rawArgs,
+              });
 
-            if (typeof rawArgs === 'string') {
-              // Handle various edge cases in JSON parsing
-              if (rawArgs.trim() === '') {
-                logger.warn('Empty arguments string');
-                parsedArguments = {};
-              } else if (rawArgs === 'of') {
-                // This appears to be a specific corruption case - try to recover
-                console.error('🚨🚨🚨 Arguments string is just "of" - CRITICAL URL CORRUPTION DETECTED!', {
-                  rawArgs,
-                  functionName: toolCall.function.name,
-                  toolCallDetails: JSON.stringify(toolCall, null, 2),
-                  fullToolCall: toolCall,
-                  context: 'URL parameter corruption detected at extraction phase',
-                });
-
-                // For navigateToUrl, try to extract URL from context
-                if (toolCall.function.name === 'navigateToUrl') {
-                  // Look for URL patterns in the broader context
-                  // This is a fallback when JSON is corrupted
-                  parsedArguments = {
-                    url: 'https://app.uniswap.org', // Default fallback
-                    waitFor: 'load'
-                  };
-                  logger.error('URL CORRUPTION: Using fallback parameters for navigateToUrl due to "of" corruption', {
-                    originalArgs: rawArgs,
-                    fallbackArgs: parsedArguments,
-                    toolCallId: toolCall.id,
-                  });
-                } else {
+              if (typeof rawArgs === 'string') {
+                // Handle various edge cases in JSON parsing
+                if (rawArgs.trim() === '') {
+                  logger.warn('Empty arguments string');
                   parsedArguments = {};
-                  logger.error('URL CORRUPTION: Empty arguments for non-navigateToUrl function', {
-                    functionName: toolCall.function.name,
-                    originalArgs: rawArgs,
-                  });
-                }
-              } else {
-                try {
-                  // Try normal JSON parsing first
-                  parsedArguments = JSON.parse(rawArgs);
-                  logger.info('Successfully parsed arguments', {
-                    parsedArguments,
-                    keys: Object.keys(parsedArguments),
-                    // Enhanced URL parameter tracking
-                    hasUrlParameter: 'url' in parsedArguments,
-                    urlValue: parsedArguments.url,
-                    urlType: typeof parsedArguments.url,
-                    isUrlOf: parsedArguments.url === 'of',
-                    fullArgs: JSON.stringify(parsedArguments),
-                  });
-                } catch (parseError) {
-                  // If normal parsing fails, try recovery strategies
-                  logger.error('JSON parsing failed for arguments, attempting recovery', {
-                    error: parseError instanceof Error ? parseError.message : String(parseError),
-                    rawArgs,
-                    rawArgsLength: rawArgs.length,
-                  });
+                } else if (rawArgs === 'of') {
+                  // This appears to be a specific corruption case - try to recover
+                  console.error(
+                    '🚨🚨🚨 Arguments string is just "of" - CRITICAL URL CORRUPTION DETECTED!',
+                    {
+                      rawArgs,
+                      functionName: toolCall.function.name,
+                      toolCallDetails: JSON.stringify(toolCall, null, 2),
+                      fullToolCall: toolCall,
+                      context:
+                        'URL parameter corruption detected at extraction phase',
+                    }
+                  );
 
-                  // Try to fix common JSON issues
-                  let fixedArgs = rawArgs;
-
-                  // Strategy 1: Remove trailing commas
-                  fixedArgs = fixedArgs.replace(/,\s*([}\]])/g, '$1');
-
-                  // Strategy 2: Fix unescaped quotes in URLs
-                  fixedArgs = fixedArgs.replace(/"url":\s*"([^"]*)"/g, (match, url) => {
-                    return `"url": "${url.replace(/"/g, '\\"')}"`;
-                  });
-
-                  // Strategy 3: Try to extract URL if it contains obvious patterns
-                  const urlMatch = rawArgs.match(/https?:\/\/[^\s"}]+/);
-                  if (urlMatch && toolCall.function.name === 'navigateToUrl') {
+                  // For navigateToUrl, try to extract URL from context
+                  if (toolCall.function.name === 'navigateToUrl') {
+                    // Look for URL patterns in the broader context
+                    // This is a fallback when JSON is corrupted
                     parsedArguments = {
-                      url: urlMatch[0],
-                      waitFor: rawArgs.includes('waitFor') ? 'load' : undefined
+                      url: 'https://app.uniswap.org', // Default fallback
+                      waitFor: 'load',
                     };
-                    logger.info('Extracted URL using regex pattern', parsedArguments);
-                  } else {
-                    // Try parsing the fixed JSON
-                    try {
-                      parsedArguments = JSON.parse(fixedArgs);
-                      logger.info('Successfully parsed after fixing JSON', {
-                        parsedArguments,
-                        keys: Object.keys(parsedArguments),
-                      });
-                    } catch (secondParseError) {
-                      logger.error('All JSON parsing attempts failed', {
-                        originalError: parseError instanceof Error ? parseError.message : String(parseError),
-                        fixedError: secondParseError instanceof Error ? secondParseError.message : String(secondParseError),
+                    logger.error(
+                      'URL CORRUPTION: Using fallback parameters for navigateToUrl due to "of" corruption',
+                      {
                         originalArgs: rawArgs,
-                        fixedArgs,
-                      });
-                      parsedArguments = {};
+                        fallbackArgs: parsedArguments,
+                        toolCallId: toolCall.id,
+                      }
+                    );
+                  } else {
+                    parsedArguments = {};
+                    logger.error(
+                      'URL CORRUPTION: Empty arguments for non-navigateToUrl function',
+                      {
+                        functionName: toolCall.function.name,
+                        originalArgs: rawArgs,
+                      }
+                    );
+                  }
+                } else {
+                  try {
+                    // Try normal JSON parsing first
+                    parsedArguments = JSON.parse(rawArgs);
+                    logger.info('Successfully parsed arguments', {
+                      parsedArguments,
+                      keys: Object.keys(parsedArguments),
+                      // Enhanced URL parameter tracking
+                      hasUrlParameter: 'url' in parsedArguments,
+                      urlValue: parsedArguments.url,
+                      urlType: typeof parsedArguments.url,
+                      isUrlOf: parsedArguments.url === 'of',
+                      fullArgs: JSON.stringify(parsedArguments),
+                    });
+                  } catch (parseError) {
+                    // If normal parsing fails, try recovery strategies
+                    logger.error(
+                      'JSON parsing failed for arguments, attempting recovery',
+                      {
+                        error:
+                          parseError instanceof Error
+                            ? parseError.message
+                            : String(parseError),
+                        rawArgs,
+                        rawArgsLength: rawArgs.length,
+                      }
+                    );
+
+                    // Try to fix common JSON issues
+                    let fixedArgs = rawArgs;
+
+                    // Strategy 1: Remove trailing commas
+                    fixedArgs = fixedArgs.replace(/,\s*([}\]])/g, '$1');
+
+                    // Strategy 2: Fix unescaped quotes in URLs
+                    fixedArgs = fixedArgs.replace(
+                      /"url":\s*"([^"]*)"/g,
+                      (match, url) => {
+                        return `"url": "${url.replace(/"/g, '\\"')}"`;
+                      }
+                    );
+
+                    // Strategy 3: Try to extract URL if it contains obvious patterns
+                    const urlMatch = rawArgs.match(/https?:\/\/[^\s"}]+/);
+                    if (
+                      urlMatch &&
+                      toolCall.function.name === 'navigateToUrl'
+                    ) {
+                      parsedArguments = {
+                        url: urlMatch[0],
+                        waitFor: rawArgs.includes('waitFor')
+                          ? 'load'
+                          : undefined,
+                      };
+                      logger.info(
+                        'Extracted URL using regex pattern',
+                        parsedArguments
+                      );
+                    } else {
+                      // Try parsing the fixed JSON
+                      try {
+                        parsedArguments = JSON.parse(fixedArgs);
+                        logger.info('Successfully parsed after fixing JSON', {
+                          parsedArguments,
+                          keys: Object.keys(parsedArguments),
+                        });
+                      } catch (secondParseError) {
+                        logger.error('All JSON parsing attempts failed', {
+                          originalError:
+                            parseError instanceof Error
+                              ? parseError.message
+                              : String(parseError),
+                          fixedError:
+                            secondParseError instanceof Error
+                              ? secondParseError.message
+                              : String(secondParseError),
+                          originalArgs: rawArgs,
+                          fixedArgs,
+                        });
+                        parsedArguments = {};
+                      }
                     }
                   }
                 }
+              } else {
+                // Arguments already parsed as object
+                parsedArguments = rawArgs || {};
+                logger.info('Arguments already parsed as object', {
+                  parsedArguments,
+                  keys: Object.keys(parsedArguments),
+                });
               }
-            } else {
-              // Arguments already parsed as object
-              parsedArguments = rawArgs || {};
-              logger.info('Arguments already parsed as object', {
-                parsedArguments,
-                keys: Object.keys(parsedArguments),
-              });
             }
-          }
 
-          const functionCall = {
-            name: toolCall.function?.name || 'unknown',
-            arguments: parsedArguments,
-            id: toolCall.id || `call_${Date.now()}`,
-          };
+            const functionCall = {
+              name: toolCall.function?.name || 'unknown',
+              arguments: parsedArguments,
+              id: toolCall.id || `call_${Date.now()}`,
+            };
 
-          // 🚨🚨🚨 CRITICAL DEBUGGING: Check final parsed arguments before returning
-          console.log('🚨🚨🚨 FINAL FUNCTION CALL DEBUG:', {
-            functionName: functionCall.name,
-            arguments: functionCall.arguments,
-            argumentsType: typeof functionCall.arguments,
-            argumentsKeys: Object.keys(functionCall.arguments),
-            hasUrl: 'url' in functionCall.arguments,
-            urlValue: functionCall.arguments.url,
-            urlType: typeof functionCall.arguments.url,
-            isUrlValid: functionCall.arguments.url &&
-                       typeof functionCall.arguments.url === 'string' &&
-                       functionCall.arguments.url.startsWith('http'),
-            rawToolCall: toolCall,
-            parsedArguments: parsedArguments,
-            fullFunctionCall: JSON.stringify(functionCall, null, 2),
-          });
-
-          // Enhanced debugging for URL parameters in final function call
-          if (functionCall.name === 'navigateToUrl') {
-            logger.info('FINAL FUNCTION CALL CREATED - navigateToUrl', {
-              functionCallId: functionCall.id,
+            // 🚨🚨🚨 CRITICAL DEBUGGING: Check final parsed arguments before returning
+            console.log('🚨🚨🚨 FINAL FUNCTION CALL DEBUG:', {
+              functionName: functionCall.name,
               arguments: functionCall.arguments,
+              argumentsType: typeof functionCall.arguments,
+              argumentsKeys: Object.keys(functionCall.arguments),
+              hasUrl: 'url' in functionCall.arguments,
               urlValue: functionCall.arguments.url,
               urlType: typeof functionCall.arguments.url,
-              isUrlOf: functionCall.arguments.url === 'of',
-              hasValidUrl: functionCall.arguments.url && functionCall.arguments.url !== 'of' && functionCall.arguments.url.startsWith('http'),
-              fullFunctionCall: JSON.stringify(functionCall),
+              isUrlValid:
+                functionCall.arguments.url &&
+                typeof functionCall.arguments.url === 'string' &&
+                functionCall.arguments.url.startsWith('http'),
+              rawToolCall: toolCall,
+              parsedArguments: parsedArguments,
+              fullFunctionCall: JSON.stringify(functionCall, null, 2),
             });
+
+            // Enhanced debugging for URL parameters in final function call
+            if (functionCall.name === 'navigateToUrl') {
+              logger.info('FINAL FUNCTION CALL CREATED - navigateToUrl', {
+                functionCallId: functionCall.id,
+                arguments: functionCall.arguments,
+                urlValue: functionCall.arguments.url,
+                urlType: typeof functionCall.arguments.url,
+                isUrlOf: functionCall.arguments.url === 'of',
+                hasValidUrl:
+                  functionCall.arguments.url &&
+                  functionCall.arguments.url !== 'of' &&
+                  functionCall.arguments.url.startsWith('http'),
+                fullFunctionCall: JSON.stringify(functionCall),
+              });
+            }
+
+            return functionCall;
+          } catch (error) {
+            logger.error('Failed to parse OpenAI tool call', {
+              error: error instanceof Error ? error.message : String(error),
+              toolCall,
+            });
+
+            return {
+              name: toolCall.function?.name || 'unknown',
+              arguments: {},
+              id: toolCall.id || `call_${Date.now()}`,
+            };
           }
-
-          return functionCall;
-        } catch (error) {
-          logger.error('Failed to parse OpenAI tool call', {
-            error: error instanceof Error ? error.message : String(error),
-            toolCall,
-          });
-
-          return {
-            name: toolCall.function?.name || 'unknown',
-            arguments: {},
-            id: toolCall.id || `call_${Date.now()}`,
-          };
         }
-      });
+      );
 
       logger.info('Successfully converted OpenAI tool_calls to FunctionCalls', {
         convertedCount: functionCalls.length,
-        functionNames: functionCalls.map(fc => fc.name),
+        functionNames: functionCalls.map((fc) => fc.name),
       });
 
       return functionCalls;
@@ -2906,7 +3503,7 @@ export class Web3Agent extends EventEmitter {
     if (llmResponse.functionCalls && llmResponse.functionCalls.length > 0) {
       logger.info('Using internal functionCalls format', {
         functionCallsCount: llmResponse.functionCalls.length,
-        functionNames: llmResponse.functionCalls.map(fc => fc.name),
+        functionNames: llmResponse.functionCalls.map((fc) => fc.name),
       });
 
       return llmResponse.functionCalls;
@@ -2914,15 +3511,19 @@ export class Web3Agent extends EventEmitter {
 
     // Check if there are any function calls in the actions array
     if (llmResponse.actions && llmResponse.actions.length > 0) {
-      const functionCallActions = llmResponse.actions.filter(action => action.functionCall);
+      const functionCallActions = llmResponse.actions.filter(
+        (action) => action.functionCall
+      );
       if (functionCallActions.length > 0) {
         logger.info('Found function calls in actions array', {
           actionCount: functionCallActions.length,
-          functionNames: functionCallActions.map(action => action.functionCall?.name || 'unknown'),
+          functionNames: functionCallActions.map(
+            (action) => action.functionCall?.name || 'unknown'
+          ),
         });
 
         return functionCallActions
-          .map(action => action.functionCall)
+          .map((action) => action.functionCall)
           .filter((call): call is FunctionCall => call !== undefined);
       }
     }
@@ -2975,7 +3576,7 @@ export class Web3Agent extends EventEmitter {
   setLLM(llm: IWeb3LLM): void {
     this.llm = llm;
     logger.info('Web3Agent', 'LLM instance updated', {
-      message: 'LLM instance updated successfully'
+      message: 'LLM instance updated successfully',
     });
   }
 
@@ -3110,7 +3711,9 @@ export class Web3Agent extends EventEmitter {
 
   private async getCurrentAddress(): Promise<string> {
     try {
-      const account = await (await import('@/background/service')).preferenceService.getCurrentAccount();
+      const account = await (
+        await import('@/background/service')
+      ).preferenceService.getCurrentAccount();
       return account?.address || '';
     } catch (e) {
       return '';
@@ -3119,7 +3722,9 @@ export class Web3Agent extends EventEmitter {
 
   private async getCurrentBalances(): Promise<Record<string, string>> {
     try {
-      const { preferenceService, openapiService } = await import('@/background/service');
+      const { preferenceService, openapiService } = await import(
+        '@/background/service'
+      );
       const account = await preferenceService.getCurrentAccount();
       if (!account?.address) return {};
       // Use existing cached total balance fetch path similar to wallet controller
@@ -3148,10 +3753,16 @@ export class Web3Agent extends EventEmitter {
         chains.map(async (id) => {
           try {
             const chain = (await import('consts')).CHAINS_ENUM.ETH; // fallback default enum
-            const rpcItem = RPCService.getDefaultRPC(findChain({ id })!.serverId);
+            const rpcItem = RPCService.getDefaultRPC(
+              findChain({ id })!.serverId
+            );
             const host = rpcItem?.rpcUrl?.[0];
             if (!host) return;
-            const data = await RPCService.defaultRPCRequest(host, 'eth_gasPrice', []);
+            const data = await RPCService.defaultRPCRequest(
+              host,
+              'eth_gasPrice',
+              []
+            );
             if (typeof data === 'string') {
               results[id] = data;
             }
@@ -3224,8 +3835,8 @@ export class Web3Agent extends EventEmitter {
           currentAction,
           thinkingContent,
           isActive: true,
-          timestamp: Date.now()
-        }
+          timestamp: Date.now(),
+        },
       });
     } catch (error) {
       console.error('Error storing ReAct status message:', error);
@@ -3244,16 +3855,26 @@ export class Web3Agent extends EventEmitter {
       const uiActors = (await import('@/ui/views/Agent/types/message')).Actors;
       const toolMessage: any = {
         actor: uiActors.ASSISTANT,
-        content: `${status === 'pending' ? 'Preparing to execute' : status === 'executing' ? 'Executing' : status === 'completed' ? 'Completed' : 'Failed'} tool: ${functionCall.name}`,
+        content: `${
+          status === 'pending'
+            ? 'Preparing to execute'
+            : status === 'executing'
+            ? 'Executing'
+            : status === 'completed'
+            ? 'Completed'
+            : 'Failed'
+        } tool: ${functionCall.name}`,
         timestamp: Date.now(),
         messageType: 'function_call',
-        functionCalls: [{
-          id: functionCall.id,
-          name: functionCall.name,
-          arguments: functionCall.arguments,
-          status,
-          timestamp: Date.now()
-        }]
+        functionCalls: [
+          {
+            id: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+            status,
+            timestamp: Date.now(),
+          },
+        ],
       };
 
       if (result !== undefined) {
@@ -3276,7 +3897,7 @@ export class Web3Agent extends EventEmitter {
         actor: uiActors.ASSISTANT,
         content,
         timestamp: Date.now(),
-        messageType: 'thinking'
+        messageType: 'thinking',
       });
     } catch (error) {
       console.error('Error storing thinking message:', error);
@@ -3286,7 +3907,9 @@ export class Web3Agent extends EventEmitter {
   /**
    * Check Chrome extension permissions and handle recovery
    */
-  private async checkAndRecoverPermissions(requiredPermissions: string[]): Promise<{
+  private async checkAndRecoverPermissions(
+    requiredPermissions: string[]
+  ): Promise<{
     hasAllPermissions: boolean;
     missingPermissions: string[];
     recoveryAttempted: boolean;
@@ -3298,7 +3921,7 @@ export class Web3Agent extends EventEmitter {
       const currentPermissions = await chrome.permissions.getAll();
 
       // Check which permissions are missing
-      const missingPermissions = requiredPermissions.filter(permission => {
+      const missingPermissions = requiredPermissions.filter((permission) => {
         return !currentPermissions.permissions?.includes(permission as any);
       });
 
@@ -3307,27 +3930,28 @@ export class Web3Agent extends EventEmitter {
           hasAllPermissions: true,
           missingPermissions: [],
           recoveryAttempted: false,
-          recoverySuccessful: false
+          recoverySuccessful: false,
         };
       }
 
       logger.warn('Missing required permissions', {
         required: requiredPermissions,
         missing: missingPermissions,
-        current: currentPermissions.permissions
+        current: currentPermissions.permissions,
       });
 
       // Attempt to recover permissions
-      const recoveryResult = await this.attemptPermissionRecovery(missingPermissions);
+      const recoveryResult = await this.attemptPermissionRecovery(
+        missingPermissions
+      );
 
       return {
         hasAllPermissions: recoveryResult.success,
         missingPermissions: recoveryResult.success ? [] : missingPermissions,
         recoveryAttempted: true,
         recoverySuccessful: recoveryResult.success,
-        error: recoveryResult.error
+        error: recoveryResult.error,
       };
-
     } catch (error) {
       logger.error('Failed to check permissions', error);
       return {
@@ -3335,7 +3959,7 @@ export class Web3Agent extends EventEmitter {
         missingPermissions: requiredPermissions,
         recoveryAttempted: false,
         recoverySuccessful: false,
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
       };
     }
   }
@@ -3343,24 +3967,30 @@ export class Web3Agent extends EventEmitter {
   /**
    * Attempt to recover missing permissions
    */
-  private async attemptPermissionRecovery(missingPermissions: string[]): Promise<{
+  private async attemptPermissionRecovery(
+    missingPermissions: string[]
+  ): Promise<{
     success: boolean;
     error?: string;
   }> {
     try {
       // Store permission recovery message
       await this.storeReActStatusMessage(
-        `Attempting to recover missing permissions: ${missingPermissions.join(', ')}`,
+        `Attempting to recover missing permissions: ${missingPermissions.join(
+          ', '
+        )}`,
         'Requesting permissions...'
       );
 
       // Try to request optional permissions
       const requestResult = await chrome.permissions.request({
-        permissions: missingPermissions as any
+        permissions: missingPermissions as any,
       });
 
       if (requestResult) {
-        logger.info('Permission recovery successful', { recoveredPermissions: missingPermissions });
+        logger.info('Permission recovery successful', {
+          recoveredPermissions: missingPermissions,
+        });
         await this.storeReActStatusMessage(
           'Permission recovery successful!',
           'All required permissions granted'
@@ -3376,13 +4006,14 @@ export class Web3Agent extends EventEmitter {
         );
         return {
           success: false,
-          error: 'User denied permission request. Please grant the required permissions in extension settings.'
+          error:
+            'User denied permission request. Please grant the required permissions in extension settings.',
         };
       }
-
     } catch (error) {
       logger.error('Permission recovery failed with error', error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
 
       await this.storeReActStatusMessage(
         'Permission recovery failed',
@@ -3393,7 +4024,7 @@ export class Web3Agent extends EventEmitter {
 
       return {
         success: false,
-        error: `Failed to recover permissions: ${errorMessage}. Please check extension permissions.`
+        error: `Failed to recover permissions: ${errorMessage}. Please check extension permissions.`,
       };
     }
   }
@@ -3403,19 +4034,19 @@ export class Web3Agent extends EventEmitter {
    */
   private getPermissionDescription(permission: string): string {
     const descriptions: Record<string, string> = {
-      'activeTab': 'Access to the current tab for interaction',
-      'scripting': 'Ability to execute scripts on web pages',
-      'tabs': 'Access to browser tabs for navigation',
-      'webNavigation': 'Monitor web navigation for automation',
-      'debugger': 'Debug access for advanced automation',
-      'storage': 'Local storage for data persistence',
-      'unlimitedStorage': 'Unlimited local storage capacity',
-      'alarms': 'Schedule alarms for timed operations',
-      'notifications': 'Display notifications for important events',
-      'offscreen': 'Offscreen document processing',
-      'contextMenus': 'Context menu integration',
-      'sidePanel': 'Side panel access for enhanced UI',
-      'host_permissions': 'Access to all websites for automation'
+      activeTab: 'Access to the current tab for interaction',
+      scripting: 'Ability to execute scripts on web pages',
+      tabs: 'Access to browser tabs for navigation',
+      webNavigation: 'Monitor web navigation for automation',
+      debugger: 'Debug access for advanced automation',
+      storage: 'Local storage for data persistence',
+      unlimitedStorage: 'Unlimited local storage capacity',
+      alarms: 'Schedule alarms for timed operations',
+      notifications: 'Display notifications for important events',
+      offscreen: 'Offscreen document processing',
+      contextMenus: 'Context menu integration',
+      sidePanel: 'Side panel access for enhanced UI',
+      host_permissions: 'Access to all websites for automation',
     };
     return descriptions[permission] || `${permission} permission`;
   }
@@ -3425,7 +4056,7 @@ export class Web3Agent extends EventEmitter {
    */
   private createPermissionErrorMessage(missingPermissions: string[]): string {
     const permissionList = missingPermissions
-      .map(perm => `• ${this.getPermissionDescription(perm)}`)
+      .map((perm) => `• ${this.getPermissionDescription(perm)}`)
       .join('\n');
 
     return `The following permissions are required for this feature to work properly:\n\n${permissionList}\n\nPlease grant these permissions in the extension settings or try again.`;
@@ -3482,11 +4113,17 @@ export class Web3Agent extends EventEmitter {
       logger.info('Handling browser automation task', {
         instruction,
         taskType: taskAnalysis.taskType,
-        requiresMultiAgent: taskAnalysis.requiresBrowserAutomation && taskAnalysis.complexity === 'high',
+        requiresMultiAgent:
+          taskAnalysis.requiresBrowserAutomation &&
+          taskAnalysis.complexity === 'high',
       });
 
       // Use multi-agent system for complex tasks requiring browser automation
-      if (taskAnalysis.requiresBrowserAutomation && taskAnalysis.complexity === 'high' && this.multiAgentIntegration) {
+      if (
+        taskAnalysis.requiresBrowserAutomation &&
+        taskAnalysis.complexity === 'high' &&
+        this.multiAgentIntegration
+      ) {
         logger.info('Using multi-agent system for complex automation task');
 
         const multiAgentResult = await this.multiAgentIntegration.executeTask(
@@ -3687,13 +4324,15 @@ export class Web3Agent extends EventEmitter {
       agents: {
         planner: !!this.plannerAgent,
         navigator: !!this.navigatorAgent,
-        validator: !!this.validatorAgent
+        validator: !!this.validatorAgent,
       },
       multiAgentIntegration: !!this.multiAgentIntegration,
-      multiAgentSystem: this.multiAgentIntegration ? this.multiAgentIntegration.getSystemStatus() : null,
+      multiAgentSystem: this.multiAgentIntegration
+        ? this.multiAgentIntegration.getSystemStatus()
+        : null,
       currentExecution: this.multiStepExecutor,
       coordinationEvents: this.state.coordinationEvents?.length || 0,
-      currentPlan: this.state.currentEnhancedPlan
+      currentPlan: this.state.currentEnhancedPlan,
     };
   }
 
@@ -3705,11 +4344,17 @@ export class Web3Agent extends EventEmitter {
   async getAgentStatus(agentType: 'planner' | 'navigator' | 'validator') {
     switch (agentType) {
       case 'planner':
-        return this.plannerAgent ? { available: true, id: 'planner' } : { available: false };
+        return this.plannerAgent
+          ? { available: true, id: 'planner' }
+          : { available: false };
       case 'navigator':
-        return this.navigatorAgent ? { available: true, id: 'navigator' } : { available: false };
+        return this.navigatorAgent
+          ? { available: true, id: 'navigator' }
+          : { available: false };
       case 'validator':
-        return this.validatorAgent ? { available: true, id: 'validator' } : { available: false };
+        return this.validatorAgent
+          ? { available: true, id: 'validator' }
+          : { available: false };
       default:
         return { available: false };
     }
@@ -3743,7 +4388,7 @@ export class Web3Agent extends EventEmitter {
         browserActions: ['navigate'],
         web3Actions: [],
         timestamp: Date.now(),
-        analysis: 'Multi-agent execution requested by user'
+        analysis: 'Multi-agent execution requested by user',
       };
 
       const result = await this.multiAgentIntegration.executeTask(
@@ -3805,7 +4450,9 @@ export class Web3Agent extends EventEmitter {
       logger.error('Multi-agent execution failed:', error);
       return {
         success: false,
-        message: `Multi-agent execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        message: `Multi-agent execution failed: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
         sessionId: this.state.sessionId,
         timestamp: Date.now(),
         actions: [],
@@ -3832,13 +4479,13 @@ export class Web3Agent extends EventEmitter {
         conversationLength: this.state.conversationHistory.length,
         executionHistory: this.state.executionHistory.length,
         lastActivity: this.state.lastActivity,
-        multiAgentEnabled: this.coordinationEnabled
+        multiAgentEnabled: this.coordinationEnabled,
       },
       taskAnalyzer: await this.intelligentTaskAnalyzer.getCacheStats(),
       browserAutomation: await this.browserAutomationController.getExecutionHistory(),
       promptManager: await this.promptManager.getPromptStats(),
       actionRegistry: this.actionRegistry.getStats(),
-      multiAgent: await this.getMultiAgentStatus()
+      multiAgent: await this.getMultiAgentStatus(),
     };
   }
 

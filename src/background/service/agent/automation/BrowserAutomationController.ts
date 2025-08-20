@@ -601,6 +601,7 @@ export class BrowserAutomationController {
     url: string;
     waitFor?: string;
     timeout?: number;
+    tabId?: number;
   }): Promise<BrowserActionResult> {
     const startTime = Date.now();
     logger.info('Starting navigation', {
@@ -636,9 +637,23 @@ export class BrowserAutomationController {
 
         let tab: chrome.tabs.Tab;
 
-        // Get or create a tab for navigation using robust tab management
+        // Get or create a tab for navigation using robust tab management (prefer provided tabId)
         try {
-          tab = await this.getOrCreateActiveTab();
+          const explicitTabId = (params as any).tabId;
+          if (typeof explicitTabId === 'number' && explicitTabId >= 0) {
+            try {
+              const t = await chrome.tabs.get(explicitTabId);
+              if (t && t.id) {
+                tab = t;
+              } else {
+                tab = await this.getOrCreateActiveTab();
+              }
+            } catch (e) {
+              tab = await this.getOrCreateActiveTab();
+            }
+          } else {
+            tab = await this.getOrCreateActiveTab();
+          }
           logger.info('Got tab for navigation', {
             tabId: tab.id,
             tabUrl: tab.url,
@@ -686,11 +701,12 @@ export class BrowserAutomationController {
         // Update active tabs tracking
         this.activeTabs.set('main', tab);
 
-        // Wait for page load if needed
-        if (params.waitFor === 'load') {
+        // Wait for page load if needed (default to 'load' if unspecified)
+        const waitForMode = params.waitFor ?? 'load';
+        if (waitForMode === 'load') {
           logger.info('Waiting for page load completion', { tabId: tab.id });
           await this.waitForTabLoad(tab.id!);
-        } else if (params.waitFor === 'networkidle') {
+        } else if (waitForMode === 'networkidle') {
           logger.info('Waiting for network idle (simplified implementation)', { tabId: tab.id });
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
@@ -701,6 +717,21 @@ export class BrowserAutomationController {
           logger.info('CDP ensured after navigateToUrl', { tabId: tab.id, attached: attachedBefore });
         } catch (e) {
           logger.warn('CDP attach after navigateToUrl failed', { tabId: tab.id, error: (e as Error)?.message });
+        }
+
+        // Re-fetch the tab info after waiting; if URL still mismatches, try a direct create fallback
+        try {
+          const refreshed = await chrome.tabs.get(tab.id!);
+          const normalize = (u?: string) => (u || '').trim().replace(/\/$/, '').toLowerCase();
+          if (normalize(refreshed.url) !== normalize(params.url)) {
+            logger.warn('Post-wait URL mismatch; attempting create-tab fallback', { tabId: tab.id, currentUrl: refreshed.url, targetUrl: params.url });
+            const created = await chrome.tabs.create({ url: params.url, active: true });
+            tab = created;
+          } else {
+            tab = refreshed;
+          }
+        } catch (e) {
+          logger.warn('Failed to refresh tab after navigation; proceeding with existing tab info', { tabId: tab.id, error: (e as Error)?.message });
         }
 
         const timing = Date.now() - startTime;

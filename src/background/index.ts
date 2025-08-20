@@ -180,21 +180,6 @@ async function restoreAppState() {
           // Execute tool
           const result = await toolRegistry.executeTool(name, params || {});
 
-          // Append tool result as a 'user' message into current session (if any)
-          try {
-            const current = await chatHistoryStore.getCurrentSession();
-            if (current && current.id) {
-              const safeContent = JSON.stringify({ tool: name, params: (params || {}), result });
-              await chatHistoryStore.addMessage(current.id, {
-                actor: Actors.USER,
-                content: safeContent,
-                timestamp: Date.now(),
-              });
-            }
-          } catch (e) {
-            // Non-fatal: logging only
-            console.warn('Failed to append tool result to chat history', e);
-          }
 
           sendResponse({ success: true, result });
         } catch (e) {

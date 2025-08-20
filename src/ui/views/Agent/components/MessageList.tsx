@@ -1,5 +1,5 @@
 import type { Message } from '../types/message';
-import { ACTOR_PROFILES, Actors, getActorProfile } from '../types/message';
+import { getActorProfile } from '../types/message';
 import { memo } from 'react';
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -162,6 +162,19 @@ function MessageBlock({
   const isToolResult = message.messageType === 'tool_result';
   const isAssistantContent = message.messageType === 'assistant_content';
 
+
+  // Collapsible state for tool results (default collapsed)
+  const [toolCollapsed, setToolCollapsed] = React.useState(true);
+
+  const toolSummary = React.useMemo(() => {
+    const list = message.toolResults || [];
+    const total = list.length;
+    const success = list.filter(r => r.success).length;
+    const failed = total - success;
+    const names = Array.from(new Set(list.map(r => r.toolName).filter(Boolean)));
+    return { total, success, failed, names };
+  }, [message.toolResults]);
+
   // Map OpenAI tool_calls to UI FunctionCall format when needed
   const mapOpenAIToolCalls = (toolCalls?: any[]) => {
     if (!Array.isArray(toolCalls)) return [] as any[];
@@ -222,16 +235,16 @@ function MessageBlock({
   }, [message, messageIndex, totalMessages, content]);
 
   return (
-    <div className={`flex gap-3 max-w-full ${!isSameActor ? 'pt-4 mt-4 border-t border-gray-100 dark:border-gray-800' : ''} ${isThinking ? 'p-2 bg-purple-50 rounded-lg opacity-80 dark:bg-purple-900/10' : ''} ${isReActStatus ? 'p-2 bg-green-50 rounded-lg opacity-90 dark:bg-green-900/10 border-l-3 border-l-green-300' : ''} ${isStreamingError ? 'p-2 bg-red-50 rounded-lg dark:bg-red-900/10' : ''} ${isFunctionCall ? 'p-2 bg-blue-50 rounded-lg opacity-90 dark:bg-blue-900/10 border-l-3 border-l-blue-300' : ''} ${isToolResult ? 'p-2 bg-green-50 rounded-lg opacity-90 dark:bg-green-900/10 border-l-3 border-l-green-400' : ''} ${isAssistantContent ? 'p-2 bg-gray-50 rounded-lg dark:bg-gray-900/10' : ''}`}>
+    <div className={`flex gap-3 w-full items-start ${!isSameActor ? 'pt-4 mt-4 border-t border-gray-100 dark:border-gray-800' : ''} ${isThinking ? 'p-2 bg-purple-50 rounded-lg opacity-80 dark:bg-purple-900/10' : ''} ${isReActStatus ? 'p-2 bg-green-50 rounded-lg border-l-4 border-green-300 opacity-90 dark:bg-green-900/10' : ''} ${isStreamingError ? 'p-2 bg-red-50 rounded-lg dark:bg-red-900/10' : ''} ${isFunctionCall ? 'p-2 bg-blue-50 rounded-lg border-l-4 border-blue-300 opacity-90 dark:bg-blue-900/10' : ''} ${isToolResult ? 'p-2 bg-green-50 rounded-lg border-l-4 border-green-400 opacity-90 dark:bg-green-900/10' : ''} ${isAssistantContent ? 'p-2 bg-gray-50 rounded-lg dark:bg-gray-900/10' : ''}`}>
       {!isSameActor && (
         <div
-          className="flex flex-shrink-0 justify-center items-center w-24 h-24 rounded-full shadow-md"
+          className="flex flex-shrink-0 justify-center items-center w-8 h-8 rounded-full shadow-md"
           style={{ backgroundColor: actor.iconBackground }}
         >
           <img
             src={actor.icon}
             alt={actor.name}
-            className="w-16 h-16"
+            className="w-6 h-6"
             onError={(e) => {
               logger.warn('MessageList', 'Failed to load actor icon', {
                 actor: actor.name,
@@ -242,11 +255,11 @@ function MessageBlock({
           />
         </div>
       )}
-      {isSameActor && <div className="flex-shrink-0 w-10" />}
+      {isSameActor && <div className="flex-shrink-0 w-8" />}
 
       <div className="flex-1 min-w-0">
-        <div>
-          <div className={`text-sm ${isThinking ? 'italic text-gray-600 dark:text-gray-300' : ''} ${isReActStatus ? 'text-gray-700 dark:text-gray-300' : ''} ${isStreamingError ? 'text-red-700 dark:text-red-300' : ''} ${isFunctionCall ? 'text-blue-700 dark:text-blue-300' : ''} ${isToolResult ? 'text-green-700 dark:text-green-300' : ''} ${isAssistantContent ? 'text-gray-800 dark:text-gray-200' : ''}`}>
+        <div className="w-full">
+          <div className={`text-sm break-words whitespace-pre-wrap ${isThinking ? 'italic text-gray-600 dark:text-gray-300' : ''} ${isReActStatus ? 'text-gray-700 dark:text-gray-300' : ''} ${isStreamingError ? 'text-red-700 dark:text-red-300' : ''} ${isFunctionCall ? 'text-blue-700 dark:text-blue-300' : ''} ${isToolResult ? 'text-green-700 dark:text-green-300' : ''} ${isAssistantContent ? 'text-gray-800 dark:text-gray-200' : ''}`}>
             {isProgress ? (
               <div className="overflow-hidden h-1 bg-gray-200 rounded-full dark:bg-gray-700">
                 <div className="h-full bg-blue-500 animate-pulse" style={{ animation: 'progress-animation 2s linear infinite' }} />
@@ -285,31 +298,58 @@ function MessageBlock({
                     <div className="text-sm text-gray-600 dark:text-gray-300">{content}</div>
                   </div>
                 </div>
-                {message.toolResults && message.toolResults.map((result, index) => (
-                  <div key={index} className="p-2 ml-8 bg-white rounded border border-green-200 dark:bg-gray-800 dark:border-green-700">
-                    <div className="flex gap-2 items-center mb-1">
-                      <span className="font-mono text-sm font-medium text-green-600 dark:text-green-400">{result.toolName}</span>
-                      <span className={`px-2 py-1 text-xs rounded-full ${
-                        result.success ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
-                        'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
-                      }`}>
-                        {result.success ? 'Success' : 'Failed'}
+                {/* Collapsible tool results */}
+                {message.toolResults && message.toolResults.length > 0 && (
+                  <div className="ml-8">
+                    <button
+                      type="button"
+                      className="flex items-center gap-2 px-2 py-1 text-xs rounded bg-green-50 border border-green-200 hover:bg-green-100 dark:bg-green-900/20 dark:border-green-800"
+                      onClick={() => setToolCollapsed(prev => !prev)}
+                    >
+                      <span className="font-medium text-green-700 dark:text-green-300">
+                        {toolCollapsed ? 'Show' : 'Hide'} {toolSummary.total} result{toolSummary.total !== 1 ? 's' : ''}
                       </span>
-                    </div>
-                    <div className="text-xs text-gray-600 dark:text-gray-400">
-                      <div className="mb-1 font-medium">Result:</div>
-                      <pre className="overflow-x-auto text-xs">
-                        {typeof result.result === 'object' ? JSON.stringify(result.result, null, 2) : String(result.result)}
-                      </pre>
-                    </div>
+                      <span className="text-[10px] text-gray-500 dark:text-gray-400">
+                        {toolSummary.success} ok / {toolSummary.failed} fail{toolSummary.failed !== 1 ? 's' : ''}
+                      </span>
+                      {toolSummary.names.length > 0 && (
+                        <span className="text-[10px] text-gray-400 dark:text-gray-500 truncate max-w-[160px]">
+                          ({toolSummary.names.join(', ')})
+                        </span>
+                      )}
+                    </button>
+
+                    {!toolCollapsed && (
+                      <div className="mt-2 space-y-2">
+                        {message.toolResults.map((result, index) => (
+                          <div key={index} className="p-2 bg-white rounded border border-green-200 dark:bg-gray-800 dark:border-green-700">
+                            <div className="flex gap-2 items-center mb-1">
+                              <span className="font-mono text-sm font-medium text-green-600 dark:text-green-400">{result.toolName}</span>
+                              <span className={`px-2 py-1 text-xs rounded-full ${
+                                result.success ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+                                'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                              }`}>
+                                {result.success ? 'Success' : 'Failed'}
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-600 dark:text-gray-400">
+                              <div className="mb-1 font-medium">Result:</div>
+                              <pre className="overflow-x-auto text-xs">
+                                {typeof result.result === 'object' ? JSON.stringify(result.result, null, 2) : String(result.result)}
+                              </pre>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                ))}
+                )}
               </div>
             ) : isAssistantContent ? (
               <div className="flex gap-2 items-start">
                 <div className="text-lg">🤖</div>
                 <div className="flex-1">
-                  <div className="max-w-none prose prose-sm dark:prose-invert">
+                  <div className="max-w-none break-words prose prose-sm dark:prose-invert">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {content}
                     </ReactMarkdown>
@@ -373,13 +413,14 @@ function MessageBlock({
                 ))}
               </div>
             ) : (
-              <div className="max-w-none prose prose-sm dark:prose-invert">
+              <div className="max-w-none break-words prose prose-sm dark:prose-invert">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {content}
                 </ReactMarkdown>
               </div>
             )}
           </div>
+          {/* 只在顶层消息显示时间，内部卡片（函数调用/工具结果）不重复显示 */}
           {!isProgress && (
             <div className="mt-1 text-xs text-right text-gray-400 dark:text-gray-500">
               {formatTimestamp(message.timestamp)}

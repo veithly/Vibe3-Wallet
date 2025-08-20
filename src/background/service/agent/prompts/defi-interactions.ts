@@ -100,11 +100,9 @@ Start by activating element selection to identify connection options.`,
       },
     ],
     tools: [
-      'activateElementSelector',
-      'findElementsByText',
+      'getClickableElements',
       'analyzeElement',
       'highlightElement',
-      'getInteractiveElements',
     ],
     contexts: ['defi', 'wallet_connection', 'element_selection'],
   },
@@ -214,11 +212,9 @@ Start by identifying the swap interface elements.`,
       },
     ],
     tools: [
-      'activateElementSelector',
-      'findElementsByText',
+      'getClickableElements',
       'analyzeElement',
       'highlightElement',
-      'getInteractiveElements',
     ],
     contexts: ['defi', 'token_swap', 'dex', 'element_selection'],
   },
@@ -326,11 +322,9 @@ Start by identifying approval interface elements.`,
       },
     ],
     tools: [
-      'activateElementSelector',
-      'findElementsByText',
+      'getClickableElements',
       'analyzeElement',
       'highlightElement',
-      'getInteractiveElements',
     ],
     contexts: ['defi', 'token_approval', 'element_selection'],
   },
@@ -430,11 +424,9 @@ Start by identifying liquidity interface elements.`,
       },
     ],
     tools: [
-      'activateElementSelector',
-      'findElementsByText',
+      'getClickableElements',
       'analyzeElement',
       'highlightElement',
-      'getInteractiveElements',
     ],
     contexts: ['defi', 'liquidity', 'yield_farming', 'element_selection'],
   },
@@ -542,11 +534,9 @@ Start by identifying staking interface elements.`,
       },
     ],
     tools: [
-      'activateElementSelector',
-      'findElementsByText',
+      'getClickableElements',
       'analyzeElement',
       'highlightElement',
-      'getInteractiveElements',
     ],
     contexts: ['defi', 'staking', 'yield_farming', 'element_selection'],
   },
@@ -567,7 +557,7 @@ export const defiElementPatterns = {
     ],
     icons: ['metamask', 'walletconnect', 'coinbase', 'wallet'],
   },
-  
+
   tokenSwap: {
     fromInputs: [
       'input[placeholder*="from"]',
@@ -593,7 +583,7 @@ export const defiElementPatterns = {
       '[data-testid*="token"]',
     ],
   },
-  
+
   approvals: {
     approveButtons: [
       'button:contains("Approve")',
@@ -608,7 +598,7 @@ export const defiElementPatterns = {
       '[class*="amount"] input',
     ],
   },
-  
+
   liquidity: {
     addLiquidity: [
       'button:contains("Add Liquidity")',
@@ -627,7 +617,7 @@ export const defiElementPatterns = {
       '[data-testid*="pool"]',
     ],
   },
-  
+
   staking: {
     stakeButtons: [
       'button:contains("Stake")',
@@ -655,7 +645,7 @@ export const defiElementPatterns = {
  * Get DeFi-specific template by context
  */
 export function getDeFiTemplate(context: string): any | undefined {
-  return defiElementSelectionTemplates.find(template => 
+  return defiElementSelectionTemplates.find(template =>
     template.contexts.includes(context)
   );
 }
