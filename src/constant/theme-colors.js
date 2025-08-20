@@ -1,12 +1,12 @@
 const themeColors = {
   light: {
     /* -------------------- base define -------------------- */
-    'blue-default': 'rgba(76, 101, 255, 1)',
-    'blue-light1': 'rgba(237, 240, 255, 1)',
-    'blue-light-1': 'rgba(237, 240, 255, 1)',
-    'blue-light2': 'rgba(219, 224, 255, 1)',
-    'blue-light-2': 'rgba(219, 224, 255, 1)',
-    'blue-disable': 'rgba(165, 178, 255, 1)',
+    'blue-default': 'rgba(70, 133, 133, 1)',  // #468585
+    'blue-light1': 'rgba(222, 249, 196, 1)',   // #DEF9C4
+    'blue-light-1': 'rgba(222, 249, 196, 1)',  // #DEF9C4
+    'blue-light2': 'rgba(156, 219, 166, 1)',   // #9CDBA6
+    'blue-light-2': 'rgba(156, 219, 166, 1)',  // #9CDBA6
+    'blue-disable': 'rgba(145, 221, 207, 1)',  // #91DDCF
     'green-default': 'rgba(42, 187, 127, 1)',
     'green-light': 'rgba(216, 242, 231, 1)',
     'orange-default': 'rgba(255, 176, 32, 1)',
@@ -53,12 +53,12 @@ const themeColors = {
   },
   dark: {
     /* -------------------- base define -------------------- */
-    'blue-default': 'rgba(76, 101, 255, 1)',
-    'blue-light1': 'rgba(33, 38, 64, 1)',
-    'blue-light-1': 'rgba(33, 38, 64, 1)',
-    'blue-light2': 'rgba(38, 45, 85, 1)',
-    'blue-light-2': 'rgba(38, 45, 85, 1)',
-    'blue-disable': 'rgba(47, 59, 128, 1)',
+    'blue-default': 'rgba(80, 180, 152, 1)',   // #50B498 - 主绿色用于暗色模式
+    'blue-light1': 'rgba(33, 64, 57, 1)',      // 深绿色调整为暗色
+    'blue-light-1': 'rgba(33, 64, 57, 1)',     // 深绿色调整为暗色
+    'blue-light2': 'rgba(38, 85, 70, 1)',      // 中绿色调整为暗色
+    'blue-light-2': 'rgba(38, 85, 70, 1)',     // 中绿色调整为暗色
+    'blue-disable': 'rgba(47, 128, 108, 1)',   // 禁用状态绿色
     'green-default': 'rgba(42, 187, 127, 1)',
     'green-light': 'rgba(57, 90, 90, 1)',
     'orange-default': 'rgba(255, 198, 74, 1)',

@@ -65,11 +65,11 @@ module.exports = {
       current: 'currentColor',
       blue: {
         ...colors.blue,
-        from: '#8A78FD',
-        to: '#796BFD',
+        from: '#50B498',  // 改为绿色渐变起点
+        to: '#468585',    // 改为绿色渐变终点
         light: rabbyColors.light['blue-default'],
-        DEFAULT: '#796BFD',
-        purple: '#5F75FF',
+        DEFAULT: '#468585',  // 主绿色
+        purple: '#91DDCF',   // 浅绿色
       },
       black: '#707280',
       green: {

@@ -39,7 +39,7 @@ export const GasAccountBlueBorderedButton = styled(Button)`
   font-weight: 500;
   background-color: transparent;
   color: var(--r-blue-default, #468585);
-  border: 1px solid var(--r-blue-default, #7084ff);
+  border: 1px solid var(--r-blue-default, #468585);
 
   &:focus {
     background-color: transparent;
