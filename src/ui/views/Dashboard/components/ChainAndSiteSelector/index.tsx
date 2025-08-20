@@ -291,18 +291,21 @@ export default function ChainAndSiteSelector({
             active: true,
             currentWindow: true,
           });
+          
           if (tab?.windowId) {
-            await chrome.sidePanel.open({ windowId: tab.windowId });
             await chrome.sidePanel.setOptions({
               tabId: tab.id,
-              path: 'agent-sidebar.html',
+              path: 'agent.html',
               enabled: true,
             });
+            
+            await chrome.sidePanel.open({ windowId: tab.windowId });
+          } else {
+            throw new Error('No active tab found');
           }
         } catch (error) {
           console.error('Failed to open agent sidebar:', error);
-          // Fallback to opening in new tab if sidePanel fails
-          openInternalPageInTab('sync');
+          openInternalPageInTab('agent');
         }
       },
     } as IPanelItem,
