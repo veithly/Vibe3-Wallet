@@ -765,7 +765,13 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return parts.join(' > ');
         })(),
         tag: (el as HTMLElement).tagName.toLowerCase(),
-        text: ((el.textContent || '').trim().slice(0, 120))
+        text: ((el.textContent || '').trim().slice(0, 120)),
+        ariaLabel: (el.getAttribute('aria-label') || ''),
+        title: ((el as HTMLElement).title || ''),
+        role: (el.getAttribute('role') || ''),
+        hasSvg: !!el.querySelector('svg'),
+        hasImgAlt: !!el.querySelector('img[alt]'),
+        imgAlt: (el.querySelector('img[alt]')?.getAttribute('alt') || ''),
       }));
 
       return Promise.resolve({ success: true, data: { elements } });
@@ -782,6 +788,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const sel = message.params?.selector;
       const el = sel ? document.querySelector(sel) as HTMLElement | null : null;
       if (!el) return Promise.resolve({ success: false, error: 'Element not found' });
+      (el as any).focus?.();
       el.click();
       return Promise.resolve({ success: true });
     } catch (e) {
@@ -808,6 +815,58 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!el) return Promise.resolve({ success: false, error: 'Element not found' });
       el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
       return Promise.resolve({ success: true });
+    } catch (e) {
+      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  } else if (message.type === 'ELEMENT_SELECTOR_ACTIVATE') {
+    try {
+      const mode = message.options?.mode || 'highlight';
+      const overlayId = 'vibe3-debug-overlay';
+      let overlay = document.getElementById(overlayId) as HTMLElement | null;
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = overlayId;
+        Object.assign((overlay as HTMLElement).style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '2147483647' });
+        document.documentElement.appendChild(overlay as unknown as Node);
+      }
+      return Promise.resolve({ success: true, data: { mode } });
+    } catch (e) {
+      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  } else if (message.type === 'ELEMENT_SELECTOR_CLEAR') {
+    try {
+      const overlayId = 'vibe3-debug-overlay';
+      const overlay = document.getElementById(overlayId) as HTMLElement | null;
+      if (overlay) overlay.innerHTML = '';
+      return Promise.resolve({ success: true });
+    } catch (e) {
+      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  } else if (message.type === 'ELEMENT_SELECTOR_GET_HIGHLIGHTS') {
+    try {
+      const overlayId = 'vibe3-debug-overlay';
+      const overlay = document.getElementById(overlayId) as HTMLElement | null;
+      // We do not persist the list in DOM; return last scan candidates if we have them.
+      // For now, return an empty set with success, panel uses its own state.
+      return Promise.resolve({ success: true, data: { elements: [] } });
+    } catch (e) {
+      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  } else if (message.type === 'ELEMENT_ANALYZE') {
+    try {
+      const sel = message.params?.selector;
+      const el = sel ? document.querySelector(sel) as HTMLElement | null : null;
+      if (!el) return Promise.resolve({ success: false, error: 'Element not found' });
+      const rect = el.getBoundingClientRect();
+      const info = {
+        tag: el.tagName.toLowerCase(),
+        text: (el.textContent || '').trim().slice(0, 200),
+        aria: el.getAttribute('aria-label') || '',
+        title: el.title || '',
+        role: el.getAttribute('role') || '',
+        bounds: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
+      };
+      return Promise.resolve({ success: true, data: info });
     } catch (e) {
       return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
     }
@@ -1006,6 +1065,6 @@ const onMessageSetUpExtensionStreams = (msg) => {
 };
 browser.runtime.onMessage.addListener(onMessageSetUpExtensionStreams);
 
-if (!isManifestV3) {
-  injectProviderScript(false);
-}
+// if (!isManifestV3) {
+//   injectProviderScript(false);
+// }

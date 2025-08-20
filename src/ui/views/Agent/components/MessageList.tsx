@@ -347,7 +347,17 @@ function MessageBlock({
                       <div className="text-xs text-gray-600 dark:text-gray-400">
                         <div className="mb-1 font-medium">Arguments:</div>
                         <pre className="overflow-x-auto text-xs">
-                          {JSON.stringify(call.arguments, null, 2)}
+                          {(() => {
+                            try {
+                              const args: any = call.arguments;
+                              if (args && args.__display_truncated__ && typeof args.__display_preview__ === 'string') {
+                                return args.__display_preview__;
+                              }
+                              return typeof args === 'object' ? JSON.stringify(args, null, 2) : String(args);
+                            } catch {
+                              try { return String(call.arguments); } catch { return '[Unrenderable arguments]'; }
+                            }
+                          })()}
                         </pre>
                       </div>
                     )}

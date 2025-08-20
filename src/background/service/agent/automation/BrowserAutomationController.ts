@@ -2,6 +2,8 @@ import { ActionStep, Web3Context } from '../types';
 import { TaskAnalysis } from '../task-analysis/IntelligentTaskAnalyzer';
 import { StreamingLLMResponse } from '../llm/types';
 import { createLogger } from '@/utils/logger';
+import { cdpController, type CDPResult } from './CDPController';
+import { cdpBrowserContext } from './CDPBrowserContext';
 
 const logger = createLogger('BrowserAutomationController');
 
@@ -170,37 +172,43 @@ export class BrowserAutomationController {
   }
 
   /**
-   * Get or create an active tab with robust error handling
+   * Get or create an active web tab (robust across side-panel/currentWindow contexts)
    */
   private async getOrCreateActiveTab(): Promise<chrome.tabs.Tab> {
-    // Check for active tabs
-    const activeTabs = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
+    // 1) Prefer the active tab in any NORMAL browser window
+    try {
+      const wins = await chrome.windows.getAll({ populate: true, windowTypes: ['normal'] as any });
+      for (const w of wins) {
+        const t = w.tabs?.find((tb) => tb.active);
+        if (t && t.id) {
+          return t;
+        }
+      }
+    } catch (e) {
+      // ignore and fall through
+    }
 
-    let targetTab = activeTabs[0];
-
-    // If no active tab, try to get any tab from current window
-    if (!targetTab) {
-      const allTabs = await chrome.tabs.query({ currentWindow: true });
-      if (allTabs.length > 0) {
-        // Activate the first available tab
-        await chrome.tabs.update(allTabs[0].id!, { active: true });
-        targetTab = allTabs[0];
+    // 2) Fallback: find the most recently accessed http(s)/file tab across all windows
+    const allTabs = await chrome.tabs.query({});
+    const isValid = (u?: string) => {
+      const url = (u || '').trim().toLowerCase();
+      if (!url) return false;
+      if (url.startsWith('chrome://') || url.startsWith('edge://') || url.startsWith('about:')) return false;
+      if (url.startsWith('chrome-extension://') || url.startsWith('moz-extension://')) return false;
+      return url.startsWith('http') || url.startsWith('file://');
+    };
+    const candidates = allTabs.filter((t) => isValid(t.url));
+    if (candidates.length > 0) {
+      const sorted = candidates.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
+      const chosen = sorted[0];
+      if (chosen && chosen.id) {
+        try { await chrome.tabs.update(chosen.id, { active: true }); } catch {}
+        return await chrome.tabs.get(chosen.id);
       }
     }
 
-    // If still no tab, do not create about:blank. Surface a clear error to caller.
-    if (!targetTab) {
-      throw new Error('No active tab found. Please open a webpage (http/https/file) and try again.');
-    }
-
-    if (!targetTab || !targetTab.id) {
-      throw new Error('No active tab found and could not create new tab');
-    }
-
-    return targetTab;
+    // 3) As a last resort, surface a clear error (we intentionally avoid opening about:blank)
+    throw new Error('No active web tab found. Please open a webpage (http/https/file) and try again.');
   }
 
   /**
@@ -684,42 +692,23 @@ export class BrowserAutomationController {
           await this.waitForTabLoad(tab.id!);
         } else if (params.waitFor === 'networkidle') {
           logger.info('Waiting for network idle (simplified implementation)', { tabId: tab.id });
-          // Simplified network idle wait
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
 
+        // Ensure CDP attached before returning (both when URL unchanged or after navigation)
+        try {
+          const attachedBefore = await cdpBrowserContext.attachTab(tab.id!);
+          logger.info('CDP ensured after navigateToUrl', { tabId: tab.id, attached: attachedBefore });
+        } catch (e) {
+          logger.warn('CDP attach after navigateToUrl failed', { tabId: tab.id, error: (e as Error)?.message });
+        }
+
         const timing = Date.now() - startTime;
-        logger.info('Navigation completed successfully', {
-          tabId: tab.id,
-          requestedUrl: params.url,
-          finalTabUrl: tab.url,
-          timing,
-          urlsMatch: tab.url === params.url,
-          isRequestedUrlOf: params.url === 'of',
-          isFinalUrlOf: tab.url === 'of',
-          method: 'chrome.tabs.update/create',
-        });
-
-        const resultData = {
-          tabId: tab.id,
-          url: params.url,
-          finalUrl: tab.url,
-          title: tab.title,
-          method: 'chrome.tabs.update/create'
-        };
-
-        logger.info('RETURNING NAVIGATION RESULT - FINAL URL CHECK', {
-          resultData,
-          urlInResult: resultData.url,
-          finalUrlInResult: resultData.finalUrl,
-          isUrlOf: resultData.url === 'of',
-          isFinalUrlOf: resultData.finalUrl === 'of',
-          fullResult: JSON.stringify(resultData),
-        });
-
+        const alreadyOnPage = (tab.url || '').trim().replace(/\/$/, '').toLowerCase() === (params.url || '').trim().replace(/\/$/, '').toLowerCase();
+        const method = alreadyOnPage ? 'already_on_page' : 'navigate';
         return {
           success: true,
-          data: resultData,
+          data: { tabId: tab.id, url: params.url, finalUrl: tab.url, title: tab.title, method, cdpAttached: true },
           timing,
         };
       } else {
@@ -758,10 +747,53 @@ export class BrowserAutomationController {
     timeout?: number;
   }): Promise<BrowserActionResult> {
     try {
-      if (chrome.scripting && chrome.scripting.executeScript) {
-        // Real browser interaction
-        const tab = await this.getOrCreateActiveTab();
+      const tab = await this.getOrCreateActiveTab();
 
+      // Use CDP as primary method (nanobrowser approach)
+      const cdpResult = await cdpController.clickElement(tab.id!, {
+        selector: params.selector,
+        xpath: params.selector?.startsWith('/') ? params.selector : undefined,
+        timeout: params.timeout || 5000,
+        scrollIntoView: true
+      });
+
+      if (cdpResult.success) {
+        logger.info('CDP click successful', { tabId: tab.id, params, timing: cdpResult.timing });
+
+        // Hybrid assurance: follow up with in-page programmatic click to maximize compatibility
+        try {
+          const follow = await chrome.scripting.executeScript({
+            target: { tabId: tab.id! },
+            func: (p: any) => {
+              const bySelector = (s: string): Element | null => { try { return document.querySelector(s); } catch { return null; } };
+              const byXPath = (xp: string): Element | null => { try { const r = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null); return (r.singleNodeValue as Element) || null; } catch { return null; } };
+              let el: Element | null = null;
+              if (p?.selector) {
+                const s = String(p.selector);
+                el = s.startsWith('/') ? byXPath(s) : bySelector(s);
+              }
+              if (!el) return { ensured: false };
+              try { (el as any).click?.(); } catch {}
+              return { ensured: true, tag: (el as HTMLElement).tagName };
+            },
+            args: [params]
+          });
+          logger.info('Hybrid ensure click executed', { ensured: follow?.[0]?.result?.ensured });
+        } catch (e) {
+          logger.warn('Hybrid ensure click failed', { error: (e as Error)?.message });
+        }
+
+        return {
+          success: true,
+          data: cdpResult.data,
+          timing: cdpResult.timing || 0,
+        };
+      }
+
+      // Fallback to script injection if CDP fails
+      logger.warn('CDP click failed, falling back to script injection', { error: cdpResult.error });
+
+      if (chrome.scripting && chrome.scripting.executeScript) {
         const results = await chrome.scripting.executeScript({
           target: { tabId: tab.id! },
           func: this.clickElementInPage,
@@ -796,38 +828,99 @@ export class BrowserAutomationController {
     }
   }
 
-  private async fillForm(params: {
-    fields: Array<any>;
-    submit?: boolean;
+  private async hoverElement(params: {
+    selector?: string;
+    duration?: number;
   }): Promise<BrowserActionResult> {
     try {
-      if (chrome.scripting && chrome.scripting.executeScript) {
-        const tab = await this.getOrCreateActiveTab();
+      const tab = await this.getOrCreateActiveTab();
 
-        const results = await chrome.scripting.executeScript({
+      // Use CDP as primary method
+      const cdpResult = await cdpController.hoverElement(tab.id!, {
+        selector: params.selector,
+        xpath: params.selector?.startsWith('/') ? params.selector : undefined,
+        duration: params.duration || 1000,
+        scrollIntoView: true
+      });
+
+      if (cdpResult.success) {
+        logger.info('CDP hover successful', { tabId: tab.id, params, timing: cdpResult.timing });
+        return {
+          success: true,
+          data: cdpResult.data,
+          timing: cdpResult.timing || 0,
+        };
+      }
+
+      // Fallback to script injection
+      logger.warn('CDP hover failed, falling back to script injection', { error: cdpResult.error });
+
+      if (chrome.scripting && chrome.scripting.executeScript) {
+        await chrome.scripting.executeScript({
           target: { tabId: tab.id! },
-          func: this.fillFormInPage,
+          func: this.hoverElementInPage,
           args: [params],
         });
 
         return {
           success: true,
-          data: results[0]?.result,
-          timing: 0,
+          data: { hovered: true },
+          timing: 200,
         };
       } else {
-        // Simulation mode
-        logger.info('Simulating form fill', params);
         return {
           success: true,
-          data: {
-            simulated: true,
-            action: 'fill_form',
-            fields: params.fields.length,
-          },
-          timing: 1500,
+          data: { simulated: true, action: 'hover' },
+          timing: 200,
         };
       }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Hover failed',
+        timing: 0,
+      };
+    }
+  }
+
+  private async fillForm(params: {
+    fields: Array<any>;
+    submit?: boolean;
+  }): Promise<BrowserActionResult> {
+    try {
+      const tab = await this.getOrCreateActiveTab();
+
+      // For form filling, we'll use CDP for typing but keep script injection for form logic
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id! },
+        func: this.fillFormInPage,
+        args: [params],
+      });
+
+      // For text fields, also try CDP typing for better reliability
+      if (params.fields) {
+        for (const field of params.fields) {
+          if (field.value && typeof field.value === 'string' && field.selector) {
+            try {
+              await cdpController.typeText(tab.id!, {
+                selector: field.selector,
+                xpath: field.selector?.startsWith('/') ? field.selector : undefined,
+                text: field.value,
+                clear: true,
+                delay: 10
+              });
+            } catch (cdpError) {
+              logger.warn('CDP typing failed for field, using script injection result', { field, error: cdpError });
+            }
+          }
+        }
+      }
+
+      return {
+        success: true,
+        data: results[0]?.result,
+        timing: 0,
+      };
     } catch (error) {
       logger.error('Form fill failed', error);
       return {
@@ -897,29 +990,35 @@ export class BrowserAutomationController {
       if (chrome.scripting && chrome.scripting.executeScript) {
         const tab = await this.getOrCreateActiveTab();
 
+        const direction = (params?.direction || 'down').toLowerCase();
+        const amount = Number(params?.amount || 600);
+        const selector = params?.selector as string | undefined;
+
         await chrome.scripting.executeScript({
           target: { tabId: tab.id! },
-          func: () => window.scrollTo(0, document.body.scrollHeight),
+          func: (dir: string, amt: number, sel?: string) => {
+            let target: Element | Window = window;
+            if (sel) {
+              try {
+                const el = sel.startsWith('/')
+                  ? (document.evaluate(sel, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as Element | null)
+                  : document.querySelector(sel);
+                if (el) target = el;
+              } catch {}
+            }
+            const delta = dir === 'up' ? -Math.abs(amt) : Math.abs(amt);
+            if (target === window) window.scrollBy(0, delta);
+            else (target as Element).scrollTop += delta;
+          },
+          args: [direction, amount, selector],
         });
 
-        return {
-          success: true,
-          data: { scrolled: true },
-          timing: 500,
-        };
+        return { success: true, data: { scrolled: true, direction, amount }, timing: 200 };
       } else {
-        return {
-          success: true,
-          data: { simulated: true, action: 'scroll' },
-          timing: 200,
-        };
+        return { success: true, data: { simulated: true, action: 'scroll' }, timing: 200 };
       }
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Scroll failed',
-        timing: 0,
-      };
+      return { success: false, error: error instanceof Error ? error.message : 'Scroll failed', timing: 0 };
     }
   }
 
@@ -1001,18 +1100,24 @@ export class BrowserAutomationController {
   // Helper functions for browser script execution
   private clickElementInPage(params: any): any {
     try {
+      const byXPath = (xp: string): Element | null => {
+        try {
+          const result = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+          return (result.singleNodeValue as Element) || null;
+        } catch { return null; }
+      };
+      const bySelector = (sel: string): Element | null => {
+        try { return document.querySelector(sel); } catch { return null; }
+      };
+
       let element: Element | null = null;
 
       if (params.selector) {
-        element = document.querySelector(params.selector);
+        const sel: string = String(params.selector);
+        element = sel.startsWith('/') ? byXPath(sel) : bySelector(sel);
       } else if (params.text) {
         // Find element by text content
-        const walker = document.createTreeWalker(
-          document.body,
-          NodeFilter.SHOW_TEXT,
-          null
-        );
-
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
         let node;
         while ((node = walker.nextNode())) {
           if (node.textContent && node.textContent.includes(params.text)) {
@@ -1022,25 +1127,114 @@ export class BrowserAutomationController {
         }
       }
 
-      if (element) {
-        (element as HTMLElement).click();
-        return { success: true, element: element.tagName };
-      } else {
-        return { success: false, error: 'Element not found' };
+      if (!element) return { success: false, error: 'Element not found' };
+
+      let el = element as HTMLElement;
+      // Ensure into view before interaction
+      try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any }); } catch { try { el.scrollIntoView(); } catch {} }
+
+      // If element is disabled or not interactable, try to click its nearest clickable ancestor
+      const isDisabled = (node: Element | null): boolean => !!(node as HTMLElement | null)?.hasAttribute?.('disabled');
+      let target: HTMLElement = el;
+      let guard = 0;
+      while (guard++ < 5 && (isDisabled(target) || target.getBoundingClientRect().width === 0 || target.getBoundingClientRect().height === 0)) {
+        const parent = target.closest('button, a, [role="button"], [role="link"], [onclick], [onmousedown]') as HTMLElement | null;
+        if (!parent) break;
+        target = parent;
       }
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Click failed',
+      if (target !== el) {
+        el = target;
+      }
+
+      // Prepare coordinates
+      const rect = el.getBoundingClientRect();
+      const cx = Math.max(0, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
+      const cy = Math.max(0, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
+
+      // Focus if possible
+      try { (el as any).focus?.(); } catch {}
+
+      // Dispatch pointer/mouse events sequence for better compatibility
+      const fire = (type: string) => {
+        try {
+          if (typeof PointerEvent !== 'undefined') {
+            el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: cx, clientY: cy, pointerType: 'mouse', isPrimary: true }));
+          } else {
+            el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: cx, clientY: cy, view: window }));
+          }
+        } catch {}
       };
+      fire('pointerover');
+      fire('mouseover');
+      fire('pointermove');
+      fire('mousemove');
+      fire('pointerdown');
+      fire('mousedown');
+      fire('pointerup');
+      fire('mouseup');
+      fire('click');
+
+      // Ensure default action is invoked (programmatic click)
+      try { el.click(); } catch {}
+
+      return { success: true, element: el.tagName, x: cx, y: cy, invokedProgrammaticClick: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Click failed' };
     }
   }
+
+  private hoverElementInPage(params: any): any {
+    try {
+      const bySelector = (sel: string): Element | null => { try { return document.querySelector(sel); } catch { return null; } };
+      const byXPath = (xp: string): Element | null => { try { const r = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null); return (r.singleNodeValue as Element) || null; } catch { return null; } };
+      const sel: string = String(params.selector || '');
+      const element = sel.startsWith('/') ? byXPath(sel) : bySelector(sel);
+      if (!element) return { success: false, error: 'Element not found' };
+      const el = element as HTMLElement;
+      try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any }); } catch { try { el.scrollIntoView(); } catch {} }
+      const rect = el.getBoundingClientRect();
+      const cx = Math.max(0, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
+      const cy = Math.max(0, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
+      const fire = (type: string) => el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: cx, clientY: cy, view: window }));
+      fire('mousemove');
+      fire('mouseover');
+      fire('mouseenter');
+      if (params.duration && Number(params.duration) > 0) {
+        const end = Date.now() + Number(params.duration);
+        const step = () => { if (Date.now() < end) { fire('mousemove'); requestAnimationFrame(step); } };
+        requestAnimationFrame(step);
+      }
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : 'Hover failed' };
+    }
+  }
+
 
   private fillFormInPage(params: any): any {
     try {
       const results: any[] = [];
 
-      for (const field of params.fields) {
+      const dispatch = (el: Element, type: string) => {
+        const ev = new Event(type, { bubbles: true, cancelable: true });
+        el.dispatchEvent(ev);
+      };
+      const setInputValue = (el: HTMLInputElement | HTMLTextAreaElement, value: string) => {
+        (el as any).focus?.();
+        const proto = Object.getPrototypeOf(el) as any;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (setter) setter.call(el, value);
+        else (el as any).value = value;
+        dispatch(el, 'input');
+        dispatch(el, 'change');
+        (el as any).blur?.();
+      };
+      const clickIfNeeded = (el: HTMLElement) => {
+        try { el.click(); } catch {}
+      };
+
+      for (const rawField of (params.fields || [])) {
+        const field = rawField || {};
         let element: Element | null = null;
 
         if (field.selector) {
@@ -1049,36 +1243,112 @@ export class BrowserAutomationController {
           element = document.querySelector(`[name="${field.name}"]`);
         }
 
-        if (element) {
-          const input = element as HTMLInputElement;
-          if (input.type === 'checkbox' || input.type === 'radio') {
-            input.checked = true;
+        if (!element) {
+          results.push({ success: false, field: field.name || field.selector, error: 'Element not found' });
+          continue;
+        }
+
+        const tag = element.tagName.toLowerCase();
+        const typeAttr = (element as HTMLElement).getAttribute('type')?.toLowerCase() || '';
+        const kind = field.type || typeAttr || tag;
+
+        try {
+          if (tag === 'input' || tag === 'textarea') {
+            if (['checkbox', 'radio'].includes(typeAttr) || field.type === 'checkbox' || field.type === 'radio') {
+              const input = element as HTMLInputElement;
+              const desired = String(field.value || '').toLowerCase();
+              let wantChecked: boolean;
+
+              // Enhanced checkbox/radio value interpretation
+              if (desired === 'toggle') {
+                wantChecked = !input.checked; // Toggle current state
+              } else {
+                wantChecked = desired === 'true' || desired === '1' || desired === 'on' || desired === 'yes' || desired === 'checked';
+              }
+
+              if (input.checked !== wantChecked) {
+                clickIfNeeded(input);
+                if (input.checked !== wantChecked) {
+                  input.checked = wantChecked;
+                  dispatch(input, 'input');
+                  dispatch(input, 'change');
+                }
+              }
+            } else {
+              setInputValue(element as HTMLInputElement | HTMLTextAreaElement, String(field.value ?? ''));
+            }
+          } else if (tag === 'select') {
+            const sel = element as HTMLSelectElement;
+            let matched = false;
+            const value = field.value != null ? String(field.value) : '';
+            const visibleText = field.visibleText ?? field.label ?? field.text;
+
+            // Enhanced select option matching (nanobrowser-aligned)
+            if (visibleText != null) {
+              const text = String(visibleText).trim().toLowerCase();
+              for (const opt of Array.from(sel.options)) {
+                const optText = opt.text.trim().toLowerCase();
+                const optLabel = (opt.getAttribute('label') || '').trim().toLowerCase();
+                if (optText === text || optLabel === text || optText.includes(text)) {
+                  sel.value = opt.value;
+                  matched = true;
+                  break;
+                }
+              }
+            }
+            if (!matched && value) {
+              for (const opt of Array.from(sel.options)) {
+                if (opt.value === value || opt.value.toLowerCase() === value.toLowerCase()) {
+                  sel.value = opt.value;
+                  matched = true;
+                  break;
+                }
+              }
+            }
+            // Fallback: partial text match
+            if (!matched && visibleText) {
+              const text = String(visibleText).trim().toLowerCase();
+              for (const opt of Array.from(sel.options)) {
+                if (opt.text.trim().toLowerCase().includes(text)) {
+                  sel.value = opt.value;
+                  matched = true;
+                  break;
+                }
+              }
+            }
+            if (!matched && sel.options.length) {
+              sel.selectedIndex = 0;
+            }
+            dispatch(sel, 'input');
+            dispatch(sel, 'change');
+          } else if ((element as HTMLElement).isContentEditable) {
+            setInputValue(element as any, String(field.value ?? ''));
           } else {
-            input.value = field.value;
+            (element as any).textContent = String(field.value ?? '');
+            dispatch(element, 'input');
+            dispatch(element, 'change');
           }
-          results.push({ success: true, field: field.name || field.selector });
-        } else {
-          results.push({
-            success: false,
-            field: field.name || field.selector,
-            error: 'Element not found',
-          });
+          results.push({ success: true, field: field.name || field.selector, kind });
+        } catch (e) {
+          results.push({ success: false, field: field.name || field.selector, error: (e as Error)?.message || 'Fill failed', kind });
         }
       }
 
       if (params.submit) {
-        const form = document.querySelector('form');
+        let form: HTMLFormElement | null = null;
+        try {
+          const firstOk = document.activeElement as HTMLElement | null;
+          form = (firstOk?.closest?.('form') as HTMLFormElement) || (document.querySelector('form') as HTMLFormElement);
+        } catch {}
         if (form) {
-          (form as HTMLFormElement).submit();
+          if (typeof (form as any).requestSubmit === 'function') (form as any).requestSubmit();
+          else form.submit();
         }
       }
 
-      return { results, submitted: params.submit };
+      return { success: true, results };
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Form fill failed',
-      };
+      return { success: false, error: error instanceof Error ? error.message : 'Form fill failed' };
     }
   }
 
@@ -1526,5 +1796,12 @@ export class BrowserAutomationController {
     };
 
     return mapping[actionType] || 'extract_content'; // Default to content extraction
+  }
+
+  async cleanup(): Promise<void> {
+    // Cleanup CDP controller and browser context
+    await cdpController.cleanup();
+    await cdpBrowserContext.cleanup();
+    logger.info('BrowserAutomationController cleanup completed');
   }
 }

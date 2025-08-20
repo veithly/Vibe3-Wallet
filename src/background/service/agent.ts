@@ -32,6 +32,11 @@ interface AgentPort {
 }
 
 class AgentService {
+  // Cancellation flag for current streaming task
+  private currentStreamingTask: { id: string | number | null; cancelled: boolean } = { id: null, cancelled: false };
+  // Track tool_call IDs within an active streaming task to emit strong-signal events once per call
+  private currentStreamingToolCallIds: Set<string> = new Set();
+  private currentToolCallIndexToId: Record<number, string> = {};
   private ports: Map<string, AgentPort> = new Map();
   private executor: AgentExecutorBridge | null = null;
   private web3Agent: Web3Agent | null = null;
@@ -1073,13 +1078,23 @@ class AgentService {
         task,
         true, // Enable streaming for tool call responses
         (chunk) => {
-          // Send streaming chunk to client
-          port.postMessage({
-            type: 'streaming_chunk',
-            taskId: currentTaskId,
-            chunk,
-            timestamp: Date.now(),
-          });
+          // Normalize and ensure chunk field is always present; avoid placing data under other keys
+          try {
+            const safeChunk = typeof chunk === 'string' ? { raw: chunk } : chunk;
+            port.postMessage({
+              type: 'streaming_chunk',
+              taskId: currentTaskId,
+              chunk: safeChunk,
+              timestamp: Date.now(),
+            });
+          } catch (e) {
+            port.postMessage({
+              type: 'streaming_chunk',
+              taskId: currentTaskId,
+              chunk: { error: 'chunk_serialization_error' },
+              timestamp: Date.now(),
+            });
+          }
         },
         (thinking) => {
           // Send thinking message to client
@@ -1107,32 +1122,40 @@ class AgentService {
           });
         },
         (toolCalls) => {
-          // Non-streaming tool_calls emission for UI rendering
+          // Non-streaming tool_calls emission for UI rendering (strong-signal per call)
           const content = toolCalls?.content || '';
-          const fcs = toolCalls?.functionCalls || [];
+          const fcs = (toolCalls?.functionCalls || []) as any[];
 
-          // 1) Dedicated function_call event (for Function Call card)
-          port.postMessage({
-            type: 'function_call',
-            actor: 'assistant',
-            state: 'ACT_START',
-            timestamp: Date.now(),
-            data: {
-              details: content,
-              functionCalls: fcs,
-            },
-          });
+          fcs.forEach((c: any) => {
+            const id = c?.id || `call_${c?.name || 'fn'}_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+            // Deduplicate per streaming session
+            if (!this.currentStreamingToolCallIds.has(id)) {
+              this.currentStreamingToolCallIds.add(id);
+              // Dedicated function_call event (for Function Call card)
+              port.postMessage({
+                type: 'function_call',
+                actor: 'assistant',
+                state: 'ACT_START',
+                timestamp: Date.now(),
+                data: {
+                  details: content || `Executing function ${c?.name || 'function'}...`,
+                  functionCalls: [{ id, name: c?.name || 'function', arguments: c?.arguments || {}, status: c?.status || 'executing', timestamp: Date.now() }],
+                  finish_reason: 'tool_call_start',
+                },
+              });
 
-          // 2) Also emit an execution event carrying actions so existing execution handler renders it too
-          port.postMessage({
-            type: 'execution',
-            actor: 'assistant',
-            state: 'ACT_START',
-            timestamp: Date.now(),
-            data: {
-              details: content,
-              actions: fcs.map((c: any) => ({ type: c.name, params: c.arguments, status: c.status })),
-            },
+              // Also emit an execution event carrying actions so existing execution handler renders it too
+              port.postMessage({
+                type: 'execution',
+                actor: 'assistant',
+                state: 'ACT_START',
+                timestamp: Date.now(),
+                data: {
+                  details: content,
+                  actions: [{ type: c?.name, params: c?.arguments, status: c?.status || 'executing' }],
+                },
+              });
+            }
           });
         }
       );
@@ -1269,21 +1292,31 @@ class AgentService {
       return this.handleWeb3Task(task, tabId, port, historySessionId);
     }
 
-    // Set up streaming timeout and completion handling
-    const streamingTimeout = setTimeout(() => {
-      logger.warn('AgentService', 'Streaming task timed out', { task, tabId });
-      port.postMessage({
-        type: 'streaming_error',
-        taskId: message.taskId,
-        error: 'Streaming response timed out',
-        timestamp: Date.now(),
-      });
-    }, 60000); // 60 second timeout
+    // Set up streaming timeout with refresh-on-activity
+    let streamingTimeout: any;
+    const armStreamingTimeout = () => {
+      if (streamingTimeout) clearTimeout(streamingTimeout);
+      streamingTimeout = setTimeout(() => {
+        logger.warn('AgentService', 'Streaming task timed out', { task, tabId });
+        // Mark as cancelled to stop further chunks
+        try { this.currentStreamingTask.cancelled = true; } catch {}
+        port.postMessage({
+          type: 'streaming_error',
+          taskId: message.taskId,
+          error: 'Streaming response timed out',
+          timestamp: Date.now(),
+        });
+      }, 180000); // 180s timeout, refreshed on each activity
+    };
+    armStreamingTimeout();
 
     let isCompleted = false;
     let chunkCount = 0;
 
     try {
+      // Mark current streaming task and reset cancel flag
+      this.currentStreamingTask = { id: message.taskId ?? Date.now(), cancelled: false };
+
       // Send initial response indicating streaming is starting
       port.postMessage({
         type: 'streaming_start',
@@ -1291,30 +1324,96 @@ class AgentService {
         timestamp: Date.now(),
       });
 
+      // Reset tool_call tracking for this streaming task
+      this.currentStreamingToolCallIds = new Set();
+      this.currentToolCallIndexToId = {};
+
       // Process with streaming support and enhanced completion handling
       const response = await this.web3Agent.processUserInstructionWithFunctionCalling(
         task,
         true, // enable streaming
         (chunk) => {
-          if (isCompleted) return; // Ignore chunks after completion
+          if (isCompleted || this.currentStreamingTask.cancelled) return; // Ignore after completion or cancel
+          armStreamingTimeout(); // refresh timeout on activity
 
           chunkCount++;
           logger.debug('AgentService', `Streaming chunk ${chunkCount}`, {
             taskId: message.taskId,
-            chunkType: chunk.type,
-            chunkSize: chunk.content?.length || 0
+            chunkType: chunk?.type,
+            chunkSize: chunk?.content?.length || 0
           });
 
-          // Send streaming chunk to client
-          port.postMessage({
-            type: 'streaming_chunk',
-            taskId: message.taskId,
-            chunk,
-            timestamp: Date.now(),
-          });
+          // Strong-signal: detect new tool_call ids in chunk and emit dedicated events
+          try {
+            const ensureArray = (v: any) => (Array.isArray(v) ? v : [v]).filter(Boolean);
+            const parseChunk = (c: any) => {
+              const arr: any[] = [];
+              const choices = c?.choices;
+              if (Array.isArray(choices)) {
+                choices.forEach((ch: any) => {
+                  const tc = ch?.delta?.tool_calls || ch?.tool_calls;
+                  if (Array.isArray(tc)) arr.push(...tc);
+                });
+              }
+              if (Array.isArray(c?.delta?.tool_calls)) arr.push(...c.delta.tool_calls);
+              if (Array.isArray(c?.tool_calls)) arr.push(...c.tool_calls);
+              return arr;
+            };
+            const chunkObjAny: any = typeof chunk === 'string' ? { raw: chunk } : (chunk as any);
+            const chunks = (chunkObjAny && typeof chunkObjAny.raw === 'string')
+              ? ensureArray(chunkObjAny.raw)
+              : [chunkObjAny];
+            const calls: any[] = chunks.flatMap((ck: any) => parseChunk(ck));
+
+            calls.forEach((tc: any) => {
+              const idx = typeof tc?.index === 'number' ? tc.index : (tc?.index ? Number(tc.index) : undefined);
+              const name = tc?.function?.name || 'function';
+              let id = tc?.id as string | undefined;
+              if (typeof idx === 'number') {
+                if (!id && this.currentToolCallIndexToId[idx]) id = this.currentToolCallIndexToId[idx];
+                if (!id) { id = `call_idx_${idx}_${Date.now()}`; this.currentToolCallIndexToId[idx] = id; }
+                else { this.currentToolCallIndexToId[idx] = id; }
+              } else if (!id) {
+                id = `call_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+              }
+              if (id && !this.currentStreamingToolCallIds.has(id)) {
+                this.currentStreamingToolCallIds.add(id);
+                port.postMessage({
+                  type: 'function_call',
+                  actor: 'assistant',
+                  state: 'ACT_START',
+                  timestamp: Date.now(),
+                  data: {
+                    details: `Executing function ${name}...`,
+                    functionCalls: [{ id, name, arguments: {}, status: 'executing', timestamp: Date.now() }],
+                    finish_reason: 'tool_call_start',
+                  },
+                });
+              }
+            });
+          } catch {}
+
+          // Send streaming chunk to client (ensure chunk field always present)
+          try {
+            const safeChunk = typeof chunk === 'string' ? { raw: chunk } : chunk;
+            port.postMessage({
+              type: 'streaming_chunk',
+              taskId: message.taskId,
+              chunk: safeChunk,
+              timestamp: Date.now(),
+            });
+          } catch (e) {
+            port.postMessage({
+              type: 'streaming_chunk',
+              taskId: message.taskId,
+              chunk: { error: 'chunk_serialization_error' },
+              timestamp: Date.now(),
+            });
+          }
         },
         undefined, // thinking callback (optional)
         (reactStatus) => {
+          if (isCompleted || this.currentStreamingTask.cancelled) return;
           // Forward ReAct status updates to client
           port.postMessage({
             type: 'react_status',
@@ -1325,6 +1424,7 @@ class AgentService {
           });
         },
         (toolCalls) => {
+          if (isCompleted || this.currentStreamingTask.cancelled) return;
           // Forward function calls to client for UI rendering
           const content = toolCalls?.content || '';
           const fcs = toolCalls?.functionCalls || [];
@@ -1355,21 +1455,26 @@ class AgentService {
         }
       );
 
-      // Mark streaming as completed after process returns
+      // Mark streaming as completed after process returns (respect cancellation)
+      let wasCancelled = false;
       if (!isCompleted) {
         isCompleted = true;
         clearTimeout(streamingTimeout);
-        logger.info('AgentService', 'Streaming completed naturally', {
+        wasCancelled = this.currentStreamingTask.cancelled;
+        logger.info('AgentService', wasCancelled ? 'Streaming cancelled by user' : 'Streaming completed naturally', {
           task,
           tabId,
           chunkCount,
         });
       }
 
-      // Ensure completion state is properly set
-      if (!isCompleted) {
-        isCompleted = true;
-        clearTimeout(streamingTimeout);
+      // Reset current streaming task state
+      this.currentStreamingTask = { id: null, cancelled: false };
+
+      // If the task was cancelled, do not emit streaming_complete to the UI
+      if (wasCancelled) {
+        logger.info('AgentService', 'Skip streaming_complete due to cancellation');
+        return;
       }
 
       // Send final response with enhanced state tracking
@@ -1382,6 +1487,9 @@ class AgentService {
           plan: response.plan,
           simulation: response.simulation,
           functionCalling: true,
+          // Forward function calls captured during streaming so UI can render them
+          functionCalls: (response as any)?.functionCalls || [],
+          tool_calls: (response as any)?.tool_calls || [],
           chunkCount,
           streamingDuration: Date.now() - (typeof message.taskId === 'number' ? message.taskId : Date.now()),
         },
@@ -1395,6 +1503,7 @@ class AgentService {
         success: response.success,
         chunkCount,
         messageType: finalMessage.type,
+        functionCallsCount: (response as any)?.functionCalls?.length || 0,
       });
 
       await this.ensureMessageDisplayed(finalMessage, port, 'streaming_completion');
@@ -1505,6 +1614,27 @@ class AgentService {
 
   private async handleCancelTask(port: chrome.runtime.Port) {
     logger.info('Cancelling current task');
+
+    // Mark current streaming task as cancelled (prevents further chunks)
+    if (this.currentStreamingTask.id !== null) {
+      this.currentStreamingTask.cancelled = true;
+    }
+
+    // Abort any in-flight real streaming request at the LLM layer (e.g., OpenAI SSE)
+    try {
+      const llm = this.web3Agent?.getLLM?.();
+      if (llm && typeof (llm as any).cancelStreaming === 'function') {
+        (llm as any).cancelStreaming();
+        logger.info('AgentService', 'Invoked LLM.cancelStreaming()');
+      }
+    } catch (e) {
+      logger.warn('AgentService', 'Failed to call LLM.cancelStreaming', e);
+    }
+
+    // Propagate cancel into Web3Agent (stop ReAct/tool execution loops)
+    try {
+      this.web3Agent?.cancelCurrentTask?.();
+    } catch {}
 
     if (this.executor) {
       await this.executor.cancel();

@@ -98,6 +98,16 @@ export interface Web3AgentState {
   coordinationEvents?: CoordinationEvent[];
 }
 
+
+// ReAct runtime configuration loaded from Settings
+interface ReActRuntimeConfig {
+  enabled: boolean;
+  maxSteps: number; // safety cap for ReAct iterations
+  timeoutMs: number; // overall ReAct loop timeout
+  showThinking: boolean; // whether to emit thinking/status messages
+  autoContinue: boolean; // whether to continue multiple iterations automatically
+}
+
 import { EventEmitter } from 'events';
 
 export class Web3Agent extends EventEmitter {
@@ -119,6 +129,14 @@ export class Web3Agent extends EventEmitter {
   private multiAgentSystem!: MultiAgentSystem;
   private elementSelectionAgent: ElementSelectionAgent;
   private multiStepExecutor: MultiStepExecutor;
+  private reactConfig: ReActRuntimeConfig = {
+    enabled: true,
+    maxSteps: 10,
+    timeoutMs: 30000,
+    showThinking: true,
+    autoContinue: true,
+  };
+
   private multiAgentIntegration!: MultiAgentIntegration;
   private coordinationEnabled: boolean = true;
 
@@ -130,6 +148,21 @@ export class Web3Agent extends EventEmitter {
   private config: Web3AgentConfig;
   private state: Web3AgentState;
   private activeTabId?: number;
+
+  // Cancellation handling for current task
+  private _cancelled: boolean = false;
+  public cancelCurrentTask(): void {
+    try {
+      this._cancelled = true;
+      try { (this.llm as any)?.cancelStreaming?.(); } catch {}
+      logger.info('Web3Agent', 'cancelCurrentTask called: cancellation flag set');
+    } catch {}
+  }
+  private ensureNotCancelled(): void {
+    if (this._cancelled) {
+      throw new Error('Task cancelled');
+    }
+  }
 
   public setActiveTabId(tabId: number) {
     this.activeTabId = tabId;
@@ -294,7 +327,57 @@ export class Web3Agent extends EventEmitter {
     // Initialize Web3 context
     await this.updateWeb3Context();
 
+    // Load ReAct runtime configuration from storage and subscribe to updates
+    try {
+      await this.loadReActConfigFromStorage?.();
+    } catch (e) {
+      console.warn('[Web3Agent] Failed to load ReAct config on init', e);
+    }
+
     console.log(`Web3Agent initialized with session: ${this.state.sessionId}`);
+  }
+
+  private async loadReActConfigFromStorage(): Promise<void> {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+        const data = await new Promise<any>((resolve) => {
+          try {
+            chrome.storage.local.get('reactConfig', (res) => resolve(res));
+          } catch (e) {
+            resolve({});
+          }
+        });
+        const cfg = data?.reactConfig;
+        if (cfg && typeof cfg === 'object') {
+          this.reactConfig = {
+            enabled: cfg.enabled ?? this.reactConfig.enabled,
+            maxSteps: Number.isFinite(cfg.maxSteps) ? cfg.maxSteps : this.reactConfig.maxSteps,
+            timeoutMs: Number.isFinite(cfg.timeoutMs) ? cfg.timeoutMs : this.reactConfig.timeoutMs,
+            showThinking: cfg.showThinking ?? this.reactConfig.showThinking,
+            autoContinue: cfg.autoContinue ?? this.reactConfig.autoContinue,
+          };
+        }
+        // Listen for future changes
+        try {
+          chrome.storage.onChanged.addListener((changes, areaName) => {
+            if (areaName === 'local' && changes.reactConfig) {
+              const newVal = changes.reactConfig.newValue || {};
+              this.reactConfig = {
+                enabled: newVal.enabled ?? this.reactConfig.enabled,
+                maxSteps: Number.isFinite(newVal.maxSteps) ? newVal.maxSteps : this.reactConfig.maxSteps,
+                timeoutMs: Number.isFinite(newVal.timeoutMs) ? newVal.timeoutMs : this.reactConfig.timeoutMs,
+                showThinking: newVal.showThinking ?? this.reactConfig.showThinking,
+                autoContinue: newVal.autoContinue ?? this.reactConfig.autoContinue,
+              };
+              console.log('[Web3Agent] ReAct config updated from storage', this.reactConfig);
+            }
+          });
+        } catch {}
+        console.log('[Web3Agent] ReAct config loaded from storage', this.reactConfig);
+      }
+    } catch (e) {
+      console.warn('[Web3Agent] Failed to load ReAct config, using defaults', e);
+    }
   }
 
   async processUserInstruction(
@@ -1559,6 +1642,8 @@ export class Web3Agent extends EventEmitter {
     onToolCalls?: (payload: { content?: string; functionCalls?: FunctionCall[] }) => void
   ): Promise<AgentResponse> {
     try {
+      // Reset cancellation flag for new instruction
+      this._cancelled = false;
       const startTime = Date.now();
 
       // Add user message to conversation history (avoid consecutive duplicates)
@@ -1575,19 +1660,23 @@ export class Web3Agent extends EventEmitter {
 
       // Initialize ReAct status
       if (onReActStatus) {
-        onReActStatus({
-          isActive: true,
-          isThinking: true,
-          isActing: false,
-          currentStep: 1,
-          maxSteps: 5,
-          thinkingContent: 'Analyzing your request...',
-          timestamp: Date.now(),
-        });
+        if (this.reactConfig.showThinking) {
+          onReActStatus({
+            isActive: true,
+            isThinking: true,
+            isActing: false,
+            currentStep: 1,
+            maxSteps: this.reactConfig.maxSteps,
+            thinkingContent: 'Analyzing your request...',
+            timestamp: Date.now(),
+          });
+        }
       }
 
       // Store initial thinking message
-      await this.storeReActStatusMessage('Analyzing your request...');
+      if (this.reactConfig.showThinking) {
+        await this.storeReActStatusMessage('Analyzing your request...');
+      }
 
       // Step 1: Extract intent from user instruction
       const intent = await this.intentRecognizer.extractIntent(
@@ -1600,15 +1689,17 @@ export class Web3Agent extends EventEmitter {
 
       // Update ReAct status after intent extraction
       if (onReActStatus) {
-        onReActStatus({
-          isActive: true,
-          isThinking: true,
-          isActing: false,
-          currentStep: 2,
-          maxSteps: 5,
-          thinkingContent: `Intent recognized: ${intent.action}`,
-          timestamp: Date.now(),
-        });
+        if (this.reactConfig.showThinking) {
+          onReActStatus({
+            isActive: true,
+            isThinking: true,
+            isActing: false,
+            currentStep: 2,
+            maxSteps: this.reactConfig.maxSteps,
+            thinkingContent: `Intent recognized: ${intent.action}`,
+            timestamp: Date.now(),
+          });
+        }
       }
 
       // Store intent recognition message
@@ -1619,7 +1710,7 @@ export class Web3Agent extends EventEmitter {
       try {
         if (intent.action !== 'QUERY') {
           // Send thinking message about planning
-          if (onThinking) {
+          if (onThinking && this.reactConfig.showThinking) {
             onThinking({
               type: 'thinking',
               content: 'Analyzing your request and creating a plan...',
@@ -2046,13 +2137,133 @@ export class Web3Agent extends EventEmitter {
       // Step 5: Execute function calls if any (second turn)
       const secondTurnFunctionCalls = this.extractFunctionCallsFromResponse(llmResponse);
       if (secondTurnFunctionCalls && secondTurnFunctionCalls.length > 0) {
-        const secondTurnActions = await this.executeFunctionCalls(
-          secondTurnFunctionCalls
-        );
+        // Insert an assistant message with tool_calls to satisfy OpenAI schema
+        try {
+          const assistantToolCallMsg2 = new AIMessage('', {
+            tool_calls: secondTurnFunctionCalls.map((fc) => ({
+              id: fc.id || `call_${fc.name}_${Date.now()}`,
+              type: 'function',
+              function: {
+                name: fc.name,
+                arguments: JSON.stringify(fc.arguments || {}),
+              },
+            })),
+          });
+          this.state.conversationHistory.push(assistantToolCallMsg2);
+        } catch (e) {
+          logger.warn('Failed to append assistant tool_calls message for second turn', { error: e instanceof Error ? e.message : String(e) });
+        }
+
+        const secondTurnActions = await this.executeFunctionCalls(secondTurnFunctionCalls);
         accumulatedActions.push(...secondTurnActions);
+
+        // Append tool results as ToolMessages (second turn) so the LLM can use them in ReAct
+        try {
+          for (let i = 0; i < secondTurnActions.length; i++) {
+            const step = secondTurnActions[i];
+            const fc2 = secondTurnFunctionCalls[i];
+            const toolMsg2 = new ToolMessage({
+              content: JSON.stringify({
+                success: step.status === 'completed',
+                result: step.result,
+                params: step.params,
+              }),
+              name: step.type || 'tool',
+              tool_call_id: fc2?.id || `${step.type || 'tool'}_${i}`,
+            });
+            this.state.conversationHistory.push(toolMsg2);
+          }
+        } catch (e) {
+          logger.warn('Failed to append second turn tool results', { error: e instanceof Error ? e.message : String(e) });
+        }
       }
 
       // Step 6: Generate final response
+
+        // Multi-turn ReAct loop: continue until no more tool_calls or safety cap reached
+        try {
+          let iterations = 0;
+          const maxIterations = Math.max(1, this.reactConfig?.maxSteps ?? 10); // safety cap to prevent infinite loops
+          while (iterations < maxIterations && (this.reactConfig?.enabled ?? true)) {
+            const nextPrompt = await this.promptManager.createPrompt({
+              messages: this.state.conversationHistory,
+              context: this.state.currentContext,
+              intent,
+              tools: availableTools,
+              conversationHistory: this.state.conversationHistory,
+              availableActions: this.actionRegistry.getAvailableActions(),
+            });
+            ;(this.llm as any).attachToolsForProvider?.(availableTools);
+
+            let nextResponse: LLMResponse;
+            if (enableStreaming && onChunk && this.llm.generateStreamingResponse) {
+              nextResponse = await this.llm.generateStreamingResponse(
+                nextPrompt.messages,
+                nextPrompt.context,
+                nextPrompt.intent,
+                nextPrompt.tools,
+                onChunk
+              );
+            } else {
+              nextResponse = await this.llm.generateResponse(
+                nextPrompt.messages,
+                nextPrompt.context,
+                nextPrompt.intent,
+                nextPrompt.tools
+              );
+              if (enableStreaming && onChunk && nextResponse.response) {
+                onChunk({ id: `react-turn-response-${iterations}-${Date.now()}`, type: 'content', content: nextResponse.response, timestamp: Date.now() });
+              }
+            }
+
+            // Update latest response
+            llmResponse = nextResponse;
+
+            // Extract potential new function calls
+            const moreFunctionCalls = this.extractFunctionCallsFromResponse(nextResponse);
+            if (!moreFunctionCalls || moreFunctionCalls.length === 0) {
+              break; // no more tool calls, finish
+            }
+
+            // Insert an assistant message with tool_calls for this turn
+            try {
+              const assistantToolCallsMsg = new AIMessage('', {
+                tool_calls: moreFunctionCalls.map((fc) => ({
+                  id: fc.id || `call_${fc.name}_${Date.now()}`,
+                  type: 'function',
+                  function: { name: fc.name, arguments: JSON.stringify(fc.arguments || {}) },
+                })),
+              });
+              this.state.conversationHistory.push(assistantToolCallsMsg);
+            } catch (e) {
+              logger.warn('Failed to append assistant tool_calls message for ReAct loop', { error: e instanceof Error ? e.message : String(e) });
+            }
+
+            // Execute and append tool results
+            const loopTurnActions = await this.executeFunctionCalls(moreFunctionCalls);
+            accumulatedActions.push(...loopTurnActions);
+
+            try {
+              for (let i = 0; i < loopTurnActions.length; i++) {
+                const step = loopTurnActions[i];
+                const fc = moreFunctionCalls[i];
+                const toolMsg = new ToolMessage({
+                  content: JSON.stringify({ success: step.status === 'completed', result: step.result, params: step.params }),
+                  name: step.type || 'tool',
+                  tool_call_id: fc?.id || `${step.type || 'tool'}_${i}`,
+                });
+                this.state.conversationHistory.push(toolMsg);
+              }
+            } catch (e) {
+              logger.warn('Failed to append loop turn tool results', { error: e instanceof Error ? e.message : String(e) });
+            }
+
+            iterations++;
+          }
+        } catch (e) {
+          logger.warn('ReAct loop generation failed; continuing to final response', { error: e instanceof Error ? e.message : String(e) });
+        }
+
       const response = await this.generateFinalResponse(
         instruction,
         intent,
@@ -2162,6 +2373,10 @@ export class Web3Agent extends EventEmitter {
     });
 
     for (let i = 0; i < functionCalls.length; i++) {
+      if (this._cancelled) {
+        logger.info(`[${executionId}] Cancellation detected before executing step ${i}; aborting remaining function calls`);
+        break;
+      }
       const functionCall = functionCalls[i];
       const stepStartTime = Date.now();
       const stepExecutionId = `${executionId}_step_${i}`;
@@ -2258,17 +2473,18 @@ export class Web3Agent extends EventEmitter {
           );
 
           const stepExecutionTime = Date.now() - stepStartTime;
+          const resultDataForLog = (result && (result.data !== undefined ? result.data : result.result)) || undefined;
           logger.info(`[${stepExecutionId}] Tool execution completed`, {
             toolName: functionCall.name,
-            success: result.success,
-            hasData: !!result.data,
+            success: result?.success,
+            hasData: !!resultDataForLog,
             executionTime: stepExecutionTime,
-            dataSummary: result.data ? JSON.stringify(result.data).substring(0, 200) : undefined,
-            error: result.error,
-            action: result.action,
-            timestamp: result.timestamp,
-            tabId: result.tabId,
-            tabUrl: result.tabUrl,
+            dataSummary: resultDataForLog ? JSON.stringify(resultDataForLog).substring(0, 200) : undefined,
+            error: result?.error,
+            action: result?.action,
+            timestamp: result?.timestamp,
+            tabId: result?.tabId,
+            tabUrl: result?.tabUrl,
           });
 
           // Store completed tool call message
@@ -2993,6 +3209,7 @@ export class Web3Agent extends EventEmitter {
     isActing: boolean = false
   ): Promise<void> {
     try {
+      if (!this.reactConfig.showThinking) return;
       const uiActors = (await import('@/ui/views/Agent/types/message')).Actors;
       await chatHistoryStore.addMessage(this.state.sessionId, {
         actor: uiActors.ASSISTANT,
@@ -3003,7 +3220,7 @@ export class Web3Agent extends EventEmitter {
           isThinking,
           isActing,
           currentStep: this.state.executionHistory.length + 1,
-          maxSteps: 10, // Default max steps
+          maxSteps: this.reactConfig.maxSteps,
           currentAction,
           thinkingContent,
           isActive: true,

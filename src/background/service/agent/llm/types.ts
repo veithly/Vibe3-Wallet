@@ -87,6 +87,9 @@ export interface IWeb3LLM {
     onChunk?: (chunk: StreamingLLMResponse) => void
   ): Promise<LLMResponse>;
 
+  // Cancel current streaming request (if any)
+  cancelStreaming(): void;
+
   // Function calling support
   supportsFunctionCalling(): boolean;
 

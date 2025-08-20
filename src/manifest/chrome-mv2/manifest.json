@@ -61,7 +61,11 @@
     "unlimitedStorage",
     "activeTab",
     "notifications",
-    "contextMenus"
+    "contextMenus",
+    "scripting",
+    "tabs",
+    "webNavigation",
+    "debugger"
   ],
   "web_accessible_resources": [
     "pageProvider.js"

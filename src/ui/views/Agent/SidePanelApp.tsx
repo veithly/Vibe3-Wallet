@@ -90,6 +90,16 @@ export const SidePanelApp = () => {
   const maxRetries = TIMING_CONSTANTS.MAX_RETRIES;
   const retryDelay = TIMING_CONSTANTS.RECONNECTION_BASE_DELAY;
   const streamingTimeoutRef = useRef<number | null>(null);
+  // Track tool_call IDs seen during current streaming to avoid duplicate top-level messages
+  const seenToolCallIdsRef = useRef<Set<string>>(new Set());
+  // Map OpenAI delta.tool_calls index -> callId across chunks
+  const toolCallIndexToIdRef = useRef<Record<number, string>>({});
+  // Accumulate arguments text per callId across chunks
+  const toolCallArgsBufferRef = useRef<Record<string, string>>({});
+  // Track function name by callId
+  const toolCallNameByIdRef = useRef<Record<string, string>>({});
+  // Ignore any further streaming events after a Stop until next user send
+  const ignoreStreamingRef = useRef<boolean>(false);
 
   // Enhanced message appender with comprehensive logging and validation
   const appendMessage = useCallback(
@@ -272,12 +282,11 @@ export const SidePanelApp = () => {
       });
 
       if (actor === Actors.SYSTEM) {
+        // Only reset UI on terminal task states
         if (
           state === ExecutionState.TASK_OK ||
           state === ExecutionState.TASK_FAIL ||
-          state === ExecutionState.TASK_CANCEL ||
-          // Also reset for any response that contains a message (indicates completion)
-          (content && !state.startsWith('step_') && !state.startsWith('act_'))
+          state === ExecutionState.TASK_CANCEL
         ) {
           logger.debug(COMPONENT_NAME, 'Task completed, resetting UI state', {
             state,
@@ -294,11 +303,10 @@ export const SidePanelApp = () => {
       }
 
       if (content) {
-        // Check if this is actually a streaming response that wasn't properly handled
-        const isStreamingResponse = content.includes('streaming') ||
-                                  (data && data.isStreaming);
+        // Treat as streaming update only if backend marks it as streaming AND we have an active streaming message
+        const isStreamingResponse = !!(data?.isStreaming && streamingMessageId);
 
-        if (isStreamingResponse && streamingMessageId) {
+        if (isStreamingResponse) {
           logger.debug(COMPONENT_NAME, 'Updating existing streaming message', {
             streamingMessageId,
             contentLength: content.length,
@@ -333,51 +341,89 @@ export const SidePanelApp = () => {
           });
 
           // Regular message handling with defensive functionCalls mapping
-          const fcFromActions = mapActionsToFunctionCalls(data?.actions);
-          const fcFromToolCalls = mapOpenAIToolCalls?.(data?.tool_calls);
-          const functionCalls = fcFromActions || fcFromToolCalls;
+          const normalizeFunctionCalls = (arr?: any[]) => {
+            if (!Array.isArray(arr)) return [] as any[];
+            const now = Date.now();
+            return arr.map((c: any, idx: number) => {
+              // Build stable id: prefer provided id; else synthesize from name+index+time
+              const name = c?.name || c?.type || c?.function?.name || 'function';
+              let id = c?.id as string | undefined;
+              if (!id) id = `${name}_${now}_${idx}`;
+
+              // Safely assemble arguments and guard against extremely large payloads
+              let args: any = {};
+              try {
+                if (typeof c?.arguments === 'string') args = JSON.parse(c.arguments);
+                else if (c?.arguments) args = c.arguments;
+                else if (c?.params) args = c.params;
+                else if (typeof c?.function?.arguments === 'string') args = JSON.parse(c.function.arguments);
+                else args = c?.function?.arguments || {};
+              } catch {
+                args = { raw: c?.arguments ?? c?.function?.arguments };
+              }
+              try {
+                const s = JSON.stringify(args);
+                if (s && s.length > 50000) {
+                  // 对特别长的 arguments 只在展示层截断，保留全量在消息对象，避免 UI 崩溃
+                  (args as any).__display_truncated__ = true;
+                  (args as any).__display_preview__ = s.slice(0, 50000);
+                }
+              } catch {}
+
+              const status = (['pending','executing','completed','failed'] as const).includes(c?.status) ? c.status : 'executing';
+              const ts = c?.timestamp || now + idx;
+
+              return { id, name, arguments: args, result: c?.result, status, timestamp: ts };
+            });
+          };
+
+          const fcFromActions = normalizeFunctionCalls(data?.actions);
+          const fcFromToolCalls = normalizeFunctionCalls(mapOpenAIToolCalls?.(data?.tool_calls));
+          const fcFromFunctionCalls = normalizeFunctionCalls(data?.functionCalls);
+          const functionCalls = [...fcFromActions, ...fcFromToolCalls, ...fcFromFunctionCalls];
 
           // Check if we have both content and function calls
           const hasContent = content && content.trim().length > 0;
           const hasFunctionCalls = functionCalls && functionCalls.length > 0;
 
-          if (hasContent && hasFunctionCalls) {
-            // Create separate messages for content and function calls
-            logger.debug(COMPONENT_NAME, 'Creating separate messages for content and function calls', {
-              contentLength: content.length,
-              functionCallsCount: functionCalls.length,
-            });
+          // If backend provides multiple contents as an array, handle them; otherwise wrap single content
+          const contentsArr: string[] = Array.isArray(data?.contents)
+            ? (data.contents as any[]).filter((s) => typeof s === 'string' && s.trim().length > 0)
+            : (hasContent ? [content] : []);
 
-            // First, add the assistant's content message
-            appendMessage({
-              actor: actor as Actors,
-              content,
-              timestamp,
-              messageType: 'assistant_content',
-              finishReason: data?.finish_reason,
+          if (contentsArr.length > 0) {
+            logger.debug(COMPONENT_NAME, 'Appending assistant contents individually', {
+              count: contentsArr.length,
             });
+            contentsArr.forEach((c, idx) => {
+              appendMessage({
+                actor: actor as Actors,
+                content: c,
+                timestamp: timestamp + idx,
+                messageType: 'assistant_content',
+                finishReason: data?.finish_reason,
+              });
+            });
+          }
 
-            // Then, add the function calls message
-            appendMessage({
-              actor: actor as Actors,
-              content: `Executing ${functionCalls.length} function call${functionCalls.length > 1 ? 's' : ''}...`,
-              timestamp: timestamp + 1, // Slightly later timestamp to ensure proper ordering
-              messageType: 'function_call',
-              functionCalls,
-              finishReason: data?.finish_reason,
+          if (hasFunctionCalls) {
+            logger.debug(COMPONENT_NAME, 'Appending function calls individually', {
+              functionCallsCount: functionCalls!.length,
             });
-          } else if (hasFunctionCalls) {
-            // Only function calls, no content
-            appendMessage({
-              actor: actor as Actors,
-              content: content || `Executing ${functionCalls.length} function call${functionCalls.length > 1 ? 's' : ''}...`,
-              timestamp,
-              messageType: 'function_call',
-              functionCalls,
-              finishReason: data?.finish_reason,
+            functionCalls!.forEach((call, idx) => {
+              appendMessage({
+                actor: actor as Actors,
+                content: `Executing function ${call.name}...`,
+                timestamp: timestamp + contentsArr.length + idx,
+                messageType: 'function_call',
+                functionCalls: [call],
+                finishReason: data?.finish_reason,
+              });
             });
-          } else {
-            // Only content, no function calls
+          }
+
+          if (contentsArr.length === 0 && !hasFunctionCalls) {
+            // Fallback: Only content (possibly empty) and no function calls
             appendMessage({
               actor: actor as Actors,
               content,
@@ -453,6 +499,17 @@ export const SidePanelApp = () => {
         });
         logEvent('message_received', { type: message.type });
 
+        // If user has pressed Stop, ignore subsequent stream/function/react messages until a new streaming_start
+        const ignorableTypes = new Set(['streaming_chunk', 'streaming_complete', 'function_call', 'react_status', EventType.EXECUTION]);
+        if (ignoreStreamingRef.current && message?.type && ignorableTypes.has(message.type)) {
+          if (message.type === 'streaming_start') {
+            // allow new session to start
+          } else {
+            logger.debug(COMPONENT_NAME, 'Ignoring message due to Stop', { type: message.type });
+            return;
+          }
+        }
+
         if (message.type === 'heartbeat_ack') {
           logEvent('heartbeat');
           return;
@@ -494,16 +551,33 @@ export const SidePanelApp = () => {
             calls: message.data?.functionCalls?.length || 0,
           });
 
-          const functionCallMessage = {
-            actor: Actors.ASSISTANT,
-            content: message.data?.details || '',
-            timestamp: message.timestamp || Date.now(),
-            messageType: 'function_call' as const,
-            functionCalls: message.data?.functionCalls || [],
-            finishReason: message.data?.finish_reason,
-          };
+          const calls: any[] = Array.isArray(message.data?.functionCalls)
+            ? message.data.functionCalls
+            : (message.data?.functionCall ? [message.data.functionCall] : []);
+          const baseTs = message.timestamp || Date.now();
 
-          appendMessage(functionCallMessage);
+          // 先输出细节内容（如果有）
+          if (message.data?.details) {
+            appendMessage({
+              actor: Actors.ASSISTANT,
+              content: message.data.details,
+              timestamp: baseTs,
+              messageType: 'assistant_content',
+              finishReason: message.data?.finish_reason,
+            });
+          }
+
+          // 将每个函数调用拆分成独立消息
+          calls.forEach((call, idx) => {
+            appendMessage({
+              actor: Actors.ASSISTANT,
+              content: `Executing function ${call?.name || 'function'}...`,
+              timestamp: baseTs + (message.data?.details ? 1 : 0) + idx,
+              messageType: 'function_call' as const,
+              functionCalls: [call],
+              finishReason: message.data?.finish_reason,
+            });
+          });
 
           // If this is a tool_calls finish reason, we need to handle the results
           if (message.data?.finish_reason === 'tool_calls' && message.data?.functionCalls?.length > 0) {
@@ -553,15 +627,21 @@ export const SidePanelApp = () => {
             taskId: message.taskId,
           });
 
+          // If user pressed Stop previously, clear the ignore flag for new stream
+          try { ignoreStreamingRef.current = false; } catch {}
+
           // Start streaming response
           const messageId = `streaming_${Date.now()}_${Math.random()
             .toString(36)
             .substr(2, 9)}`;
           setStreamingMessageId(messageId);
+          // Reset seen tool_call IDs and index->id map for this streaming session
+          try { seenToolCallIdsRef.current = new Set(); } catch {}
+          try { toolCallIndexToIdRef.current = {}; } catch {}
 
           // Add initial streaming message
           appendMessage({
-            actor: Actors.SYSTEM,
+            actor: Actors.ASSISTANT,
             content: '',
             timestamp: Date.now(),
             isStreaming: true,
@@ -581,6 +661,136 @@ export const SidePanelApp = () => {
 
           // Handle streaming chunk
           if (streamingMessageId && message.chunk) {
+            // Extract tool_calls from various OpenAI chunk shapes
+            const extractToolCalls = (chunk: any) => {
+              const calls: any[] = [];
+              try {
+                const choices = chunk?.choices;
+                if (Array.isArray(choices)) {
+                  choices.forEach((ch: any) => {
+                    const arr = ch?.delta?.tool_calls || ch?.tool_calls;
+                    if (Array.isArray(arr)) calls.push(...arr);
+                  });
+                }
+                const directDelta = chunk?.delta?.tool_calls;
+                if (Array.isArray(directDelta)) calls.push(...directDelta);
+                const direct = chunk?.tool_calls;
+                if (Array.isArray(direct)) calls.push(...direct);
+              } catch {}
+              return calls;
+            };
+
+            // Normalize chunk(s) in case backend forwarded SSE 'data: ...' strings
+            const toChunkObjects = (raw: any): any[] => {
+              if (!raw) return [];
+              if (typeof raw !== 'string') return [raw];
+              try {
+                const lines = raw.split('\n').map((l: string) => l.trim()).filter(Boolean);
+                const objs: any[] = [];
+                for (const line of lines) {
+                  if (!line.startsWith('data:')) continue;
+                  const payload = line.slice(5).trim();
+                  if (payload === '[DONE]') continue;
+                  try { objs.push(JSON.parse(payload)); } catch {}
+                }
+                return objs;
+              } catch { return []; }
+            };
+
+            const rawChunk = (message as any).chunk;
+            let chunkObjs: any[];
+            if (typeof rawChunk === 'string') {
+              chunkObjs = toChunkObjects(rawChunk);
+            } else if (rawChunk && typeof rawChunk.raw === 'string') {
+              chunkObjs = toChunkObjects(rawChunk.raw);
+            } else if (Array.isArray(rawChunk)) {
+              chunkObjs = rawChunk as any[];
+            } else if (rawChunk && typeof rawChunk === 'object') {
+              chunkObjs = [rawChunk];
+            } else {
+              chunkObjs = [];
+            }
+
+            const toolCallsArr = chunkObjs.flatMap(extractToolCalls);
+
+            if (toolCallsArr.length > 0) {
+              toolCallsArr.forEach((tc: any) => {
+                const idx = typeof tc?.index === 'number' ? tc.index : (tc?.index ? Number(tc.index) : undefined);
+                const name = tc?.function?.name || 'function';
+                let id = tc?.id as string | undefined;
+
+                if (typeof idx === 'number') {
+                  if (!id && toolCallIndexToIdRef.current[idx]) id = toolCallIndexToIdRef.current[idx];
+                  if (!id) {
+                    id = `call_idx_${idx}_${Date.now()}`;
+                    toolCallIndexToIdRef.current[idx] = id;
+                  } else {
+                    toolCallIndexToIdRef.current[idx] = id;
+                  }
+                } else if (!id) {
+                  id = `call_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+                }
+
+                if (id && !seenToolCallIdsRef.current.has(id)) {
+                  seenToolCallIdsRef.current.add(id);
+                  logger.debug(COMPONENT_NAME, 'New tool_call detected in streaming (OpenAI delta)', { id, idx, name });
+                  appendMessage({
+                    actor: Actors.ASSISTANT,
+                    content: `Executing function ${name}...`,
+                    timestamp: Date.now(),
+                    messageType: 'function_call' as const,
+                    functionCalls: [{ id, name, arguments: {}, status: 'executing' as const, timestamp: Date.now() }],
+                  });
+                }
+              });
+            }
+
+            // Also handle non-OpenAI shaped streaming chunk that carries functionCalls array
+            const functionCallsFromChunks = chunkObjs.flatMap((c: any) => Array.isArray(c?.functionCalls) ? c.functionCalls : []);
+            if (functionCallsFromChunks.length > 0) {
+              functionCallsFromChunks.forEach((call: any, idx: number) => {
+                let id = call?.id as string | undefined;
+                const name = call?.name || call?.function?.name || 'function';
+                if (!id) {
+                  // Synthesize a stable id from name + index if needed
+                  id = `${name}_${Date.now()}_${idx}`;
+                }
+                if (!seenToolCallIdsRef.current.has(id)) {
+                  seenToolCallIdsRef.current.add(id);
+                  logger.debug(COMPONENT_NAME, 'New tool_call detected in streaming (functionCalls array)', { id, name });
+                  appendMessage({
+                    actor: Actors.ASSISTANT,
+                    content: `Executing function ${name}...`,
+                    timestamp: Date.now(),
+                    messageType: 'function_call' as const,
+                    functionCalls: [{
+                      id,
+                      name,
+                      arguments: call?.arguments || call?.function?.arguments || {},
+                      status: call?.status || 'executing',
+                      timestamp: Date.now(),
+                    }],
+                  });
+                }
+              });
+            }
+
+            // Extract text deltas from chunk objects (OpenAI-style and custom)
+            const textPieces: string[] = [];
+            try {
+              chunkObjs.forEach((co: any) => {
+                if (typeof co?.content === 'string') textPieces.push(co.content);
+                if (co?.delta && typeof co.delta?.content === 'string') textPieces.push(co.delta.content);
+                if (Array.isArray(co?.choices)) {
+                  co.choices.forEach((ch: any) => {
+                    const d = ch?.delta || {};
+                    if (typeof d?.content === 'string') textPieces.push(d.content);
+                  });
+                }
+              });
+            } catch {}
+            const textToAppend = textPieces.join('');
+
             setMessages((prev) => {
               const updatedMessages = prev.map((msg) => {
                 if (msg.messageId !== streamingMessageId) return msg;
@@ -595,7 +805,7 @@ export const SidePanelApp = () => {
 
                 return {
                   ...msg,
-                  content: (msg.content || '') + (message.chunk.content || ''),
+                  content: (msg.content || '') + (typeof textToAppend === 'string' ? textToAppend : ''),
                   functionCalls: mergedCalls,
                 };
               });
@@ -636,7 +846,53 @@ export const SidePanelApp = () => {
 
             if (message.data) {
               finalContent = message.data.details || message.data.content || '';
-              finalFunctionCalls = message.data.functionCalls || [];
+
+              // Normalize potential function call sources from streaming completion payload
+              const normalizeEndCalls = (arr?: any[]) => {
+                if (!Array.isArray(arr)) return [] as any[];
+                const now = Date.now();
+                return arr.map((c: any, idx: number) => ({
+                  id: c?.id || `call_${idx}`,
+                  name: c?.name || c?.type || c?.function?.name || 'function',
+                  arguments: (() => {
+                    try {
+                      if (typeof c?.arguments === 'string') return JSON.parse(c.arguments);
+                      if (c?.arguments) return c.arguments;
+                      if (c?.params) return c.params;
+                      if (typeof c?.function?.arguments === 'string') return JSON.parse(c.function.arguments);
+                      return c?.function?.arguments || {};
+                    } catch {
+                      return { raw: c?.arguments ?? c?.function?.arguments };
+                    }
+                  })(),
+                  result: c?.result,
+                  status: (['pending','executing','completed','failed'] as const).includes(c?.status) ? c.status : 'executing',
+                  timestamp: c?.timestamp || now + idx,
+                }));
+              };
+
+              const fcFromEndActions = normalizeEndCalls(message.data.actions);
+              const fcFromEndToolCalls = normalizeEndCalls(message.data.tool_calls);
+              const fcFromEndFunctionCalls = normalizeEndCalls(message.data.functionCalls);
+              const currentMsg = messages.find(m => m.messageId === streamingMessageId);
+              const fcFromStream = normalizeEndCalls(currentMsg?.functionCalls as any[]);
+
+              // Merge and de-duplicate by (name + arguments JSON)
+              const merged = [
+                ...fcFromEndFunctionCalls,
+                ...fcFromEndActions,
+                ...fcFromEndToolCalls,
+                ...fcFromStream,
+              ];
+              // 只按 id 去重；没有 id 的调用一律保留，避免误伤“相同参数的重复调用”
+              const seenIds = new Set<string>();
+              finalFunctionCalls = merged.filter((c) => {
+                const id = c?.id ? String(c.id) : '';
+                if (!id) return true;
+                if (seenIds.has(id)) return false;
+                seenIds.add(id);
+                return true;
+              });
 
               logger.debug(COMPONENT_NAME, 'Streaming complete with data', {
                 streamingMessageId,
@@ -664,19 +920,33 @@ export const SidePanelApp = () => {
                       ...msg,
                       content: finalContent,
                       isStreaming: false,
-                      functionCalls: finalFunctionCalls,
-                      messageType: 'streaming_complete' as const,
+                      functionCalls: [], // 清空以避免把所有调用挤在一条消息里
+                      messageType: 'assistant_content' as const, // 用内容消息展示文本
                     }
                   : msg
               );
 
-              logger.debug(COMPONENT_NAME, 'Streaming message finalized', {
+              logger.debug(COMPONENT_NAME, 'Streaming message finalized (content separated)', {
                 finalContentLength: finalContent.length,
                 wasEmpty: finalContent.length === 0,
+                functionCallsSeparated: finalFunctionCalls.length,
               });
 
               return updatedMessages;
             });
+
+            // 将每个函数调用拆分成独立消息，避免只显示一条
+            if (finalFunctionCalls && finalFunctionCalls.length > 0) {
+              finalFunctionCalls.forEach((call, idx) => {
+                appendMessage({
+                  actor: Actors.ASSISTANT,
+                  content: `Executing function ${call?.name || 'function'}...`,
+                  timestamp: Date.now() + idx,
+                  messageType: 'function_call' as const,
+                  functionCalls: [call],
+                });
+              });
+            }
           } else {
             logger.error(COMPONENT_NAME, 'Streaming complete but no streaming message ID', {
               hasStreamingMessageId: !!streamingMessageId,
@@ -1446,22 +1716,37 @@ export const SidePanelApp = () => {
   const handleStopTask = useCallback(() => {
     logger.debug(COMPONENT_NAME, 'HandleStopTask called');
     try {
+      // Ignore any further streaming/tool/status messages until next user send
+      try { ignoreStreamingRef.current = true; } catch {}
+
       if (portRef.current) {
         portRef.current.postMessage({ type: 'cancel_task' });
         logger.info(COMPONENT_NAME, 'Stop task message sent');
       } else {
         logger.warn(COMPONENT_NAME, 'No active connection to send stop task');
       }
+
+      // Mark current streaming message as stopped/cancelled in UI
+      if (streamingMessageId) {
+        setMessages(prev => prev.map(msg =>
+          msg.messageId === streamingMessageId
+            ? { ...msg, isStreaming: false, messageType: 'streaming_error' as const, content: (msg.content || '') || 'Task stopped by user' }
+            : msg
+        ));
+        setStreamingMessageId(null);
+      }
+
       // Reset UI state regardless
       setInputEnabled(true);
       setShowStopButton(false);
+      resetReActStatus();
     } catch (error) {
       logger.error(COMPONENT_NAME, 'Error stopping task', { error });
       // Still reset UI state on error
       setInputEnabled(true);
       setShowStopButton(false);
     }
-  }, []);
+  }, [streamingMessageId, resetReActStatus]);
 
   const loadChatSessions = useCallback(async () => {
     try {

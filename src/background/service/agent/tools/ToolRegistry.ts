@@ -8,6 +8,7 @@ import type { AgentContext } from '../types';
 import preferenceService from '@/background/service/preference';
 import keyringService from '@/background/service/keyring';
 
+import { getClickableElements } from '@/background/browser/dom/service';
 const logger = createLogger('ToolRegistry');
 
 export interface ToolDefinition {
@@ -852,21 +853,59 @@ export class ToolRegistry {
 
     this.registerTool({
       name: 'hoverElement',
-      description: 'Hover over a web element to reveal dropdowns or tooltips',
+      description: 'Hover over a web element with enhanced mouse event simulation (nanobrowser-aligned)',
       parameters: [
         {
           type: 'string',
-          description: 'CSS selector for the element to hover over',
+          description: 'CSS selector or XPath for the element to hover over',
         },
         {
           type: 'number',
-          description: 'Optional: Duration to hover in milliseconds',
+          description: 'Optional: Duration to hover in milliseconds (default: 1000)',
           minimum: 100,
           maximum: 10000,
         },
+        {
+          type: 'boolean',
+          description: 'Scroll element into view before hovering (default: true)',
+        },
       ],
       required: ['selector'],
-      handler: this.createBrowserHandler('hoverElement'),
+      handler: async (params: any) => {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) throw new Error('No active tab available');
+
+        const result = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (p: any) => {
+            const bySelector = (sel: string): Element | null => { try { return document.querySelector(sel); } catch { return null; } };
+            const byXPath = (xp: string): Element | null => { try { const r = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null); return (r.singleNodeValue as Element) || null; } catch { return null; } };
+            const sel: string = String(p.selector || '');
+            const element = sel.startsWith('/') ? byXPath(sel) : bySelector(sel);
+            if (!element) return { success: false, error: 'Element not found' };
+            const el = element as HTMLElement;
+            if (p.scrollIntoView !== false) {
+              try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any }); } catch { try { el.scrollIntoView(); } catch {} }
+            }
+            const rect = el.getBoundingClientRect();
+            const cx = Math.max(0, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
+            const cy = Math.max(0, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
+            const fire = (type: string) => el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: cx, clientY: cy, view: window }));
+            fire('mousemove');
+            fire('mouseover');
+            fire('mouseenter');
+            if (p.duration && Number(p.duration) > 0) {
+              const end = Date.now() + Number(p.duration);
+              const step = () => { if (Date.now() < end) { fire('mousemove'); requestAnimationFrame(step); } };
+              requestAnimationFrame(step);
+            }
+            return { success: true };
+          },
+          args: [params]
+        });
+
+        return result[0]?.result || { success: false, error: 'Script execution failed' };
+      },
       category: 'browser',
       riskLevel: 'low',
       requiresConfirmation: false,
@@ -969,7 +1008,76 @@ export class ToolRegistry {
       requiresConfirmation: false,
     });
 
-    // Element selection tool (only one): highlightElement
+    // Element selection tool (only one): highlightElement will be registered after DOM tool
+
+    // Enhanced DOM clickable elements builder (nanobrowser-aligned)
+    this.registerTool({
+      name: 'getClickableElementsDOM',
+      description: 'Build comprehensive DOM tree and return interactive elements via enhanced background DOM service (nanobrowser-aligned with shadowRoot, enhanced XPath, performance metrics)',
+      parameters: [
+        { type: 'boolean', description: 'showHighlightElements: Draw overlay with numbered highlights (default: true)' },
+        { type: 'number', description: 'focusElement: Highlight index to focus (-1 for none, default: -1)' },
+        { type: 'number', description: 'viewportExpansion: Expand viewport detection area in pixels (default: 0)' },
+        { type: 'boolean', description: 'debugMode: Enable performance metrics and debug logging (default: false)' },
+      ],
+      required: [],
+      handler: async (params: any) => {
+        // Resolve target tab and URL
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) throw new Error('No active tab available');
+        const url = tab.url || 'about:blank';
+        const showHighlight = params?.[0] ?? params?.showHighlightElements ?? true;
+        const focusIndex = params?.[1] ?? params?.focusElement ?? -1;
+        const viewportExpansion = params?.[2] ?? params?.viewportExpansion ?? 0;
+        const debugMode = params?.[3] ?? params?.debugMode ?? false;
+
+        const domState = await getClickableElements(tab.id, url, showHighlight, focusIndex, viewportExpansion, debugMode);
+
+        // Enhanced serialization with better element data
+        const items: any[] = [];
+        const selectorMap: Map<number, any> = (domState as any).selectorMap;
+        if (selectorMap && typeof selectorMap.forEach === 'function') {
+          selectorMap.forEach((node: any, idx: number) => {
+            const bounds = node?.viewportCoordinates || node?.pageCoordinates;
+            const selector = node?.xpath || '';
+            const text = node?.textContent || (node?.getAllTextTillNextClickableElement ? node.getAllTextTillNextClickableElement(1) : '');
+            const attrs = node?.attributes || {};
+
+            items.push({
+              highlightIndex: idx,
+              selector,
+              element: {
+                tagName: node?.tagName,
+                textContent: text,
+                attributes: attrs,
+                type: attrs.type || '',
+                role: attrs.role || '',
+                id: attrs.id || '',
+                name: attrs.name || '',
+                className: attrs.class || ''
+              },
+              bounds,
+              isVisible: node?.isVisible,
+              isInteractive: node?.isInteractive,
+              isTopElement: node?.isTopElement,
+              isInViewport: node?.isInViewport,
+            });
+          });
+        }
+
+        // Include performance metrics if debug mode
+        const result: any = { success: true, data: { items, count: items.length } };
+        if (debugMode && (domState as any).perfMetrics) {
+          result.data.perfMetrics = (domState as any).perfMetrics;
+        }
+
+        return result;
+      },
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
     this.registerTool({
       name: 'highlightElement',
       description: "Highlight elements with numbered wireframe boxes. 'interactiveOnly' can be a kind string to control which elements: 'button' | 'clickable' | 'input' | 'link' | 'all'. Optionally pass 'selector' to highlight only one element, and 'limit' to cap results.",
@@ -989,6 +1097,46 @@ export class ToolRegistry {
       ],
       required: [],
       handler: this.createElementSelectionHandler('highlightElement'),
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    // Additional element selection helpers (content-script backed)
+    this.registerTool({
+      name: 'clearHighlights',
+      description: 'Clear all element highlights overlay on the active web page',
+      parameters: [],
+      required: [],
+      handler: this.createElementSelectionHandler('clearHighlights'),
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'highlightElements',
+      description: 'Highlight multiple elements by selector with optional labels',
+      parameters: [
+        { type: 'string', description: 'items: JSON string or array of { selector, type?, label? }' },
+      ],
+      required: [],
+      handler: this.createElementSelectionHandler('highlightElements'),
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'getInteractiveElements',
+      description: 'Scan and return interactive elements on the current page (debug/overlay supported)',
+      parameters: [
+        { type: 'string', description: 'elementType: optional kind (button|input|link|all)' },
+        { type: 'string', description: 'textFilter: optional text contains filter' },
+        { type: 'boolean', description: 'includeAttributes: whether to include attributes' },
+      ],
+      required: [],
+      handler: this.createElementSelectionHandler('getInteractiveElements'),
       category: 'browser',
       riskLevel: 'low',
       requiresConfirmation: false,
@@ -1016,6 +1164,55 @@ export class ToolRegistry {
       required: ['task', 'complexity'],
       handler: this.createMultiAgentHandler('createExecutionPlan'),
       category: 'system',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    // Enhanced scrollIntoView tool
+    this.registerTool({
+      name: 'scrollIntoView',
+      description: 'Scroll an element into view with enhanced options (nanobrowser-aligned)',
+      parameters: [
+        { type: 'string', description: 'selector: CSS selector or XPath of the element to scroll into view' },
+        { type: 'string', description: 'block: Vertical alignment (start, center, end, nearest). Default: center' },
+        { type: 'string', description: 'inline: Horizontal alignment (start, center, end, nearest). Default: center' },
+        { type: 'boolean', description: 'smooth: Use smooth scrolling animation. Default: false' },
+        { type: 'number', description: 'offset: Additional offset in pixels after scrolling. Default: 0' },
+      ],
+      required: ['selector'],
+      handler: async (params: any) => {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) throw new Error('No active tab available');
+
+        const result = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (sel: string, block: string, inline: string, smooth: boolean, offset: number) => {
+            const bySelector = (s: string): Element | null => { try { return document.querySelector(s); } catch { return null; } };
+            const byXPath = (xp: string): Element | null => { try { const r = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null); return (r.singleNodeValue as Element) || null; } catch { return null; } };
+            const element = sel.startsWith('/') ? byXPath(sel) : bySelector(sel);
+            if (!element) return { success: false, error: 'Element not found' };
+
+            const options: ScrollIntoViewOptions = {
+              block: (block as any) || 'center',
+              inline: (inline as any) || 'center',
+              behavior: smooth ? 'smooth' : 'auto'
+            };
+
+            element.scrollIntoView(options);
+
+            // Apply additional offset if specified
+            if (offset) {
+              setTimeout(() => window.scrollBy(0, offset), smooth ? 500 : 0);
+            }
+
+            return { success: true, element: element.tagName };
+          },
+          args: [params.selector, params.block || 'center', params.inline || 'center', Boolean(params.smooth), Number(params.offset || 0)]
+        });
+
+        return result[0]?.result || { success: false, error: 'Script execution failed' };
+      },
+      category: 'browser',
       riskLevel: 'low',
       requiresConfirmation: false,
     });
@@ -1164,21 +1361,33 @@ export class ToolRegistry {
 
       // Prevent accidental duplicate executions (skip for highlightElement to allow rapid refresh)
       if (actionName !== 'highlightElement') {
-        const normalizedUrl = (params && typeof params.url === 'string') ? String(params.url).trim().toLowerCase() : '';
-        const duplicateKey = actionName === 'navigateToUrl'
-          ? `${actionName}_${normalizedUrl}`
-          : `${actionName}_${JSON.stringify(params)}`;
-        const lastExecution = this.executionTracker.get(duplicateKey);
-        const duplicateInterval = actionName === 'navigateToUrl' ? 5000 : 1500; // 5s for navigation, 1.5s for others
-        if (lastExecution && (Date.now() - lastExecution) < duplicateInterval) {
-          logger.warn(`Preventing duplicate execution of ${actionName}`, {
-            params,
-            timeSinceLastExecution: Date.now() - lastExecution,
-            duplicateInterval
-          });
-          throw new Error(`Duplicate execution prevented for ${actionName}`);
+        // Allow UI-triggered actions to bypass dedup to keep panel responsive
+        const bypassDedup = params?.noDedup === true || params?._source === 'ElementSelector' || params?._source === 'ui' || params?.__from === 'ui';
+        if (!bypassDedup) {
+          const normalizedUrl = (params && typeof params.url === 'string') ? String(params.url).trim().toLowerCase() : '';
+          const duplicateKey = actionName === 'navigateToUrl'
+            ? `${actionName}_${normalizedUrl}`
+            : `${actionName}_${JSON.stringify(params)}`;
+          const lastExecution = this.executionTracker.get(duplicateKey);
+          // Finer-grained intervals per action
+          const intervalMap: Record<string, number> = {
+            navigateToUrl: 5000,
+            clickElement: 300,
+            hoverElement: 300,
+            fillForm: 500,
+            scrollPage: 300,
+          };
+          const duplicateInterval = intervalMap[actionName] ?? 1500;
+          if (lastExecution && (Date.now() - lastExecution) < duplicateInterval) {
+            logger.warn(`Preventing duplicate execution of ${actionName}`, {
+              params,
+              timeSinceLastExecution: Date.now() - lastExecution,
+              duplicateInterval
+            });
+            throw new Error(`Duplicate execution prevented for ${actionName}`);
+          }
+          this.executionTracker.set(duplicateKey, Date.now());
         }
-        this.executionTracker.set(duplicateKey, Date.now());
       }
 
       try {
@@ -1367,10 +1576,22 @@ export class ToolRegistry {
           resultData: result.data ? JSON.stringify(result.data).substring(0, 200) : undefined,
         });
 
+        // Shape result for LLM ReAct friendliness (especially for highlightElement)
+        let llmResult = result.data;
+        if (actionName === 'highlightElement') {
+          const elements = (result.data?.elements || []) as Array<{ selector: string; tag?: string; text?: string }>;
+          llmResult = {
+            elements,
+            count: elements.length,
+            note: 'Use clickElement with an element.selector to click, or input text with ELEMENT_INPUT_SELECTOR on a specific selector. Choose index by content/position.',
+          };
+        }
+
         return {
           action: actionName,
           params: processedParams,
-          result: result.data,
+          data: llmResult,
+          result: llmResult,
           success: result.success,
           timestamp: Date.now(),
           error: result.error,
@@ -1440,7 +1661,8 @@ export class ToolRegistry {
         return {
           action: actionName,
           params,
-          result: result.data,
+          data: result?.data ?? null,
+          result: result?.data ?? null,
           success: result.success,
           timestamp: Date.now(),
           error: result.error,
@@ -1538,12 +1760,15 @@ export class ToolRegistry {
           getHighlightedElements: 'ELEMENT_SELECTOR_GET_HIGHLIGHTS',
           analyzeElement: 'ELEMENT_ANALYZE',
           highlightElement: 'ELEMENT_HIGHLIGHT',
+          clearHighlights: 'ELEMENT_SELECTOR_CLEAR',
+          highlightElements: 'ELEMENT_HIGHLIGHT_ELEMENTS',
+          getInteractiveElements: 'ELEMENT_DEBUG_SCAN_AND_LOG',
         };
 
         const messageType = messageTypes[actionName] || actionName.toUpperCase();
 
         // Send message to content script
-        let response;
+        let response: any;
         try {
           response = await chrome.tabs.sendMessage(targetTab.id!, {
             type: messageType,
@@ -1565,18 +1790,49 @@ export class ToolRegistry {
         }
 
         // Store last highlighted candidates for the tab so agent can use them next
+        let elementsData = response?.data;
         try {
-          if (actionName === 'highlightElement' && response?.data?.elements && targetTab.id) {
-            this.lastHighlightedByTabId.set(targetTab.id, response.data.elements);
+          if (actionName === 'highlightElement') {
+            // If no elements returned, try to fetch current highlights
+            const elems = response?.data?.elements;
+            if (!elems || !Array.isArray(elems)) {
+              try {
+                const fetchResp = await chrome.tabs.sendMessage(targetTab.id!, {
+                  type: 'ELEMENT_SELECTOR_GET_HIGHLIGHTS',
+                  params: { includeAttributes: true }
+                });
+                if (fetchResp?.success) {
+                  elementsData = fetchResp.data;
+                }
+              } catch (e) {
+                logger.warn('Fallback fetch of highlights failed', e);
+              }
+            }
+
+            if (elementsData?.elements && targetTab.id) {
+              this.lastHighlightedByTabId.set(targetTab.id, elementsData.elements);
+            }
           }
         } catch (storeErr) {
           logger.warn('Failed to store last highlighted candidates', storeErr);
         }
 
+        // Shape result for LLM
+        let llmResult = elementsData;
+        if (actionName === 'highlightElement') {
+          const elements = (elementsData?.elements || []) as Array<any>;
+          llmResult = {
+            elements,
+            count: elements.length,
+            note: 'Choose the correct element by its text/aria/title/icon cues, then call clickElement with element.selector. For input, use inputElement with selector.',
+          };
+        }
+
         return {
           action: actionName,
           params,
-          result: response.data,
+          data: llmResult,
+          result: llmResult,
           success: true,
           timestamp: Date.now(),
           tabId: targetTab.id,
@@ -1887,6 +2143,35 @@ export class ToolRegistry {
     return paramMappings[toolName]?.[index] || `param${index + 1}`;
   }
 
+
+  private ensureStandardResult(name: string, params: any, raw: any) {
+    // Normalize to a standard shape with 'data' always present
+    try {
+      if (!raw || typeof raw !== 'object') {
+        return { action: name, params, data: null, result: null, success: false, timestamp: Date.now(), error: 'Empty result' };
+      }
+      if (raw.data !== undefined) {
+        return {
+          action: raw.action || name,
+          params: raw.params || params,
+          data: raw.data,
+          result: raw.result ?? raw.data,
+          success: raw.success !== false,
+          timestamp: raw.timestamp || Date.now(),
+          error: raw.error,
+          ...('tabId' in raw ? { tabId: raw.tabId } : {}),
+          ...('tabUrl' in raw ? { tabUrl: raw.tabUrl } : {}),
+        };
+      }
+      if (raw.result !== undefined) {
+        return { action: raw.action || name, params: raw.params || params, data: raw.result, result: raw.result, success: raw.success !== false, timestamp: raw.timestamp || Date.now(), error: raw.error };
+      }
+      return { action: name, params, data: raw, result: raw, success: raw.success !== false, timestamp: Date.now(), error: raw.error };
+    } catch (e) {
+      return { action: name, params, data: null, result: null, success: false, timestamp: Date.now(), error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
   async executeTool(name: string, params: any): Promise<any> {
     const tool = this.tools.get(name);
     if (!tool) {
@@ -1898,20 +2183,29 @@ export class ToolRegistry {
       const validation = await this.validateElementSelectionPrerequisites();
       if (!validation.valid) {
         return {
+          action: name,
+          params,
+          data: null,
+          result: null,
           success: false,
           error: validation.error,
-          result: null
+          timestamp: Date.now(),
         };
       }
     }
 
     try {
       logger.info(`Executing tool: ${name}`, params);
-      const result = await tool.handler(params);
+      const rawResult = await tool.handler(params);
+
+      // Normalize to ensure 'data' is always present
+      const result = this.ensureStandardResult(name, params, rawResult);
 
       // Monitor tab state after tool execution
       await this.monitorTabStateAfterTool(name, result);
-      logger.info(`Tool execution completed: ${name}`);
+      logger.info(`Tool execution completed: ${name}`, {
+        hasData: !!result?.data,
+      });
 
       // Append tool result to chat history as a 'user' message (global guarantee)
       try {

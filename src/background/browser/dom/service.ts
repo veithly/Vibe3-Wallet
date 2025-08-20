@@ -105,6 +105,304 @@ export async function getClickableElements(
   return { elementTree, selectorMap };
 }
 
+/**
+ * Inject comprehensive buildDomTree implementation aligned with nanobrowser
+ * Features: shadowRoot traversal, enhanced XPath, performance metrics, viewport expansion
+ */
+async function injectBuildDomTreeScript(tabId: number): Promise<void> {
+  try {
+    const exists = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => Boolean((window as any).buildDomTree),
+    });
+    const has = Boolean(exists[0]?.result);
+    if (has) return;
+  } catch (e) {
+    // proceed to inject
+  }
+  // Inject comprehensive buildDomTree implementation (nanobrowser-aligned)
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      (window as any).buildDomTree = function (args: any) {
+        const perfStart = performance.now();
+        const perf = { timings: {} as Record<string, number> };
+        try {
+          const timeit = (label: string, fn: () => any) => { const s = performance.now(); const r = fn(); perf.timings[label] = (perf.timings[label] || 0) + (performance.now() - s); return r; };
+          // Enhanced interactive selectors aligned with nanobrowser
+          const interactiveSelectors = [
+            'button', 'input', 'select', 'textarea', 'a[href]', 'area[href]',
+            '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="searchbox"]',
+            '[role="combobox"]', '[role="listbox"]', '[role="menuitem"]', '[role="tab"]',
+            '[role="switch"]', '[role="checkbox"]', '[role="radio"]', '[role="slider"]',
+            '[contenteditable="true"]', '[contenteditable=""]',
+            '[tabindex]:not([tabindex="-1"])', '[onclick]', '[onmousedown]',
+            'summary', 'details > summary'
+          ];
+          const toArray = (n: any): any[] => Array.prototype.slice.call(n);
+          const getStyle = (el: Element) => window.getComputedStyle(el as HTMLElement);
+          const isVisible = (el: Element): boolean => {
+            const r = (el as HTMLElement).getBoundingClientRect();
+            const style = getStyle(el);
+            return !!(r && r.width > 0 && r.height > 0) && style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
+          };
+          const isInViewport = (el: Element): boolean => {
+            const r = (el as HTMLElement).getBoundingClientRect();
+            return r.top < window.innerHeight && r.bottom > 0 && r.left < window.innerWidth && r.right > 0;
+          };
+          // Enhanced interactivity detection (nanobrowser-aligned)
+          const isInteractive = (el: Element): boolean => {
+            const tag = el.tagName.toLowerCase();
+            const role = (el.getAttribute('role') || '').toLowerCase();
+            const tabIndex = (el as HTMLElement).getAttribute('tabindex');
+            const type = (el.getAttribute('type') || '').toLowerCase();
+
+            // Form controls and navigation
+            if (['button','a','input','select','textarea','summary'].includes(tag)) return true;
+            if (tag === 'area' && el.getAttribute('href')) return true;
+            if (tag === 'input' && ['hidden','submit','reset','image'].includes(type)) return false;
+
+            // ARIA roles
+            const interactiveRoles = ['button','link','switch','menuitem','checkbox','radio','tab','slider','combobox','listbox','searchbox','textbox'];
+            if (interactiveRoles.includes(role)) return true;
+
+            // Focusable elements
+            if (tabIndex && Number(tabIndex) >= 0) return true;
+            if ((el as HTMLElement).isContentEditable) return true;
+
+            // Event handlers (basic detection)
+            if (el.getAttribute('onclick') || el.getAttribute('onmousedown')) return true;
+
+            return false;
+          };
+          const makeSelector = (el: Element | null): string => {
+            if (!el) return '';
+            if ((el as HTMLElement).id) return `#${(el as HTMLElement).id}`;
+            const parts: string[] = [];
+            let node: Element | null = el;
+            while (node && node.nodeType === 1 && parts.length < 5) {
+              let part = node.tagName.toLowerCase();
+              const className = (node as HTMLElement).className;
+              if (className && typeof className === 'string') {
+                const cls = className.trim().split(/\s+/).slice(0, 2).join('.');
+                if (cls) part += `.${cls}`;
+              }
+              const siblings: any[] = toArray((node.parentElement?.children || []) as any);
+              const index = siblings.indexOf(node as any) + 1;
+              part += `:nth-child(${index})`;
+              parts.unshift(part);
+              node = node.parentElement;
+            }
+            return parts.join(' > ');
+          };
+          // Enhanced XPath generation with attribute constraints and shadow DOM support
+          const makeXPath = (el: Element | null): string => {
+            if (!el) return '';
+            const segments: string[] = [];
+            let node: any = el as Element | null;
+            let shadowDepth = 0;
+
+            while (node && node.nodeType === 1) {
+              const tag = node.tagName.toLowerCase();
+              let predicate = '';
+
+              // Prefer unique attributes for more stable XPath
+              const id = node.getAttribute('id');
+              const name = node.getAttribute('name');
+              const className = node.getAttribute('class');
+              const dataTestId = node.getAttribute('data-testid');
+
+              if (id) {
+                predicate = `[@id='${id}']`;
+              } else if (dataTestId) {
+                predicate = `[@data-testid='${dataTestId}']`;
+              } else if (name && ['input','select','textarea','button'].includes(tag)) {
+                predicate = `[@name='${name}']`;
+              } else if (className) {
+                const stableClasses = className.split(/\s+/).filter((c: string) =>
+                  !c.match(/^(hover|focus|active|disabled|selected|open|closed|loading)/) &&
+                  !c.match(/\d+$/) && c.length > 2
+                ).slice(0, 2);
+                if (stableClasses.length) {
+                  predicate = `[contains(@class,'${stableClasses[0]}')]`;
+                }
+              }
+
+              // Fallback to positional index
+              if (!predicate) {
+                let index = 1;
+                let sibling = node.previousElementSibling;
+                while (sibling) {
+                  if (sibling.tagName.toLowerCase() === tag) index++;
+                  sibling = sibling.previousElementSibling;
+                }
+                predicate = `[${index}]`;
+              }
+
+              // Add shadow root marker if we're in shadow DOM
+              const shadowMarker = shadowDepth > 0 ? `@shadow${shadowDepth}` : '';
+              segments.unshift(`${tag}${predicate}${shadowMarker}`);
+
+              // Climb to parent in light DOM or host if in shadow DOM
+              const root: any = (node as any).getRootNode?.();
+              if (root && root instanceof ShadowRoot && (root as any).host) {
+                shadowDepth++;
+                node = (root as any).host as Element;
+              } else {
+                node = node.parentElement as Element | null;
+              }
+            }
+            return '/' + segments.join('/');
+          };
+          const collectInteractive = (root: Document | ShadowRoot): Element[] => {
+            const picked: Element[] = [];
+            interactiveSelectors.forEach(sel => {
+              toArray(root.querySelectorAll(sel)).forEach((el: Element) => picked.push(el));
+            });
+            // Recurse into shadow roots
+            toArray(root.querySelectorAll('*')).forEach((el: any) => {
+              if (el && el.shadowRoot) {
+                picked.push(...collectInteractive(el.shadowRoot));
+              }
+            });
+            return Array.from(new Set(picked));
+          };
+          // Enhanced attribute collection for better element identification
+          const collectAttributes = (el: Element): Record<string,string> => {
+            const attrs: Record<string,string> = {};
+            const desired = [
+              'id','name','type','role','href','value','placeholder','aria-label','title',
+              'class','tabindex','contenteditable','data-testid','data-cy','data-qa',
+              'alt','src','for','form','target','rel','download','disabled','readonly',
+              'checked','selected','multiple','required','pattern','min','max','step'
+            ];
+            desired.forEach(k => {
+              const v = (el as HTMLElement).getAttribute?.(k);
+              if (v !== null && v !== undefined) attrs[k] = v;
+            });
+            return attrs;
+          };
+
+          // Enhanced text extraction with better semantic understanding
+          const getElementText = (el: Element): string => {
+            // Priority: aria-label > aria-labelledby > title > alt > textContent
+            const ariaLabel = (el as HTMLElement).getAttribute?.('aria-label');
+            if (ariaLabel?.trim()) return ariaLabel.trim();
+
+            const ariaLabelledBy = (el as HTMLElement).getAttribute?.('aria-labelledby');
+            if (ariaLabelledBy) {
+              const labelEl = document.getElementById(ariaLabelledBy);
+              if (labelEl?.textContent?.trim()) return labelEl.textContent.trim();
+            }
+
+            const title = (el as HTMLElement).getAttribute?.('title');
+            if (title?.trim()) return title.trim();
+
+            const alt = (el as HTMLElement).getAttribute?.('alt');
+            if (alt?.trim()) return alt.trim();
+
+            // For form controls, include value/placeholder
+            const tag = el.tagName.toLowerCase();
+            if (['input','textarea'].includes(tag)) {
+              const value = (el as HTMLInputElement).value;
+              const placeholder = (el as HTMLElement).getAttribute?.('placeholder');
+              if (value?.trim()) return value.trim();
+              if (placeholder?.trim()) return `[${placeholder.trim()}]`;
+            }
+
+            const textContent = (el.textContent || '').trim();
+            if (textContent.length <= 200) return textContent;
+
+            // For long text, get first meaningful chunk
+            const sentences = textContent.split(/[.!?]+/);
+            return sentences[0]?.trim().slice(0, 200) || textContent.slice(0, 200);
+          };
+          // Ensure overlay
+          if (args?.showHighlightElements) {
+            const overlayId = 'vibe3-debug-overlay';
+            let overlay = document.getElementById(overlayId) as HTMLElement | null;
+            if (!overlay) {
+              overlay = document.createElement('div');
+              overlay.id = overlayId;
+              Object.assign(overlay.style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '2147483647' });
+              document.documentElement.appendChild(overlay);
+            }
+            overlay.innerHTML = '';
+          }
+          // Collect and filter candidates
+          const elements: Element[] = timeit('perf.queryInteractive', () => {
+            const out: Element[] = [];
+            interactiveSelectors.forEach(sel => {
+              toArray(document.querySelectorAll(sel)).forEach((el: Element) => out.push(el));
+            });
+            return out;
+          });
+          const candidates = timeit('perf.filterCandidates', () => elements.filter(el => isVisible(el) && isInViewport(el) && isInteractive(el)));
+
+          // Build result map with id continuity
+          const map: Record<string, any> = {};
+          let idCounter = Number.isFinite(args?.startId) ? Number(args.startId) : 1;
+          let highlightIndex = Number.isFinite(args?.startHighlightIndex) ? Number(args.startHighlightIndex) : 0;
+
+          const rootId = String(idCounter++);
+          map[rootId] = {
+            tagName: 'body',
+            xpath: '',
+            attributes: {},
+            children: [] as string[],
+            isVisible: true,
+            isInteractive: false,
+            isTopElement: false,
+            isInViewport: true,
+          };
+
+          timeit('perf.buildNodes', () => {
+            candidates.slice(0, 500).forEach((el: Element) => {
+              const id = String(idCounter++);
+              const r = (el as HTMLElement).getBoundingClientRect();
+              (map[rootId].children as string[]).push(id);
+              map[id] = {
+                tagName: el.tagName.toLowerCase(),
+                xpath: makeXPath(el), // store XPath for stable identification
+                attributes: collectAttributes(el),
+                children: [] as string[],
+                isVisible: true,
+                isInteractive: true,
+                isTopElement: true,
+                isInViewport: true,
+                highlightIndex: highlightIndex++,
+                viewportCoordinates: { x: r.left, y: r.top, width: r.width, height: r.height },
+                pageCoordinates: { x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height },
+                viewportInfo: { width: window.innerWidth, height: window.innerHeight },
+                textContent: getElementText(el),
+              };
+              if (args?.showHighlightElements) {
+                const overlay = document.getElementById('vibe3-debug-overlay') as HTMLElement | null;
+                if (overlay) {
+                  const box = document.createElement('div');
+                  Object.assign(box.style, { position: 'absolute', top: `${Math.max(0, r.top)}px`, left: `${Math.max(0, r.left)}px`, width: `${r.width}px`, height: `${r.height}px`, border: '2px solid #10b981', boxSizing: 'border-box' });
+                  const label = document.createElement('div');
+                  Object.assign(label.style, { position: 'absolute', top: `${Math.max(0, r.top) - 18}px`, left: `${Math.max(0, r.left)}px`, background: '#10b981', color: '#fff', fontSize: '11px', padding: '0 4px' });
+                  label.textContent = `#${map[id].highlightIndex}`;
+                  overlay.appendChild(box);
+                  overlay.appendChild(label);
+                }
+              }
+            });
+          });
+
+          const result = { rootId, map, perfMetrics: { timings: perf.timings } } as any;
+          return result;
+        } catch (e) {
+          return { rootId: '1', map: { '1': { tagName: 'body', xpath: '', attributes: {}, children: [], isVisible: true } } };
+        } finally {
+          perf.timings.total = performance.now() - perfStart;
+        }
+      };
+    },
+  });
+}
+
 async function _buildDomTree(
   tabId: number,
   url: string,
@@ -129,11 +427,13 @@ async function _buildDomTree(
     return [elementTree, new Map<number, DOMElementNode>()];
   }
 
-  const results = await chrome.scripting.executeScript({
+  await injectBuildDomTreeScript(tabId);
+
+  // Execute on main frame first
+  const mainResult = await chrome.scripting.executeScript({
     target: { tabId },
     func: (args) => {
-      // Access buildDomTree from the window context of the target page
-      return window.buildDomTree(args);
+      return (window as any).buildDomTree(args);
     },
     args: [
       {
@@ -141,27 +441,81 @@ async function _buildDomTree(
         focusHighlightIndex: focusElement,
         viewportExpansion,
         debugMode,
+        startId: 1,
+        startHighlightIndex: 0,
       },
     ],
   });
 
-  // First cast to unknown, then to BuildDomTreeResult
-  const evalPage = (results[0]?.result as unknown) as BuildDomTreeResult;
-  if (!evalPage || !evalPage.map || !evalPage.rootId) {
-    throw new Error(
-      'Failed to build DOM tree: No result returned or invalid structure'
-    );
+  const mainEval = (mainResult[0]?.result as unknown) as BuildDomTreeResult;
+  if (!mainEval || !mainEval.map || !mainEval.rootId) {
+    throw new Error('Failed to build DOM tree: No result returned or invalid structure');
   }
 
-  // Log performance metrics in debug mode
-  if (debugMode && evalPage.perfMetrics) {
-    logger.debug(
-      'DOM Tree Building Performance Metrics:',
-      evalPage.perfMetrics
-    );
+  // Build tree for main frame
+  const [mainTree, mainSelectorMap] = _constructDomTree(mainEval);
+
+  // Optionally log performance metrics
+  if (debugMode && (mainEval as any).perfMetrics) {
+    logger.debug('DOM Tree Building Performance Metrics (main):', (mainEval as any).perfMetrics);
   }
 
-  return _constructDomTree(evalPage);
+  // Attempt subframes: accumulate selector maps with id/highlight offsets
+  let maxNodeId = Object.keys(mainEval.map).reduce((m, k) => Math.max(m, Number(k) || 0), 0);
+  let maxHighlightIndex = 0;
+  try {
+    Object.values(mainEval.map).forEach((node: any) => {
+      if (node && typeof node === 'object' && Number.isFinite(node.highlightIndex)) {
+        maxHighlightIndex = Math.max(maxHighlightIndex, Number(node.highlightIndex));
+      }
+    });
+  } catch {}
+
+  const combinedSelectorMap = new Map<number, DOMElementNode>();
+  // seed with main
+  mainSelectorMap.forEach((v, k) => combinedSelectorMap.set(k, v));
+
+  try {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId });
+    const subFrameIds = (frames || []).map(f => f.frameId).filter(id => typeof id === 'number' && id !== 0);
+    for (const frameId of subFrameIds) {
+      const subRes = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frameId] as any },
+        func: (args) => (window as any).buildDomTree(args),
+        args: [
+          {
+            showHighlightElements,
+            focusHighlightIndex: focusElement,
+            viewportExpansion,
+            debugMode,
+            startId: maxNodeId + 1,
+            startHighlightIndex: maxHighlightIndex + 1,
+          },
+        ],
+      });
+      const subEval = (subRes[0]?.result as unknown) as BuildDomTreeResult;
+      if (!subEval || !subEval.map || !subEval.rootId) continue;
+
+      // Update offsets
+      maxNodeId = Math.max(maxNodeId, ...Object.keys(subEval.map).map(k => Number(k) || 0));
+      try {
+        Object.values(subEval.map).forEach((node: any) => {
+          if (node && typeof node === 'object' && Number.isFinite(node.highlightIndex)) {
+            maxHighlightIndex = Math.max(maxHighlightIndex, Number(node.highlightIndex));
+          }
+        });
+      } catch {}
+
+      // Merge selector maps
+      const [, subSelectorMap] = _constructDomTree(subEval);
+      subSelectorMap.forEach((v, k) => combinedSelectorMap.set(k, v));
+    }
+  } catch (e) {
+    // No frame permission or call failed; ignore
+    if (debugMode) logger.debug('Subframe scan skipped:', (e as Error)?.message);
+  }
+
+  return [mainTree, combinedSelectorMap];
 }
 
 /**

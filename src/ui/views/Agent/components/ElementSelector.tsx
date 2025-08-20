@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { createLogger } from '@/utils/logger';
+import { CDPStatusIndicator } from './CDPStatusIndicator';
 
 const logger = createLogger('ElementSelector');
 
@@ -120,268 +121,33 @@ export const ElementSelector: React.FC<ElementSelectorProps> = ({
   const [filterText, setFilterText] = useState<string>('');
   const [elementType, setElementType] = useState<string>('');
   const [selectedItem, setSelectedItem] = useState<ElementHighlight | null>(null);
-  const [inputValue, setInputValue] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [scanMode, setScanMode] = useState<'interactive' | 'all'>('interactive');
 
   const scanInteractive = useCallback(async () => {
-    logger.info('Scanning interactive elements');
+    logger.info('Scanning interactive elements [nanobrowser mode]');
     logger.info('[ElementSelector] scanInteractive start', { activeTabId, scanMode, elementType, filterText });
     if (!activeTabId) return;
     setLoading(true);
     try {
-
-
-      // Ping content script to ensure availability before querying
-      let canProceed = true;
-      try {
-        const pong = await chrome.tabs.sendMessage(activeTabId, { type: 'PING' });
-        // eslint-disable-next-line no-console
-        console.info('[ElementSelector][Scan] Content script PONG:', pong);
-      } catch (e) {
-        canProceed = false;
-        // eslint-disable-next-line no-console
-        console.warn('[ElementSelector][Scan] Content script not available on this tab. Please open a http/https/file page.', e);
-      }
-
-      if (!canProceed) {
-        // Fallback: execute in page to force scan/log/highlight when content script is unavailable
-        try {
-          const exec = await chrome.scripting.executeScript({
-            target: { tabId: activeTabId, allFrames: true },
-            func: (scanAll: boolean, textFilter: string) => {
-              const toArray = (n: any): any[] => Array.prototype.slice.call(n);
-              const isVisible = (el: Element): boolean => {
-                const rect = (el as HTMLElement).getBoundingClientRect();
-                return !!(rect && rect.width && rect.height);
-              };
-              const makeSelector = (el: Element | null): string => {
-                if (!el) return '';
-                if ((el as HTMLElement).id) return `#${(el as HTMLElement).id}`;
-                const parts: string[] = [];
-                let node: Element | null = el;
-                while (node && node.nodeType === 1 && parts.length < 5) {
-                  let part = node.tagName.toLowerCase();
-                  const className = (node as HTMLElement).className;
-                  if (className && typeof className === 'string') {
-                    const cls = className.trim().split(/\s+/).slice(0, 2).join('.');
-                    if (cls) part += `.${cls}`;
-                  }
-                  const siblings: any[] = toArray(node.parentElement?.children || []);
-                  const index = siblings.indexOf(node as any) + 1;
-                  part += `:nth-child(${index})`;
-                  parts.unshift(part);
-                  node = node.parentElement;
-                }
-                return parts.join(' > ');
-              };
-              const interactiveSelectors = [
-                'button','input','select','textarea','a[href]',
-                '[role="button"]','[role="link"]','[role="textbox"]',
-                '[contenteditable="true"]','[tabindex]:not([tabindex="-1"])'
-              ];
-              let overlay = document.getElementById('vibe3-debug-overlay');
-              if (!overlay) {
-                overlay = document.createElement('div');
-                overlay.id = 'vibe3-debug-overlay';
-                Object.assign(overlay.style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '2147483647' });
-                document.documentElement.appendChild(overlay);
-              }
-              overlay!.innerHTML = '';
-              const allEls = toArray(document.querySelectorAll('*'))
-                .filter((el: Element) => isVisible(el))
-                .map((el: Element) => ({ selector: makeSelector(el), tagName: el.tagName.toLowerCase(), textContent: (el.textContent || '').trim().slice(0, 200) }));
-              const interEls: Element[] = (scanAll ? toArray(document.querySelectorAll('*')) : []);
-              if (!scanAll) {
-                interactiveSelectors.forEach(sel => {
-                  toArray(document.querySelectorAll(sel)).forEach((el: Element) => interEls.push(el));
-                });
-              }
-              const interFiltered = interEls
-                .filter((el: Element) => isVisible(el))
-                .filter((el: Element) => !textFilter || (el.textContent || '').toLowerCase().includes(String(textFilter).toLowerCase()));
-              interFiltered.forEach((el: Element) => {
-                const r = (el as HTMLElement).getBoundingClientRect();
-                const box = document.createElement('div');
-                Object.assign(box.style, { position: 'absolute', top: `${Math.max(0, r.top)}px`, left: `${Math.max(0, r.left)}px`, width: `${r.width}px`, height: `${r.height}px`, border: '2px solid #10b981', boxSizing: 'border-box' });
-                overlay!.appendChild(box);
-              });
-              console.info('[ElementSelector][Page][ExecuteScript] Tab:', { url: location.href, title: document.title });
-              console.info('[ElementSelector][Page][ExecuteScript] All elements:', allEls);
-              console.info('[ElementSelector][Page][ExecuteScript] Interactive count:', interFiltered.length);
-              // return interactive elements with bounds for UI list
-              const interactive = interFiltered.slice(0, 500).map((el: Element, idx: number) => {
-                const r = (el as HTMLElement).getBoundingClientRect();
-                return {
-                  selector: makeSelector(el),
-                  element: { tagName: el.tagName.toLowerCase(), textContent: (el.textContent || '').trim().slice(0, 100) },
-                  bounds: { top: r.top, left: r.left, width: r.width, height: r.height },
-                  isVisible: true,
-                };
-              });
-              return { interactive, allCount: allEls.length };
-            },
-            args: [scanMode === 'all', filterText.trim()],
-          });
-          const frames = Array.isArray(exec) ? exec : [];
-          const merged: any[] = [];
-          for (const r of frames) {
-            if (r && r.result && Array.isArray(r.result.interactive)) {
-              merged.push(...r.result.interactive);
-            }
-          }
-          setElements(merged as any);
-          setHighlightedElements(merged as any);
-          try {
-            const tab = await chrome.tabs.get(activeTabId);
-            console.info('[ElementSelector][Scan] Active Tab:', { id: tab.id, url: tab.url, title: tab.title, status: tab.status, audible: (tab as any).audible, discarded: (tab as any).discarded });
-            console.info('[ElementSelector][Scan] Elements:', merged);
-          } catch {}
-        } catch (e) {
-          logger.error('Fallback executeScript failed', e);
-        }
-        setLoading(false);
-        return;
-      }
-
-      // Content script available: ensure highlight overlay via content script then scan
-      try {
-        await chrome.tabs.sendMessage(activeTabId, { type: 'ELEMENT_SELECTOR_CLEAR' });
-      } catch {}
-      await chrome.tabs.sendMessage(activeTabId, { type: 'ELEMENT_SELECTOR_ACTIVATE', options: { mode: 'highlight' } });
-
-      // New flow: Use toolRegistry highlightElement with interactive kind and filter
+      // Prefer backend DOM service (nanobrowser-style). It will inject buildDomTree if missing and draw overlay.
       let items: any[] = [];
       try {
-        const kind = scanMode === 'all' ? 'all' : 'clickable';
-        const toolRes = await executeTool('highlightElement', { interactiveOnly: kind, limit: 120 });
-        const candidates = toolRes?.elements || [];
-        if (Array.isArray(candidates) && candidates.length) {
-          items = candidates.map((c: any) => ({ selector: c.selector, element: { tagName: c.tag, textContent: c.text } }));
-        }
+        const toolRes = await executeTool('getClickableElementsDOM', { showHighlightElements: true, debugMode: false });
+        const data = toolRes?.data || toolRes;
+        items = Array.isArray(data?.items) ? data.items : [];
       } catch (e) {
-        logger.warn('highlightElement tool execution failed', e);
-      }
-
-      // Fallback: execute in page to force scan/log/highlight even if content-script path fails
-      if (!items.length) {
-        try {
-          const exec = await chrome.scripting.executeScript({
-            target: { tabId: activeTabId },
-            func: (scanAll: boolean, textFilter: string) => {
-              const toArray = (n: any): any[] => Array.prototype.slice.call(n);
-              const isVisible = (el: Element): boolean => {
-                const rect = (el as HTMLElement).getBoundingClientRect();
-                return !!(rect && rect.width && rect.height);
-              };
-              const makeSelector = (el: Element | null): string => {
-                if (!el) return '';
-                if ((el as HTMLElement).id) return `#${(el as HTMLElement).id}`;
-                const parts: string[] = [];
-                let node: Element | null = el;
-                while (node && node.nodeType === 1 && parts.length < 5) {
-                  let part = node.tagName.toLowerCase();
-                  const className = (node as HTMLElement).className;
-                  if (className && typeof className === 'string') {
-                    const cls = className.trim().split(/\s+/).slice(0, 2).join('.');
-                    if (cls) part += `.${cls}`;
-                  }
-                  const siblings: any[] = toArray(node.parentElement?.children || []);
-                  const index = siblings.indexOf(node as any) + 1;
-                  part += `:nth-child(${index})`;
-                  parts.unshift(part);
-                  node = node.parentElement;
-                }
-                return parts.join(' > ');
-              };
-              const interactiveSelectors = [
-                'button','input','select','textarea','a[href]',
-                '[role="button"]','[role="link"]','[role="textbox"]',
-                '[contenteditable="true"]','[tabindex]:not([tabindex="-1"])'
-              ];
-              // Build overlay
-              let overlay = document.getElementById('vibe3-debug-overlay');
-              if (!overlay) {
-                overlay = document.createElement('div');
-                overlay.id = 'vibe3-debug-overlay';
-                Object.assign(overlay.style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '2147483647' });
-                document.documentElement.appendChild(overlay);
-              }
-              overlay!.innerHTML = '';
-
-              const allEls = toArray(document.querySelectorAll('*'))
-                .filter((el) => isVisible(el))
-                .map((el) => ({
-                  selector: makeSelector(el),
-                  tagName: el.tagName.toLowerCase(),
-                  textContent: (el.textContent || '').trim().slice(0, 200),
-                }));
-
-              const interEls = (scanAll ? toArray(document.querySelectorAll('*')) : []);
-              if (!scanAll) {
-                interactiveSelectors.forEach(sel => {
-                  toArray(document.querySelectorAll(sel)).forEach(el => interEls.push(el));
-                });
-              }
-              const interFiltered = interEls
-                .filter((el) => isVisible(el))
-                .filter((el) => !textFilter || (el.textContent || '').toLowerCase().includes(String(textFilter).toLowerCase()));
-
-              // Draw boxes
-              interFiltered.forEach((el, idx) => {
-                const r = el.getBoundingClientRect();
-                const box = document.createElement('div');
-                Object.assign(box.style, {
-                  position: 'absolute',
-                  top: `${Math.max(0, r.top)}px`,
-                  left: `${Math.max(0, r.left)}px`,
-                  width: `${r.width}px`,
-                  height: `${r.height}px`,
-                  border: '2px solid #10b981',
-                  boxSizing: 'border-box',
-                });
-                overlay!.appendChild(box);
-              });
-
-              // Log everything in page console
-              // eslint-disable-next-line no-console
-              console.info('[ElementSelector][Page][ExecuteScript] Tab:', { url: location.href, title: document.title });
-              // eslint-disable-next-line no-console
-              console.info('[ElementSelector][Page][ExecuteScript] All elements:', allEls);
-              // eslint-disable-next-line no-console
-              console.info('[ElementSelector][Page][ExecuteScript] Interactive count:', interFiltered.length);
-
-              return {
-                interactive: interFiltered.slice(0, 200).map((el) => ({ selector: makeSelector(el), element: { tagName: el.tagName.toLowerCase(), textContent: (el.textContent || '').trim().slice(0, 100) } })),
-                allCount: allEls.length,
-              };
-            },
-            args: [scanMode === 'all', filterText.trim()],
-          });
-          const pageData = exec[0]?.result;
-          if (pageData?.interactive) {
-            items = pageData.interactive;
-          }
-          // eslint-disable-next-line no-console
-          console.info('[ElementSelector][Scan][Fallback] Result:', pageData);
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.warn('[ElementSelector][Scan][Fallback] executeScript failed:', e);
-        }
+        logger.warn('getClickableElementsDOM tool execution failed', e);
       }
 
       setElements(items);
       setHighlightedElements(items);
 
-      // Console debug: print current tab info too
       try {
-        const tab = (await chrome.tabs.get(activeTabId));
-        // eslint-disable-next-line no-console
+        const tab = await chrome.tabs.get(activeTabId);
         console.info('[ElementSelector][Scan] Active Tab:', { id: tab.id, url: tab.url, title: tab.title, status: tab.status, audible: (tab as any).audible, discarded: (tab as any).discarded });
-        // eslint-disable-next-line no-console
         console.info('[ElementSelector][Scan] Elements:', items);
       } catch (e) {
-        // eslint-disable-next-line no-console
         console.warn('[ElementSelector][Scan] Failed to print tab/elements:', e);
       }
     } catch (e) {
@@ -392,33 +158,6 @@ export const ElementSelector: React.FC<ElementSelectorProps> = ({
       setLoading(false);
     }
   }, [activeTabId, elementType, filterText]);
-
-  const highlightOne = useCallback(async (selector: string) => {
-    if (!activeTabId) return;
-    try {
-      await chrome.tabs.sendMessage(activeTabId, {
-        type: 'ELEMENT_HIGHLIGHT',
-        params: { selector, options: { flash: true } },
-      });
-    } catch (e) {
-      logger.warn('Highlight failed', e);
-    }
-  }, [activeTabId]);
-
-  const highlightAll = useCallback(async () => {
-    for (const it of elements) {
-      await highlightOne(it.selector);
-    }
-  }, [elements, highlightOne]);
-
-  const clearHighlights = useCallback(async () => {
-    if (!activeTabId) return;
-    try {
-      await chrome.tabs.sendMessage(activeTabId, { type: 'ELEMENT_SELECTOR_CLEAR' });
-    } catch (e) {
-      logger.warn('Clear highlights failed', e);
-    }
-  }, [activeTabId]);
 
   // Execute actions via ToolRegistry for consistency with Agent Tool
   const executeTool = useCallback(async (name: string, params: any) => {
@@ -432,220 +171,277 @@ export const ElementSelector: React.FC<ElementSelectorProps> = ({
     }
   }, []);
 
-  const clickSelected = useCallback(async () => {
-    if (!selectedItem) return;
-    await executeTool('clickElement', { selector: selectedItem.selector });
-  }, [selectedItem, executeTool]);
+  const highlightAll = useCallback(async () => {
+    try {
+      await executeTool('highlightElements', { interactiveOnly: 'all', limit: 500 });
+      setHighlightedElements(elements);
+    } catch (e) {
+      logger.warn('Highlight all failed', e);
+    }
+  }, [elements, executeTool]);
 
-  const scrollSelected = useCallback(async () => {
-    if (!selectedItem) return;
-    await executeTool('scrollPage', { direction: 'element', selector: selectedItem.selector });
-  }, [selectedItem, executeTool]);
+  const clearHighlights = useCallback(async () => {
+    if (!activeTabId) return;
+    try {
+      await executeTool('clearHighlights', {});
+      setHighlightedElements([]);
+    } catch (e) {
+      logger.warn('Clear highlights failed', e);
+      // Fallback to direct cleanup
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: activeTabId, allFrames: true },
+          func: () => {
+            const overlayId = 'vibe3-debug-overlay';
+            const overlay = document.getElementById(overlayId);
+            if (overlay) overlay.innerHTML = '';
+          }
+        });
+        setHighlightedElements([]);
+      } catch (execErr) {
+        logger.warn('Clear highlights fallback failed', execErr);
+      }
+    }
+  }, [activeTabId, executeTool]);
 
-  const inputIntoSelected = useCallback(async () => {
-    if (!selectedItem) return;
-    await executeTool('fillForm', { fields: [{ selector: selectedItem.selector, value: inputValue }], submit: false });
-  }, [selectedItem, inputValue, executeTool]);
+  // Enhanced action detection based on DOMState (nanobrowser-aligned)
+  const getElementActions = useCallback((el: any) => {
+    const actions: Array<{name: string, color: string, handler: (el: any) => Promise<void>}> = [];
+    const tag = (el.element?.tagName || '').toLowerCase();
+    const type = (el.element?.attributes?.type || '').toLowerCase();
+    const role = (el.element?.attributes?.role || '').toLowerCase();
+    const tabindex = el.element?.attributes?.tabindex;
+    const contenteditable = el.element?.attributes?.contenteditable;
+    const onclick = el.element?.attributes?.onclick;
+    const disabled = el.element?.attributes?.disabled;
+
+    // Skip disabled elements
+    if (disabled === 'true' || disabled === '') return actions;
+
+    // Click action for clickable elements (enhanced detection)
+    const isClickable = ['button', 'a', 'summary'].includes(tag) ||
+                       ['button', 'link', 'menuitem', 'switch', 'tab', 'checkbox', 'radio'].includes(role) ||
+                       (tabindex && parseInt(tabindex) >= 0) ||
+                       onclick ||
+                       (tag === 'input' && ['button', 'submit', 'reset', 'image'].includes(type));
+
+    if (isClickable) {
+      actions.push({
+        name: 'Click',
+        color: 'bg-indigo-600 hover:bg-indigo-700',
+        handler: async (element) => {
+          await executeTool('clickElement', { selector: element.selector, noDedup: true, _source: 'ElementSelector' });
+        }
+      });
+    }
+
+    // Type action for text inputs (enhanced detection)
+    const isTypeable = (tag === 'input' && !['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file', 'hidden'].includes(type)) ||
+                      tag === 'textarea' ||
+                      contenteditable === 'true' || contenteditable === '' ||
+                      role === 'textbox' || role === 'searchbox';
+
+    if (isTypeable) {
+      actions.push({
+        name: 'Type',
+        color: 'bg-blue-600 hover:bg-blue-700',
+        handler: async (element) => {
+          const value = prompt('Enter text to type:') || '';
+          if (value) {
+            await executeTool('fillForm', { fields: [{ selector: element.selector, value }], submit: false, noDedup: true, _source: 'ElementSelector' });
+          }
+        }
+      });
+    }
+
+    // Toggle action for checkboxes and switches
+    if ((tag === 'input' && ['checkbox', 'radio'].includes(type)) || role === 'switch' || role === 'checkbox') {
+      actions.push({
+        name: 'Toggle',
+        color: 'bg-amber-600 hover:bg-amber-700',
+        handler: async (element) => {
+          await executeTool('fillForm', { fields: [{ selector: element.selector, type: 'checkbox', value: 'toggle' }], submit: false, noDedup: true, _source: 'ElementSelector' });
+        }
+      });
+    }
+
+    // Select action for dropdowns
+    if (tag === 'select' || role === 'combobox' || role === 'listbox') {
+      actions.push({
+        name: 'Select Option',
+        color: 'bg-purple-600 hover:bg-purple-700',
+        handler: async (element) => {
+          const value = prompt('Enter option value or visible text:') || '';
+          if (value) {
+            // Try as visible text first, then as value
+            await executeTool('fillForm', { fields: [{ selector: element.selector, type: 'select', visibleText: value, value }], submit: false, noDedup: true, _source: 'ElementSelector' });
+          }
+        }
+      });
+    }
+
+    // Hover action for elements with hover effects
+    if (isClickable || isTypeable) {
+      actions.push({
+        name: 'Hover',
+        color: 'bg-gray-500 hover:bg-gray-600',
+        handler: async (element) => {
+          await executeTool('hoverElement', { selector: element.selector, duration: 1000, noDedup: true, _source: 'ElementSelector' });
+        }
+      });
+    }
+
+    // Scroll into view action
+    actions.push({
+      name: 'Scroll To',
+      color: 'bg-green-600 hover:bg-green-700',
+      handler: async (element) => {
+        await executeTool('scrollIntoView', { selector: element.selector, block: 'center', smooth: true, noDedup: true, _source: 'ElementSelector' });
+      }
+    });
+
+    return actions;
+  }, [executeTool]);
 
   const handleActivate = useCallback(async (selectedMode: typeof mode) => {
     setMode(selectedMode);
-    try {
-      if (activeTabId) {
-        await chrome.tabs.sendMessage(activeTabId, {
-          type: 'ELEMENT_SELECTOR_ACTIVATE',
-          options: { mode: selectedMode },
-        });
-      }
-    } catch (e) {
-      logger.error('Failed to activate selector on page', e);
-    }
     onActivate(selectedMode);
-  }, [onActivate, activeTabId]);
+  }, [onActivate]);
 
   const handleDeactivate = useCallback(async () => {
-    try {
-      if (activeTabId) {
-        await chrome.tabs.sendMessage(activeTabId, { type: 'ELEMENT_SELECTOR_DEACTIVATE' });
-      }
-    } catch (e) {
-      logger.warn('Failed to deactivate selector on page', e);
-    }
     setHighlightedElements([]);
     setSelectedElement(null);
     setAnalysisResult('');
+    await clearHighlights();
     onDeactivate();
-  }, [onDeactivate, activeTabId]);
+  }, [onDeactivate, clearHighlights]);
 
-  const handleElementSelect = useCallback((element: ElementHighlight) => {
-    setSelectedElement(element);
-    onElementSelect?.(element);
-  }, [onElementSelect]);
+
 
   const analyzeElement = useCallback(async (element: ElementHighlight) => {
     setIsAnalyzing(true);
     try {
-      if (!activeTabId) throw new Error('No active tab');
-      const response = await chrome.tabs.sendMessage(activeTabId, {
-        type: 'ELEMENT_ANALYZE',
-        params: {
-          selector: element.selector,
-          includeAccessibility: false,
-          includeEvents: false,
-        },
-      });
-
-      if (response?.success && response?.data) {
-        setAnalysisResult(typeof response.data === 'string' ? response.data : JSON.stringify(response.data, null, 2));
-      } else {
-        setAnalysisResult('Analysis failed' + (response?.error ? `: ${response.error}` : ''));
-      }
+      // Simple analysis based on available element data
+      const analysis = {
+        selector: element.selector,
+        tagName: element.element?.tagName,
+        textContent: element.element?.textContent,
+        bounds: element.bounds,
+        isVisible: element.isVisible,
+        isInteractive: (element as any).isInteractive,
+      };
+      setAnalysisResult(JSON.stringify(analysis, null, 2));
     } catch (error) {
       logger.error('Element analysis failed', error);
       setAnalysisResult('Analysis failed: ' + (error as Error).message);
     } finally {
       setIsAnalyzing(false);
     }
-  }, [activeTabId]);
-
-  // Listen for element selection events from content script
-  useEffect(() => {
-    const handleElementSelected = (event: MessageEvent) => {
-      if (event.data.type === 'ELEMENT_SELECTED') {
-        handleElementSelect(event.data.element);
-      }
-    };
-
-    window.addEventListener('message', handleElementSelected);
-    return () => window.removeEventListener('message', handleElementSelected);
-  }, [handleElementSelect]);
-
-  // Fetch highlighted elements from the ACTIVE TAB's content script periodically
-  useEffect(() => {
-    if (!isActive || !activeTabId) return;
-
-    let stopped = false;
-    const fetchHighlights = async () => {
-      try {
-        const response = await chrome.tabs.sendMessage(activeTabId, {
-          type: 'ELEMENT_SELECTOR_GET_HIGHLIGHTS',
-        });
-        if (stopped) return;
-        if (response && response.success) {
-          setHighlightedElements(response.highlights ?? []);
-        }
-      } catch (error: any) {
-        // Avoid noisy logs when content script is not present on this tab
-        const msg = (error && error.message) || String(error);
-        if (!/Receiving end does not exist/i.test(msg)) {
-          logger.error('Failed to fetch highlighted elements', error);
-        }
-      }
-    };
-
-    fetchHighlights();
-    const interval = setInterval(fetchHighlights, 1000);
-
-    return () => { stopped = true; clearInterval(interval); };
-  }, [isActive, activeTabId]);
+  }, []);
 
   // Render the new full debug panel (no modal)
   if (isActive) {
     return (
       <div className={`overflow-auto p-4 w-full h-full ${className}`}>
-        {/* Header */}
-        <div className="flex justify-between items-center mb-4">
+        {/* Compact Header */}
+        <div className="flex flex-wrap gap-2 justify-between items-center mb-3">
           <div className="flex gap-2 items-center">
-            <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
             </svg>
-            <h3 className="text-lg font-semibold text-gray-900">Element Debug Panel</h3>
-            <span className="text-xs text-gray-500">Tab: {activeTabId ?? 'unknown'}</span>
+            <h3 className="text-base font-medium text-gray-900">Elements</h3>
+            {loading && <div className="w-3 h-3 rounded-full border-2 border-blue-600 animate-spin border-t-transparent"></div>}
+            <span className="text-xs text-gray-500">({elements.length})</span>
+            <CDPStatusIndicator />
           </div>
-          <div className="flex gap-2 items-center">
-            <button type="button" className="px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700" onClick={scanInteractive}>
-              {loading ? 'Scanning...' : 'Scan'}
-            </button>
-            <button type="button" className="px-3 py-1.5 text-sm rounded-md bg-emerald-600 text-white hover:bg-emerald-700" onClick={() => { highlightAll(); setHighlightedElements(elements); }}>
-              Highlight All
-            </button>
-            <button type="button" className="px-3 py-1.5 text-sm rounded-md bg-gray-200 text-gray-800 hover:bg-gray-300" onClick={clearHighlights}>
-              Clear Highlights
-            </button>
-          </div>
-          {/* Scan Mode Toggle */}
-          <div className="flex gap-3 items-center mb-4">
-            <span className="text-sm text-gray-600">Scan Mode</span>
-            <div className="inline-flex overflow-hidden rounded-md border border-gray-300">
+
+          <div className="flex gap-1 items-center">
+            {/* Scan Mode Toggle */}
+            <div className="inline-flex overflow-hidden mr-2 rounded border border-gray-300">
               <button type="button"
-                className={`px-3 py-1.5 text-sm ${scanMode === 'interactive' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+                className={`px-2 py-1 text-xs ${scanMode === 'interactive' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
                 onClick={() => setScanMode('interactive')}
+                title="Interactive elements only"
               >
                 Interactive
               </button>
               <button type="button"
-                className={`px-3 py-1.5 text-sm border-l border-gray-300 ${scanMode === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+                className={`px-2 py-1 text-xs border-l border-gray-300 ${scanMode === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
                 onClick={() => setScanMode('all')}
+                title="All visible elements"
               >
-                All Visible
+                All
               </button>
             </div>
+
+            <button type="button" className="px-3 py-1 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700" onClick={scanInteractive} disabled={loading}>
+              {loading ? 'Scanning...' : 'Scan'}
+            </button>
+            <button type="button" className="px-2 py-1 text-xs text-white bg-emerald-600 rounded hover:bg-emerald-700" onClick={() => { highlightAll(); setHighlightedElements(elements); }} disabled={elements.length === 0} title="Highlight all elements">
+              All
+            </button>
+            <button type="button" className="px-2 py-1 text-xs text-gray-700 bg-gray-200 rounded hover:bg-gray-300" onClick={clearHighlights} title="Clear highlights">
+              Clear
+            </button>
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="grid grid-cols-1 gap-3 mb-4 md:grid-cols-3">
-          <div className="flex gap-2 items-center">
-            <label className="w-20 text-sm text-gray-600">Type</label>
-            <input value={elementType} onChange={(e) => setElementType(e.target.value)} placeholder="e.g. button, input, a" className="flex-1 px-3 py-2 text-sm rounded border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <div className="flex gap-2 items-center md:col-span-2">
-            <label className="w-20 text-sm text-gray-600">Text</label>
-            <input value={filterText} onChange={(e) => setFilterText(e.target.value)} placeholder="Filter by text content" className="flex-1 px-3 py-2 text-sm rounded border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
+        {/* Compact Filters */}
+        <div className="flex gap-2 mb-3">
+          <input value={elementType} onChange={(e) => setElementType(e.target.value)} placeholder="Type filter (e.g. button)" className="px-2 py-1 w-32 text-xs rounded border border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+          <input value={filterText} onChange={(e) => setFilterText(e.target.value)} placeholder="Text filter" className="flex-1 px-2 py-1 text-xs rounded border border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500" />
         </div>
 
         {/* Main content */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-h-0 h-[calc(100%-7rem)]">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 min-h-0 h-[calc(100%-6rem)]">
           {/* Left: list */}
           <div className="flex flex-col min-h-0">
-            <div className="flex justify-between items-center mb-2">
-              <h4 className="text-sm font-semibold text-gray-900">Interactive Elements</h4>
-              <span className="text-xs text-gray-500">{elements.length} items</span>
-            </div>
             <div className="overflow-auto flex-1 rounded border border-gray-200">
-              <table className="min-w-full text-sm">
+              <table className="min-w-full text-xs">
                 <thead className="sticky top-0 text-gray-600 bg-gray-50">
                   <tr>
-                    <th className="px-2 py-2 w-12 text-left">#</th>
-                    <th className="px-2 py-2 w-20 text-left">Tag</th>
-                    <th className="px-2 py-2 text-left">Selector</th>
-                    <th className="px-2 py-2 text-left">Text</th>
-                    <th className="px-2 py-2 w-24 text-left">Actions</th>
+                    <th className="px-1 py-1 w-8 text-left">#</th>
+                    <th className="px-1 py-1 w-16 text-left">Tag</th>
+                    <th className="px-1 py-1 text-left">Text</th>
+                    <th className="px-1 py-1 w-40 text-left">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {elements.map((el, idx) => (
                     <tr key={el.id ?? el.selector + idx} className={`border-t hover:bg-gray-50 cursor-pointer ${selectedItem?.selector === el.selector ? 'bg-blue-50' : ''}`} onClick={() => setSelectedItem(el)}>
-                      <td className="px-2 py-1 text-gray-500 align-top">{idx + 1}</td>
-                      <td className="px-2 py-1 align-top">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                          {el.element?.tagName || 'unknown'}
+                      <td className="px-1 py-1 text-xs text-gray-500 align-top">{idx + 1}</td>
+                      <td className="px-1 py-1 align-top">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                          {el.element?.tagName || '?'}
                         </span>
                       </td>
-                      <td className="px-2 py-1 font-mono text-xs text-gray-800 align-top break-all">{el.selector}</td>
-                      <td className="px-2 py-1 text-gray-700 align-top">{el.element?.textContent || ''}</td>
-                      <td className="px-2 py-1 align-top">
-                        <div className="flex gap-1">
-                          <button type="button" className="px-2 py-1 text-xs bg-gray-200 rounded hover:bg-gray-300" onClick={(e) => { e.stopPropagation(); highlightOne(el.selector); }}>Highlight</button>
-                          <button type="button" className="px-2 py-1 text-xs bg-gray-200 rounded hover:bg-gray-300" onClick={(e) => { e.stopPropagation(); setSelectedItem(el); }}>Select</button>
+                      <td className="px-1 py-1 max-w-0 text-xs text-gray-700 truncate align-top" title={el.element?.textContent || el.selector}>
+                        {el.element?.textContent || el.selector}
+                      </td>
+                      <td className="px-1 py-1 align-top">
+                        <div className="flex flex-wrap gap-0.5">
+                          {getElementActions(el).map(action => (
+                            <button
+                              key={action.name}
+                              type="button"
+                              className={`px-1.5 py-0.5 text-xs text-white rounded hover:opacity-90 ${action.color}`}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                setSelectedItem(el);
+                                await action.handler(el);
+                              }}
+                              title={`${action.name} this element`}
+                            >
+                              {action.name}
+                            </button>
+                          ))}
                         </div>
                       </td>
                     </tr>
                   ))}
                   {elements.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-3 py-6 text-sm text-center text-gray-500">No elements. Click Scan to fetch interactive elements.</td>
+                      <td colSpan={4} className="px-3 py-6 text-xs text-center text-gray-500">No elements. Click Scan to fetch interactive elements.</td>
                     </tr>
                   )}
                 </tbody>
@@ -655,51 +451,52 @@ export const ElementSelector: React.FC<ElementSelectorProps> = ({
 
           {/* Right: details & actions */}
           <div className="flex flex-col h-full">
-            <h4 className="mb-2 text-sm font-semibold text-gray-900">Selected</h4>
+            <h4 className="mb-2 text-xs font-medium text-gray-900">Selected Element</h4>
             {!selectedItem ? (
-              <div className="flex flex-1 justify-center items-center text-sm text-gray-400 rounded border border-gray-200 border-dashed">
+              <div className="flex flex-1 justify-center items-center text-xs text-gray-400 rounded border border-gray-200 border-dashed">
                 Select an element from the list
               </div>
             ) : (
-              <div className="overflow-auto flex-1 p-3 space-y-3 rounded border border-gray-200">
+              <div className="overflow-auto flex-1 p-2 space-y-2 rounded border border-gray-200">
                 <div>
-                  <label className="block mb-1 text-sm font-medium text-gray-700">Selector</label>
+                  <label className="block mb-1 text-xs font-medium text-gray-700">Selector</label>
                   <code className="block px-2 py-1 font-mono text-xs text-gray-800 break-all bg-gray-100 rounded">{selectedItem.selector}</code>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block mb-1 text-sm font-medium text-gray-700">Tag</label>
-                    <div className="text-sm text-gray-900">{selectedItem.element?.tagName}</div>
+                    <label className="block mb-1 text-xs font-medium text-gray-700">Tag</label>
+                    <div className="text-xs text-gray-900">{selectedItem.element?.tagName}</div>
                   </div>
                   <div>
-                    <label className="block mb-1 text-sm font-medium text-gray-700">Visible</label>
-                    <div className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${selectedItem.isVisible ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{selectedItem.isVisible ? 'Yes' : 'No'}</div>
+                    <label className="block mb-1 text-xs font-medium text-gray-700">Visible</label>
+                    <div className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${selectedItem.isVisible ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{selectedItem.isVisible ? 'Yes' : 'No'}</div>
                   </div>
                 </div>
                 {selectedItem.element?.textContent && (
                   <div>
-                    <label className="block mb-1 text-sm font-medium text-gray-700">Text</label>
-                    <div className="overflow-auto p-2 max-h-24 text-sm text-gray-700 bg-gray-50 rounded">{selectedItem.element?.textContent}</div>
+                    <label className="block mb-1 text-xs font-medium text-gray-700">Text</label>
+                    <div className="overflow-auto p-2 max-h-20 text-xs text-gray-700 bg-gray-50 rounded">{selectedItem.element?.textContent}</div>
                   </div>
                 )}
 
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" className="px-3 py-1.5 text-sm rounded-md bg-gray-200 hover:bg-gray-300" onClick={scrollSelected}>Scroll Into View</button>
-                  <button type="button" className="px-3 py-1.5 text-sm rounded-md bg-gray-200 hover:bg-gray-300" onClick={() => highlightOne(selectedItem.selector)}>Highlight</button>
-                  {(['button','a'].includes((selectedItem.element?.tagName || '').toLowerCase())) && (
-                    <button type="button" className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700" onClick={clickSelected}>Click</button>
-                  )}
+                <div>
+                  <label className="block mb-1 text-xs font-medium text-gray-700">Available Actions</label>
+                  <div className="flex flex-wrap gap-1">
+                    {getElementActions(selectedItem).map(action => (
+                      <button
+                        key={action.name}
+                        type="button"
+                        className={`px-2 py-1 text-xs text-white rounded hover:opacity-90 ${action.color}`}
+                        onClick={() => action.handler(selectedItem)}
+                        title={`${action.name} this element`}
+                      >
+                        {action.name}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                {(['input','textarea'].includes((selectedItem.element?.tagName || '').toLowerCase())) && (
-                  <div>
-                    <label className="block mb-1 text-sm font-medium text-gray-700">Type Text</label>
-                    <div className="flex gap-2">
-                      <input value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder="Text to input" className="flex-1 px-3 py-2 text-sm rounded border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                      <button type="button" className="px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700" onClick={inputIntoSelected}>Type</button>
-                    </div>
-                  </div>
-                )}
+
               </div>
             )}
           </div>

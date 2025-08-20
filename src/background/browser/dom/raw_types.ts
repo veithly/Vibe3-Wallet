@@ -31,6 +31,9 @@ export interface BuildDomTreeArgs {
   focusHighlightIndex: number;
   viewportExpansion: number;
   debugMode?: boolean;
+  // Added for multi-frame/id continuity
+  startId?: number;
+  startHighlightIndex?: number;
 }
 
 export interface PerfMetrics {

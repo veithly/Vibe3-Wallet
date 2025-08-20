@@ -504,6 +504,7 @@ class RealChatModel implements IBaseChatModel {
     messages: any[]
   ): { payloadMessages: any[]; tools: any[] } {
     const payloadMessagesRaw: any[] = [];
+    const seenToolCallIds = new Set<string>();
 
     for (const msg of messages) {
       // Prefer LangChain _getType when available
@@ -523,12 +524,21 @@ class RealChatModel implements IBaseChatModel {
         const toolCalls = (msg as any)?.additional_kwargs?.tool_calls;
         if (Array.isArray(toolCalls) && toolCalls.length > 0) {
           entry.tool_calls = toolCalls;
+          // Track tool_call ids so that subsequent tool messages are valid
+          for (const tc of toolCalls) {
+            if (tc?.id) seenToolCallIds.add(tc.id);
+          }
         }
         payloadMessagesRaw.push(entry);
         continue;
       }
       if (type === 'tool') {
         const tool_call_id = (msg as any)?.tool_call_id || (msg as any)?.additional_kwargs?.tool_call_id;
+        // Only include tool messages that correspond to a previously declared assistant.tool_calls
+        if (!tool_call_id || !seenToolCallIds.has(tool_call_id)) {
+          // skip orphan tool message to avoid OpenAI error
+          continue;
+        }
         payloadMessagesRaw.push({
           role: 'tool',
           content:
@@ -603,6 +613,17 @@ class Web3LLM implements IWeb3LLM {
       multiAgentEnabled: this.enableMultiAgent,
       multiAgentAvailable: !!this.multiAgentIntegration,
     });
+  }
+
+  public cancelStreaming() {
+    try {
+      if (this['currentStreamingAbortController']) {
+        (this['currentStreamingAbortController'] as AbortController).abort();
+        logger.info('🛑 Web3LLM streaming aborted via cancelStreaming()');
+      }
+    } catch (e) {
+      logger.warn('Failed to abort streaming', e);
+    }
   }
 
   async generateResponse(
@@ -2068,6 +2089,10 @@ Protocols: ${Object.keys(context.protocols).join(', ')}
       requestBody: JSON.stringify(requestBody, null, 2),
     });
 
+    // Create/replace AbortController for this streaming request
+    try { (this as any).currentStreamingAbortController?.abort(); } catch {}
+    (this as any).currentStreamingAbortController = new AbortController();
+
     const response = await fetch(
       `${baseUrl}/chat/completions`,
       {
@@ -2077,6 +2102,7 @@ Protocols: ${Object.keys(context.protocols).join(', ')}
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
+        signal: (this as any).currentStreamingAbortController?.signal,
       }
     );
 
