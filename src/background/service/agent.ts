@@ -1186,15 +1186,12 @@ class AgentService {
             // Preserve a stable id per function name if provider omitted it
             let id = c?.id as string | undefined;
             const fnName = c?.name || 'function';
-            if (!id && this.currentFunctionCallIdByName.has(fnName)) {
-              id = this.currentFunctionCallIdByName.get(fnName)!;
-            }
+            // Always generate a unique id if provider omitted it, so each call shows as a separate card
             if (!id) {
               id = `call_${fnName}_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
-              this.currentFunctionCallIdByName.set(fnName, id);
             }
             const status = c?.status || 'executing';
-            const fcPayload = { id, name: fnName, arguments: c?.arguments || {}, status, timestamp: Date.now(), ...(c?.result ? { result: c.result } : {}) };
+            const fcPayload = { id, name: fnName, arguments: c?.arguments || {}, status, timestamp: Date.now() };
 
             const hasEmitted = this.currentStreamingToolCallIds.has(id);
             if (!hasEmitted) this.currentStreamingToolCallIds.add(id);
@@ -1215,13 +1212,10 @@ class AgentService {
               list.push(resultPayload);
               this.taskToolResults.set(currentTaskId, list);
 
-              // Debounce: give model/provider up to 1.5s to continue by itself; then force-continue
+              // Remove timeout-based forced continuation to avoid sending empty/synthetic requests
               const prevTimer = this.toolResultTimers.get(currentTaskId);
               if (prevTimer) clearTimeout(prevTimer);
-              const timer = setTimeout(() => {
-                this.forceContinueWithBufferedResults(currentTaskId, port).catch(() => {});
-              }, 15000);
-              this.toolResultTimers.set(currentTaskId, timer);
+              this.toolResultTimers.delete(currentTaskId);
             } else if (!hasEmitted) {
               // Also emit execution event carrying actions so existing execution handler renders it too
               port.postMessage({ type: 'execution', actor: 'assistant', state: 'ACT_START', timestamp: Date.now(), data: { details: content, actions: [{ type: fcPayload.name, params: fcPayload.arguments, status: fcPayload.status }] } });
@@ -1250,6 +1244,9 @@ class AgentService {
             plan: response.plan,
             simulation: response.simulation,
             functionCalling: true,
+            // include function calls so UI can render all calls even if separate function_call events were missed
+            functionCalls: (response as any)?.functionCalls || [],
+            tool_calls: (response as any)?.tool_calls || [],
           },
         }, port, 'web3_task_response');
       }

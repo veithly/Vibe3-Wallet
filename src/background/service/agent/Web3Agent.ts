@@ -2625,6 +2625,24 @@ export class Web3Agent extends EventEmitter {
             break; // no more tool calls, finish
           }
 
+          // Emit function_call events to UI for this loop turn (executing status)
+          if (onToolCalls) {
+            try {
+              const nowTsLoop = Date.now();
+              const normalizedLoop = moreFunctionCalls.map((fc, idx) => ({
+                id: fc.id || `call_${fc.name || 'fn'}_${nowTsLoop}_${idx}`,
+                name: fc.name,
+                arguments: fc.arguments || {},
+                status: 'executing',
+                timestamp: nowTsLoop,
+              }));
+              onToolCalls({
+                content: (llmResponse as any)?.response || (llmResponse as any)?.content || '',
+                functionCalls: normalizedLoop as any,
+              });
+            } catch {}
+          }
+
           // Insert an assistant message with tool_calls for this turn
           try {
             const assistantToolCallsMsg = new AIMessage('', {
@@ -2670,6 +2688,21 @@ export class Web3Agent extends EventEmitter {
             logger.warn('Failed to append loop turn tool results', {
               error: e instanceof Error ? e.message : String(e),
             });
+          }
+
+          // Notify UI with completed/failed status and results for this loop turn so cards 3+ render
+          if (onToolCalls) {
+            try {
+              const updatesLoop = moreFunctionCalls.map((fc, i) => ({
+                id: fc.id || `call_${fc.name || 'fn'}_${Date.now()}_${i}`,
+                name: fc.name,
+                arguments: fc.arguments || {},
+                status: loopTurnActions[i]?.status || 'completed',
+                result: loopTurnActions[i]?.result,
+                timestamp: Date.now(),
+              }));
+              onToolCalls({ content: '', functionCalls: updatesLoop as any });
+            } catch {}
           }
 
           iterations++;
@@ -2756,26 +2789,36 @@ export class Web3Agent extends EventEmitter {
     try {
       if (!Array.isArray(results) || results.length === 0) return;
 
-      // 1) Insert an assistant tool_calls message that references these ids
-      const toolCalls = results
-        .filter((r) => !!r?.toolCallId)
-        .map((r) => ({
-          id: r.toolCallId,
-          type: 'function',
-          function: { name: r.toolName || 'tool', arguments: JSON.stringify({}) },
-        }));
-      if (toolCalls.length > 0) {
-        const assistantToolCalls = new AIMessage('', { tool_calls: toolCalls });
-        this.state.conversationHistory.push(assistantToolCalls);
+      // Do NOT fabricate assistant tool_calls. Only append ToolMessages that match
+      // existing assistant.tool_calls ids in the current conversation history.
+      const msgs = this.state.conversationHistory as any[];
+      const declaredIds = new Set<string>();
+      for (const m of msgs) {
+        const tcs = m?.additional_kwargs?.tool_calls;
+        if (Array.isArray(tcs)) {
+          for (const tc of tcs) {
+            const id = tc?.id;
+            if (typeof id === 'string') declaredIds.add(id);
+          }
+        }
       }
 
-      // 2) Append corresponding ToolMessages
       for (const r of results) {
-        if (!r?.toolCallId) continue;
+        const id = r?.toolCallId;
+        if (!id || !declaredIds.has(id)) {
+          // Skip results that don't correspond to any assistant tool_call
+          continue;
+        }
+        // Avoid duplicating an existing tool message for the same id
+        const exists = msgs.some(
+          (m: any) => m?.type === 'tool' && ((m?.additional_kwargs?.tool_call_id ?? m?.tool_call_id) === id)
+        );
+        if (exists) continue;
+
         const toolMsg = new ToolMessage({
           content: JSON.stringify({ success: !!r.success, result: r.result }),
           name: r.toolName || 'tool',
-          tool_call_id: r.toolCallId,
+          tool_call_id: id,
         });
         this.state.conversationHistory.push(toolMsg);
       }

@@ -76,7 +76,7 @@ export const SidePanelApp = () => {
   const [showElementSelector, setShowElementSelector] = useState(false);
   const portRef = useRef<chrome.runtime.Port | null>(null);
   const heartbeatIntervalRef = useRef<number | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const contentAreaRef = useRef<HTMLDivElement | null>(null);
   const setInputTextRef = useRef<((text: string) => void) | null>(null);
 
   const isConnectingRef = useRef(false);
@@ -94,6 +94,22 @@ export const SidePanelApp = () => {
   // Track function name by callId
   const toolCallNameByIdRef = useRef<Record<string, string>>({});
   // Ignore any further streaming events after a Stop until next user send
+  // Track synthetic function-call signatures to avoid duplicates before real ids arrive
+  const seenFunctionSigsRef = useRef<Set<string>>(new Set());
+
+  const buildFuncSignature = (call: any) => {
+    try {
+      const name = call?.name || call?.function?.name || 'function';
+      const args = call?.arguments || call?.function?.arguments || {};
+      return `${name}::${typeof args === 'string' ? args : JSON.stringify(args)}`;
+    } catch {
+      return `${call?.name || 'function'}::unknown`;
+    }
+  };
+
+  const deepEqual = (a: any, b: any) => {
+    try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
+  };
   const ignoreStreamingRef = useRef<boolean>(false);
 
   // Enhanced message appender with comprehensive logging and validation
@@ -383,22 +399,37 @@ export const SidePanelApp = () => {
             });
           };
 
-          const fcFromActions = normalizeFunctionCalls(data?.actions);
-          const fcFromToolCalls = normalizeFunctionCalls(mapOpenAIToolCalls?.(data?.tool_calls));
-          const fcFromFunctionCalls = normalizeFunctionCalls(data?.functionCalls);
-          const functionCalls = [...fcFromActions, ...fcFromToolCalls, ...fcFromFunctionCalls];
+          // 收集函数调用：带 id 的与缺 id 的分开处理，避免与 function_call 事件重复
+          const hasId = (c: any) => c && typeof c.id === 'string' && c.id.length > 0;
+          const normActions = normalizeFunctionCalls(data?.actions);
+          const normToolCalls = normalizeFunctionCalls(mapOpenAIToolCalls?.(data?.tool_calls));
+          const normFunctionCalls = normalizeFunctionCalls(data?.functionCalls);
+
+          const withIdAll = [...normActions, ...normToolCalls, ...normFunctionCalls].filter(hasId);
+          const withoutIdAll = [...normActions, ...normToolCalls, ...normFunctionCalls].filter(c => !hasId(c));
+
+          // 去重：以 id 为准（仅对有 id 的）
+          const seenIds = new Set<string>();
+          const functionCallsWithId = withIdAll.filter(c => {
+            if (seenIds.has(c.id)) return false;
+            seenIds.add(c.id);
+            return true;
+          });
+
+          // 标记：是否包含调用（无论是否带 id）
+          const functionCalls = functionCallsWithId;
+          const hasFunctionCalls = functionCallsWithId.length > 0 || withoutIdAll.length > 0;
 
           // Check if we have both content and function calls
           const hasContent = content && content.trim().length > 0;
-          const hasFunctionCalls = functionCalls && functionCalls.length > 0;
 
           // If backend provides multiple contents as an array, handle them; otherwise wrap single content
           const contentsArr: string[] = Array.isArray(data?.contents)
             ? (data.contents as any[]).filter((s) => typeof s === 'string' && s.trim().length > 0)
             : (hasContent ? [content] : []);
 
-          // 执行类(EXECUTION)消息中，如果包含 functionCalls，交由专门的 'function_call' 事件处理，避免重复
-          if (!hasFunctionCalls && contentsArr.length > 0) {
+          // 执行类(EXECUTION)消息中：始终展示文本内容（作为说明/叙述）
+          if (contentsArr.length > 0) {
             appendMessage({
               actor: actor as Actors,
               content: contentsArr[0],
@@ -408,7 +439,7 @@ export const SidePanelApp = () => {
             });
           }
 
-          // 注意：此处不再追加 function_call 卡片，统一由 message.type === 'function_call' 分支去创建/更新
+
 
           if (contentsArr.length === 0 && !hasFunctionCalls) {
             // Fallback: Only content (possibly empty) and no function calls
@@ -544,36 +575,16 @@ export const SidePanelApp = () => {
             : (message.data?.functionCall ? [message.data.functionCall] : []);
           const baseTs = message.timestamp || Date.now();
 
-          // 对于 function_call：只创建或更新卡片，不再重复展示 details 内容
+          // 简化逻辑：LLM 一旦输出 function_call，就直接追加到消息列表，无需任何判断/更新
           calls.forEach((call, idx) => {
-            const callId = call?.id;
-            let updated = false;
-
-            if (callId) {
-              // 更新已存在的 function_call 卡片
-              setMessages(prev => prev.map(msg => {
-                if (msg.messageType === 'function_call' && msg.functionCalls && msg.functionCalls[0]?.id === callId) {
-                  updated = true;
-                  const prevCall = msg.functionCalls[0];
-                  return {
-                    ...msg,
-                    functionCalls: [{ ...prevCall, ...call }]
-                  };
-                }
-                return msg;
-              }));
-            }
-
-            if (!updated) {
-              appendMessage({
-                actor: Actors.ASSISTANT,
-                content: `Executing function ${call?.name || 'function'}...`,
-                timestamp: baseTs + idx,
-                messageType: 'function_call' as const,
-                functionCalls: [call],
-                finishReason: message.data?.finish_reason,
-              });
-            }
+            appendMessage({
+              actor: Actors.ASSISTANT,
+              content: `Executing function ${call?.name || 'function'}...`,
+              timestamp: baseTs + idx,
+              messageType: 'function_call' as const,
+              functionCalls: [call],
+              finishReason: message.data?.finish_reason,
+            });
           });
 
           // tool_calls 的结果会由后端以 tool_result 推送；无需前端轮询
@@ -588,7 +599,7 @@ export const SidePanelApp = () => {
             success: message.data?.success,
           });
 
-          // Display tool result
+          // Display tool result message; 不再强制创建或更新 function_call 卡片，避免重复
           appendMessage({
             actor: Actors.SYSTEM,
             content: `Tool "${message.data?.toolName || 'unknown'}" ${message.data?.success ? 'completed successfully' : 'failed'}`,
@@ -893,26 +904,10 @@ export const SidePanelApp = () => {
             } catch {}
             const textToAppend = textPieces.join('');
 
-            // Extract tool calls and add dedicated function_call cards if new
+            // Do not create function_call cards during streaming; rely on dedicated function_call events later
+            // This avoids duplicate cards (one before text, one after text)
             const toolCallsArr = chunkObjs.flatMap(extractToolCalls);
-            if (toolCallsArr.length > 0) {
-              toolCallsArr.forEach((tc: any) => {
-                const idx = typeof tc?.index === 'number' ? tc.index : (tc?.index ? Number(tc.index) : undefined);
-                const name = tc?.function?.name || 'function';
-                let id = tc?.id as string | undefined;
-                if (!id) id = `call_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-                if (id && !seenToolCallIdsRef.current.has(id)) {
-                  seenToolCallIdsRef.current.add(id);
-                  appendMessage({
-                    actor: Actors.ASSISTANT,
-                    content: `Executing function ${name}...`,
-                    timestamp: Date.now(),
-                    messageType: 'function_call' as const,
-                    functionCalls: [{ id, name, arguments: {}, status: 'executing' as const, timestamp: Date.now() }],
-                  });
-                }
-              });
-            }
+            void toolCallsArr;
 
             // Update the newly created streaming message with the text
             if (textToAppend) {
@@ -1518,7 +1513,13 @@ export const SidePanelApp = () => {
   }, [isInitialized]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = contentAreaRef.current;
+    if (!el) return;
+    try {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    } catch {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [messages]);
 
   // ========== OPTIMIZED MESSAGE HANDLING ==========
@@ -2311,7 +2312,7 @@ export const SidePanelApp = () => {
                   <MessageList messages={messages} />
                 </ErrorBoundary>
               )}
-              <div ref={messagesEndRef} />
+
             </>
           )}
         </div>

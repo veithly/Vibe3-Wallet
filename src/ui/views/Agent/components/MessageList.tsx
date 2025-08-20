@@ -16,56 +16,25 @@ export default memo(function MessageList({
   messages,
   isDarkMode = false,
 }: MessageListProps) {
-  // Enhanced validation and filtering
+  // Remove filtering: do not drop any LLM messages; normalize instead
   const validMessages = React.useMemo(() => {
     if (!Array.isArray(messages)) {
       logger.warn('MessageList', 'Messages is not an array', { messages });
       return [];
     }
 
-    return messages.filter((message, index) => {
-      // Validate message structure
-      if (!message || typeof message !== 'object') {
-        logger.warn('MessageList', `Invalid message at index ${index}`, { message });
-        return false;
-      }
-
-      // Validate required fields (actor and timestamp are required)
-      if (!message.actor) {
-        logger.warn('MessageList', `Message missing actor at index ${index}`, { message });
-        return false;
-      }
-
-      // Validate timestamp
-      if (!message.timestamp || typeof message.timestamp !== 'number') {
-        logger.warn('MessageList', `Invalid timestamp at index ${index}`, { message });
-        return false;
-      }
-
-      // Allow messages without textual content if they carry structured data
-      // such as function calls, react status, or recognized message types from the LLM
-      const hasText = typeof message.content === 'string'; // empty string is allowed
-      const hasStructured = (message.functionCalls && message.functionCalls.length > 0) || !!message.reactStatus;
-      const recognizedTypes = new Set([
-        'standard', 'thinking', 'function_call', 'reasoning', 'react_status',
-        'execution', 'error', 'streaming_start', 'streaming_chunk', 'streaming_complete',
-        'streaming_error', 'speech_to_text_error', 'fallback', 'fallback_complete',
-        'tool_result', 'assistant_content'
-      ]);
-      const hasType = !!message.messageType && recognizedTypes.has(message.messageType);
-
-      if (!hasText && !hasStructured && !hasType) {
-        logger.warn('MessageList', `Message has no displayable data at index ${index}`, { message });
-        // Still include to avoid dropping potential LLM outputs in edge cases
-      }
-
-      return true;
+    return messages.map((message, index) => {
+      const actor = (message && (message as any).actor) || 'assistant';
+      const ts = (message && typeof (message as any).timestamp === 'number')
+        ? (message as any).timestamp
+        : Date.now() + index;
+      return { ...message, actor, timestamp: ts } as Message;
     });
   }, [messages]);
 
-  // Sort messages by timestamp to ensure proper ordering
+  // Sort messages by timestamp to ensure proper ordering (use normalized timestamp)
   const sortedMessages = React.useMemo(() => {
-    return [...validMessages].sort((a, b) => a.timestamp - b.timestamp);
+    return [...validMessages].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
   }, [validMessages]);
 
   // Log message statistics for debugging
@@ -401,14 +370,7 @@ function MessageBlock({
                         </pre>
                       </div>
                     )}
-                    {call.result && (
-                      <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                        <div className="mb-1 font-medium">Result:</div>
-                        <pre className="overflow-x-auto text-xs">
-                          {typeof call.result === 'object' ? JSON.stringify(call.result, null, 2) : String(call.result)}
-                        </pre>
-                      </div>
-                    )}
+
                   </div>
                 ))}
               </div>
