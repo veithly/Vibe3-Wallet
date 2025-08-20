@@ -5,6 +5,7 @@ import browser from 'webextension-polyfill';
 import { EXTENSION_MESSAGES } from '@/constant/message';
 import { isManifestV3 } from '@/utils/env';
 
+// 临时保留ElementSelectionSystem，但移到文件末尾避免干扰
 // Element Selection System
 interface ElementHighlight {
   id: string;
@@ -675,312 +676,6 @@ class ElementSelectionSystem {
   }
 }
 
-// Initialize element selection system
-const elementSelector = new ElementSelectionSystem();
-
-// Handle element selection messages from background
-browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'PING') {
-    return Promise.resolve({ success: true, type: 'PONG', timestamp: Date.now() });
-  }
-
-
-  if (message.type === 'ELEMENT_HIGHLIGHT') {
-    try {
-      const rawKind = message.params?.interactiveOnly;
-      const kind = typeof rawKind === 'string' ? rawKind.toLowerCase() : (rawKind === false ? 'all' : 'clickable');
-      const limit = Math.max(1, Math.min(500, Number(message.params?.limit) || (kind === 'clickable' || kind === 'button' || kind === 'input' ? 100 : 200)));
-      const overlayId = 'vibe3-debug-overlay';
-      let overlay = document.getElementById(overlayId) as HTMLElement | null;
-      if (!overlay) {
-        overlay = document.createElement('div');
-        overlay.id = overlayId;
-        Object.assign((overlay as HTMLElement).style, {
-          position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '2147483647'
-        });
-        document.documentElement.appendChild(overlay as unknown as Node);
-      }
-      (overlay as HTMLElement).innerHTML = '';
-
-      // Collect elements
-      const visible = (el: Element) => {
-        const r = (el as HTMLElement).getBoundingClientRect();
-        return r && r.width > 0 && r.height > 0;
-      };
-
-      let candidates: Element[] = [];
-      const selector = message.params?.selector as string | undefined;
-      if (selector) {
-        const el = document.querySelector(selector);
-        if (el) candidates = [el];
-      } else {
-        const allEls: Element[] = Array.prototype.slice.call(document.querySelectorAll('*'));
-        const selectorMap: Record<string, string> = {
-          button: 'button, [role="button"], input[type="button"], input[type="submit"]',
-          clickable: 'button, [role="button"], input[type="button"], input[type="submit"], a[href], [role="link"]',
-          input: 'input, textarea, select, [contenteditable="true"], [role="textbox"]',
-          link: 'a[href], [role="link"]',
-          all: '*',
-        };
-        const sel = selectorMap[kind] || '*';
-        candidates = sel === '*'
-          ? allEls
-          : Array.prototype.slice.call(document.querySelectorAll(sel));
-      }
-
-      const filteredAll = candidates.filter(visible);
-      let filtered = filteredAll.slice(0, limit);
-
-      // Note: Removed auto-scroll logic - LLM should explicitly use scrollPage tool if needed
-
-      // Draw wireframe with index labels
-      filtered.forEach((el, idx) => {
-        const r = (el as HTMLElement).getBoundingClientRect();
-        const box = document.createElement('div');
-        Object.assign(box.style, {
-          position: 'absolute', top: `${Math.max(0, r.top)}px`, left: `${Math.max(0, r.left)}px`,
-          width: `${r.width}px`, height: `${r.height}px`, border: '2px solid #22d3ee', boxSizing: 'border-box'
-        });
-        const tag = document.createElement('div');
-        tag.textContent = String(idx + 1);
-        Object.assign(tag.style, {
-          position: 'absolute', top: `${Math.max(0, r.top - 14)}px`, left: `${Math.max(0, r.left)}px`,
-          fontSize: '10px', lineHeight: '12px', padding: '0 4px', color: '#000', background: '#22d3ee', borderRadius: '3px', pointerEvents: 'none'
-        });
-        (overlay as HTMLElement).appendChild(box);
-        (overlay as HTMLElement).appendChild(tag);
-      });
-
-      // Return the indexed elements minimal info so Agent can choose later
-      const elements = filtered.map((el, idx) => ({
-        index: idx + 1,
-        selector: (() => {
-          let node: Element | null = el; const parts: string[] = [];
-          while (node && node.nodeType === 1 && parts.length < 5) {
-            let part = node.tagName.toLowerCase();
-            const id = (node as HTMLElement).id; if (id) { parts.unshift(`#${id}`); break; }
-            const siblings = Array.prototype.slice.call(node.parentElement?.children || []);
-            const nth = siblings.indexOf(node) + 1; parts.unshift(`${part}:nth-child(${nth})`); node = node.parentElement;
-          }
-          return parts.join(' > ');
-        })(),
-        tag: (el as HTMLElement).tagName.toLowerCase(),
-        text: ((el.textContent || '').trim().slice(0, 120)),
-        ariaLabel: (el.getAttribute('aria-label') || ''),
-        title: ((el as HTMLElement).title || ''),
-        role: (el.getAttribute('role') || ''),
-        hasSvg: !!el.querySelector('svg'),
-        hasImgAlt: !!el.querySelector('img[alt]'),
-        imgAlt: (el.querySelector('img[alt]')?.getAttribute('alt') || ''),
-      }));
-
-      return Promise.resolve({ success: true, data: { elements } });
-    } catch (e) {
-      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
-    }
-  } else if (message.type === 'ELEMENT_SCREENSHOT') {
-    const result = elementSelector.captureElementScreenshot(message.params.selector);
-    return Promise.resolve({ success: true, data: result });
-  } else if (message.type === 'ELEMENT_HIGHLIGHT_DEFIELEMENTS') {
-
-  } else if (message.type === 'ELEMENT_CLICK_SELECTOR') {
-    try {
-      const sel = message.params?.selector;
-      const el = sel ? document.querySelector(sel) as HTMLElement | null : null;
-      if (!el) return Promise.resolve({ success: false, error: 'Element not found' });
-      (el as any).focus?.();
-      el.click();
-      return Promise.resolve({ success: true });
-    } catch (e) {
-      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
-    }
-  } else if (message.type === 'ELEMENT_INPUT_SELECTOR') {
-    try {
-      const sel = message.params?.selector;
-      const value = message.params?.value ?? '';
-      const el = sel ? document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null : null;
-      if (!el) return Promise.resolve({ success: false, error: 'Element not found' });
-      (el as any).focus?.();
-      (el as any).value = value;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      return Promise.resolve({ success: true });
-    } catch (e) {
-      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
-    }
-  } else if (message.type === 'ELEMENT_SCROLL_SELECTOR') {
-    try {
-      const sel = message.params?.selector;
-      const el = sel ? document.querySelector(sel) as HTMLElement | null : null;
-      if (!el) return Promise.resolve({ success: false, error: 'Element not found' });
-      el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-      return Promise.resolve({ success: true });
-    } catch (e) {
-      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
-    }
-  } else if (message.type === 'ELEMENT_SELECTOR_ACTIVATE') {
-    try {
-      const mode = message.options?.mode || 'highlight';
-      const overlayId = 'vibe3-debug-overlay';
-      let overlay = document.getElementById(overlayId) as HTMLElement | null;
-      if (!overlay) {
-        overlay = document.createElement('div');
-        overlay.id = overlayId;
-        Object.assign((overlay as HTMLElement).style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '2147483647' });
-        document.documentElement.appendChild(overlay as unknown as Node);
-      }
-      return Promise.resolve({ success: true, data: { mode } });
-    } catch (e) {
-      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
-    }
-  } else if (message.type === 'ELEMENT_SELECTOR_CLEAR') {
-    try {
-      const overlayId = 'vibe3-debug-overlay';
-      const overlay = document.getElementById(overlayId) as HTMLElement | null;
-      if (overlay) overlay.innerHTML = '';
-      return Promise.resolve({ success: true });
-    } catch (e) {
-      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
-    }
-  } else if (message.type === 'ELEMENT_SELECTOR_GET_HIGHLIGHTS') {
-    try {
-      const overlayId = 'vibe3-debug-overlay';
-      const overlay = document.getElementById(overlayId) as HTMLElement | null;
-      // We do not persist the list in DOM; return last scan candidates if we have them.
-      // For now, return an empty set with success, panel uses its own state.
-      return Promise.resolve({ success: true, data: { elements: [] } });
-    } catch (e) {
-      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
-    }
-  } else if (message.type === 'ELEMENT_ANALYZE') {
-    try {
-      const sel = message.params?.selector;
-      const el = sel ? document.querySelector(sel) as HTMLElement | null : null;
-      if (!el) return Promise.resolve({ success: false, error: 'Element not found' });
-      const rect = el.getBoundingClientRect();
-      const info = {
-        tag: el.tagName.toLowerCase(),
-        text: (el.textContent || '').trim().slice(0, 200),
-        aria: el.getAttribute('aria-label') || '',
-        title: el.title || '',
-        role: el.getAttribute('role') || '',
-        bounds: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
-      };
-      return Promise.resolve({ success: true, data: info });
-    } catch (e) {
-      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
-    }
-  } else if (message.type === 'ELEMENT_DEBUG_SCAN_AND_LOG') {
-    try {
-      // Activate highlight mode and clear previous overlay
-      elementSelector.activate({ mode: 'highlight' });
-      const opts = message.params?.options || {};
-      const result = elementSelector.getInteractiveElements(opts);
-      // Log in page (visible in page console)
-      // eslint-disable-next-line no-console
-      console.info('[ElementSelector][Page] Scan:', {
-        url: location.href,
-        title: document.title,
-        count: result?.elements?.length || 0,
-        elements: result?.elements || [],
-      });
-      return Promise.resolve({ success: true, data: result });
-    } catch (e) {
-      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
-    }
-  } else if (message.type === 'ELEMENT_DEBUG_PAGE_LOG') {
-    try {
-      const payload = message.params?.payload ?? message.payload ?? message.message ?? 'No payload';
-      // eslint-disable-next-line no-console
-      console.info('[ElementSelector][Page][Log]:', payload);
-      return Promise.resolve({ success: true });
-    } catch (e) {
-      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
-    }
-  } else if (message.type === 'ELEMENT_HIGHLIGHT_ELEMENTS') {
-    try {
-      const items = (message.params?.items || []) as Array<{ selector: string; type?: string; label?: string }>;
-      const overlayId = 'vibe3-debug-overlay';
-      let overlay = document.getElementById(overlayId) as HTMLElement | null;
-      if (!overlay) {
-        overlay = document.createElement('div');
-        overlay.id = overlayId;
-        Object.assign((overlay as HTMLElement).style, {
-          position: 'fixed',
-          inset: '0',
-          pointerEvents: 'none',
-          zIndex: '2147483647',
-        });
-        document.documentElement.appendChild(overlay as unknown as Node);
-      }
-      (overlay as HTMLElement).innerHTML = '';
-
-      const colorMap: Record<string, string> = {
-        button: '#10b981', // emerald
-        input: '#3b82f6',  // blue
-        textarea: '#f97316', // orange
-        select: '#f59e0b',  // amber
-        a: '#8b5cf6',       // violet
-        default: '#6b7280', // gray
-      };
-
-      const toType = (el: Element | null, t?: string) => (t ? t.toLowerCase() : (el?.tagName.toLowerCase() || 'default'));
-      const toLabel = (type: string, fallback?: string) => {
-        switch (type) {
-          case 'button': return 'BTN';
-          case 'input': return 'INP';
-          case 'textarea': return 'TXT';
-          case 'select': return 'SEL';
-          case 'a': return 'A';
-          default: return fallback || 'EL';
-        }
-      };
-
-      items.forEach((it) => {
-        const el = document.querySelector(it.selector) as HTMLElement | null;
-        if (!el) return;
-        const rect = el.getBoundingClientRect();
-        const type = toType(el, it.type);
-        const color = colorMap[type] || colorMap.default;
-        const label = it.label || toLabel(type);
-
-        const box = document.createElement('div');
-        Object.assign(box.style, {
-          position: 'absolute',
-          top: `${Math.max(0, rect.top)}px`,
-          left: `${Math.max(0, rect.left)}px`,
-          width: `${rect.width}px`,
-          height: `${rect.height}px`,
-          border: `2px solid ${color}`,
-          boxSizing: 'border-box',
-          background: 'transparent',
-        });
-        const tag = document.createElement('div');
-        tag.textContent = label;
-        Object.assign(tag.style, {
-          position: 'absolute',
-          top: `${Math.max(0, rect.top - 14)}px`,
-          left: `${Math.max(0, rect.left)}px`,
-          fontSize: '10px',
-          lineHeight: '12px',
-          padding: '0 4px',
-          color: '#fff',
-          background: color,
-          borderRadius: '3px',
-          pointerEvents: 'none',
-        });
-        overlay!.appendChild(box);
-        overlay!.appendChild(tag);
-      });
-
-      return Promise.resolve({ success: true });
-    } catch (e) {
-      return Promise.resolve({ success: false, error: e instanceof Error ? e.message : String(e) });
-    }
-  }
-  return undefined;
-});
-
 const createDefer = <T>() => {
   let resolve: ((value: T) => void) | undefined;
   let reject: ((reason?: any) => void) | undefined;
@@ -1065,6 +760,52 @@ const onMessageSetUpExtensionStreams = (msg) => {
 };
 browser.runtime.onMessage.addListener(onMessageSetUpExtensionStreams);
 
-// if (!isManifestV3) {
-//   injectProviderScript(false);
-// }
+if (!isManifestV3) {
+  injectProviderScript(false);
+}
+
+// 在文件末尾初始化 ElementSelector 和添加消息监听器
+// 使用单独的监听器，并确保对不处理的消息返回 undefined
+const elementSelector = new ElementSelectionSystem();
+
+// 单独的 Element Selector 消息处理器
+// 重要：确保未处理的消息返回 undefined
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // 只处理 ELEMENT_ 开头的消息
+  if (!message.type || !message.type.startsWith('ELEMENT_')) {
+    // 对于非 ELEMENT_ 消息，立即返回 undefined
+    return undefined;
+  }
+
+  // 处理 ELEMENT_ 消息
+  switch(message.type) {
+    case 'ELEMENT_SELECTOR_ACTIVATE':
+      elementSelector.activate(message.options);
+      return Promise.resolve();
+    
+    case 'ELEMENT_SELECTOR_DEACTIVATE':
+      elementSelector.deactivate();
+      return Promise.resolve();
+    
+    case 'ELEMENT_SELECTOR_GET_HIGHLIGHTS':
+      const highlights = elementSelector.getHighlightedElements();
+      return Promise.resolve({ success: true, highlights });
+    
+    case 'ELEMENT_SELECTOR_CLEAR':
+      elementSelector.clearHighlights();
+      return Promise.resolve();
+    
+    // ... 其他 ELEMENT_ 相关处理 ...
+    default:
+      // 即使是 ELEMENT_ 消息，如果不识别也返回 undefined
+      return undefined;
+  }
+});
+
+// 处理 PING 消息的独立监听器
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'PING') {
+    return Promise.resolve({ success: true, type: 'PONG', timestamp: Date.now() });
+  }
+  return undefined;
+});

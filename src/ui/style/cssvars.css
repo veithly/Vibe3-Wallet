@@ -98,9 +98,9 @@
 
 :root {
   /* -------------------- light mode -------------------- */
-  --r-blue-default-rgb: 70, 180, 152;
-  --r-blue-default: var(--rabby-light-green-default);
-  --r-blue-light1-rgb: 223, 249, 196;
+  --r-blue-default-rgb: 76, 101, 255;
+  --r-blue-default: var(--rabby-light-blue-default);
+  --r-blue-light1-rgb: 237, 240, 255;
   --r-blue-light1: var(--rabby-light-blue-light1);
   --r-blue-light-1-rgb: 237, 240, 255;
   --r-blue-light-1: var(--rabby-light-blue-light-1);
@@ -190,9 +190,9 @@
 
 html.dark, body.dark {
   /* -------------------- dark mode -------------------- */
-  --r-blue-default-rgb: 70, 180, 152;
-  --r-blue-default: var(--rabby-dark-green-default);
-  --r-blue-light1-rgb: 70, 180, 152;
+  --r-blue-default-rgb: 76, 101, 255;
+  --r-blue-default: var(--rabby-dark-blue-default);
+  --r-blue-light1-rgb: 33, 38, 64;
   --r-blue-light1: var(--rabby-dark-blue-light1);
   --r-blue-light-1-rgb: 33, 38, 64;
   --r-blue-light-1: var(--rabby-dark-blue-light-1);
