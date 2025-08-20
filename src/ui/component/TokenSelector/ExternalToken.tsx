@@ -37,8 +37,8 @@ const TokenSymbolWrapper = styled.div`
   text-underline-position: from-font;
 
   &:hover {
-    background: var(--r-blue-light2, #dee3fc);
-    color: var(--r-blue-default, #7084ff);
+    background: var(--r-blue-light2, #9CDBA6);
+    color: var(--r-blue-default, #468585);
     text-decoration-line: underline;
   }
 `;

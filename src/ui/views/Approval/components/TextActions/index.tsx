@@ -34,7 +34,7 @@ export const MessageWrapper = styled.div`
 
     .title-text {
       font-size: 14px;
-      color: var(--r-blue-default, #7084ff);
+      color: var(--r-blue-default, #468585);
       text-align: center;
       font-weight: 500;
       padding: 0 8px;

@@ -35,7 +35,7 @@ const Wrapper = styled.div`
     border-radius: 2px;
     background: var(--r-blue-light-1, #eef1ff);
 
-    color: var(--r-blue-default, #7084ff);
+    color: var(--r-blue-default, #468585);
     font-size: 13px;
     font-weight: 500;
     border: 1px solid transparent;
@@ -43,9 +43,9 @@ const Wrapper = styled.div`
 
     &:hover,
     &:active {
-      border: 1px solid var(--r-blue-default, #7084ff);
-      border: 0.5px solid var(--r-blue-default, #7084ff);
-      background: var(--r-blue-light-2, #dee3fc);
+      border: 1px solid var(--r-blue-default, #468585);
+      border: 0.5px solid var(--r-blue-default, #468585);
+      background: var(--r-blue-light-2, #9CDBA6);
     }
 
     cursor: pointer;

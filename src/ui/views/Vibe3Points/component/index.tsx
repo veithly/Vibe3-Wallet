@@ -57,7 +57,7 @@ const Wrapper = styled.div`
     .ant-tabs-tab-btn {
       color: var(--r-neutral-body, #3e495e);
       &:hover {
-        color: var(--r-blue-default, #7084ff);
+        color: var(--r-blue-default, #468585);
       }
     }
     .ant-tabs-nav-list {
@@ -70,7 +70,7 @@ const Wrapper = styled.div`
       }
     }
     .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
-      color: var(--r-blue-default, #7084ff);
+      color: var(--r-blue-default, #468585);
     }
 
     .ant-tabs-nav::before {

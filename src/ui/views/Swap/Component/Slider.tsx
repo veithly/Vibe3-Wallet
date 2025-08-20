@@ -13,7 +13,7 @@ const StyledSlider = styled(Slider)`
 
   .ant-slider-track,
   &:hover .ant-slider-track {
-    background: var(--r-blue-default, #7084ff);
+    background: var(--r-blue-default, #468585);
   }
 
   &:hover > .ant-slider-handle {
@@ -46,7 +46,7 @@ const StyledSlider = styled(Slider)`
     &::after {
       width: 12px;
       height: 12px;
-      background-color: var(--r-blue-default, #7084ff);
+      background-color: var(--r-blue-default, #468585);
     }
 
     &:hover {

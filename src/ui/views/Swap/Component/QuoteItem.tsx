@@ -47,7 +47,7 @@ const ItemWrapper = styled.div`
       position: absolute;
       content: '';
       inset: calc(0px - var(--quote--border-width));
-      border: var(--quote--border-width) solid var(--r-blue-default, #7084ff);
+      border: var(--quote--border-width) solid var(--r-blue-default, #468585);
       background: transparent;
       border-radius: 6px;
       z-index: 2;
@@ -96,7 +96,7 @@ const ItemWrapper = styled.div`
     font-weight: 500;
     font-size: 13px;
     font-weight: 500;
-    color: var(--r-blue-default, #7084ff);
+    color: var(--r-blue-default, #468585);
     &.red {
       color: var(--r-red-default, #e34935);
     }

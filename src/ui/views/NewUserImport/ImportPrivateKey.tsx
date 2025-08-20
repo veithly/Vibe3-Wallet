@@ -27,7 +27,7 @@ const Container = styled.div`
 
   .ant-input:focus,
   .ant-input-focused {
-    border-color: var(--r-blue-default, #7084ff);
+    border-color: var(--r-blue-default, #468585);
     border-width: 1.5px;
     border-right-width: 1.5px !important;
   }

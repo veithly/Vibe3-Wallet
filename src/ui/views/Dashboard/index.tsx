@@ -11,8 +11,7 @@ import {
   KEYRING_ICONS_WHITE,
   KEYRING_TYPE,
   KEYRING_TYPE_TEXT,
-  WALLET_BRAND_CONTENT,
-  EVENTS,
+  WALLET_BRAND_CONTENT
 } from 'consts';
 import QRCode from 'qrcode.react';
 import React, { useEffect, useState } from 'react';
@@ -29,15 +28,12 @@ import IconSuccess from '@/ui/assets/success.svg';
 import { AddressViewer, Modal } from '@/ui/component';
 import {
   connectStore,
-  useVibe3Dispatch,
-  useVibe3Getter,
-  useVibe3Selector,
+  useVibe3Dispatch, useVibe3Selector
 } from '@/ui/store';
 import { useWallet } from '@/ui/utils';
 import {
   BalanceView,
-  ChainAndSiteSelector,
-  GnosisWrongChainAlertBar,
+  ChainAndSiteSelector
 } from './components';
 import './style.less';
 
@@ -49,7 +45,6 @@ import { ReactComponent as IconArrowRight } from '@/ui/assets/dashboard/arrow-ri
 import Queue from './components/Queue';
 import { copyAddress } from '@/ui/utils/clipboard';
 import { useWalletConnectIcon } from '@/ui/component/WalletConnect/useWalletConnectIcon';
-import { useGnosisNetworks } from '@/ui/hooks/useGnosisNetworks';
 import { CommonSignal } from '@/ui/component/ConnectStatus/CommonSignal';
 import { useHomeBalanceViewOuterPrefetch } from './components/BalanceView/useHomeBalanceView';
 import { GasAccountDashBoardHeader } from '../GasAccount/components/DashBoardHeader';

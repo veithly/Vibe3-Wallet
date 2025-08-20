@@ -216,7 +216,7 @@ export default function ChatHistoryList({
                 </label>
               )}
               {onNewChat && (
-                <button className="px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors" onClick={handleNewChat}>
+                <button className="px-3 py-1 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors" onClick={handleNewChat}>
                   New Chat
                 </button>
               )}
@@ -334,7 +334,7 @@ export default function ChatHistoryList({
               </label>
             )}
             {onNewChat && (
-              <button className="px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors" onClick={handleNewChat}>
+              <button className="px-3 py-1 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors" onClick={handleNewChat}>
                 New Chat
               </button>
             )}

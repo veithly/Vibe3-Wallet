@@ -2002,7 +2002,7 @@ export const SidePanelApp = () => {
               width: '32px',
               height: '32px',
               border: '3px solid #f0f0f0',
-              borderTop: '3px solid #1890ff',
+              borderTop: '3px solid #468585',
               borderRadius: '50%',
               animation: 'spin 1s linear infinite',
             }}
@@ -2033,7 +2033,7 @@ export const SidePanelApp = () => {
             style={{
               marginTop: '16px',
               padding: '8px 16px',
-              backgroundColor: '#1890ff',
+              backgroundColor: '#468585',
               color: 'white',
               border: 'none',
               borderRadius: '4px',

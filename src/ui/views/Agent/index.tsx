@@ -90,7 +90,7 @@ async function init(): Promise<void> {
         <div style="padding: 20px; text-align: center; color: #666; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
           <h3>Failed to load Agent sidebar</h3>
           <p>Please check the console for more details.</p>
-          <button onclick="window.location.reload()" style="padding: 8px 16px; background: #1890ff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+          <button onclick="window.location.reload()" style="padding: 8px 16px; background: #468585; color: white; border: none; border-radius: 4px; cursor: pointer;">
             Refresh
           </button>
         </div>
