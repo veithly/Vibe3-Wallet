@@ -5,6 +5,9 @@ export enum Actors {
   PLANNER = 'planner',
   NAVIGATOR = 'navigator',
   VALIDATOR = 'validator',
+  ORCHESTRATOR = 'orchestrator',
+  AUTOMATION = 'automation',
+  WEB3 = 'web3',
 }
 
 export interface FunctionCall {
@@ -107,6 +110,27 @@ export const ACTOR_PROFILES: Record<Actors, ActorProfile> = {
     iconBackground: '#EF4444',
     color: '#EF4444',
   },
+  [Actors.ORCHESTRATOR]: {
+    name: 'Orchestrator',
+    description: 'Coordinates other agents to execute the plan',
+    icon: chrome.runtime.getURL('images/icon-128.png'),
+    iconBackground: '#0EA5E9',
+    color: '#0EA5E9',
+  },
+  [Actors.AUTOMATION]: {
+    name: 'Automation',
+    description: 'Browser automation and UI actions',
+    icon: chrome.runtime.getURL('images/icon-128.png'),
+    iconBackground: '#14B8A6',
+    color: '#14B8A6',
+  },
+  [Actors.WEB3]: {
+    name: 'Web3',
+    description: 'Web3 wallet and blockchain operations',
+    icon: chrome.runtime.getURL('images/icon-128.png'),
+    iconBackground: '#8B5CF6',
+    color: '#8B5CF6',
+  },
 };
 
 // Additional Web3-specific actor profiles
@@ -177,6 +201,21 @@ export const ACTOR_PROFILES_LEGACY = {
   },
   [Actors.VALIDATOR]: {
     name: 'Validator',
+    icon: chrome.runtime.getURL('images/icon-128.png'),
+    iconBackground: '#4A90E2',
+  },
+  [Actors.ORCHESTRATOR]: {
+    name: 'Orchestrator',
+    icon: chrome.runtime.getURL('images/icon-128.png'),
+    iconBackground: '#4A90E2',
+  },
+  [Actors.AUTOMATION]: {
+    name: 'Automation',
+    icon: chrome.runtime.getURL('images/icon-128.png'),
+    iconBackground: '#4A90E2',
+  },
+  [Actors.WEB3]: {
+    name: 'Web3',
     icon: chrome.runtime.getURL('images/icon-128.png'),
     iconBackground: '#4A90E2',
   },

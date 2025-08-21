@@ -1798,28 +1798,57 @@ class AgentService {
     tabId: number,
     port: chrome.runtime.Port
   ) {
-    logger.info('AgentService', `Routing to Automation Executor: ${task}`);
+    logger.info('AgentService', `Routing to Multi-Agent Automation: ${task}`);
 
-    // Instead of using mock executor, send a direct response with fallback
+    if (!this.web3Agent) {
+      throw new Error('Web3 Agent not available');
+    }
+
+    // Ensure latest model/tooling
+    await this.ensureCurrentModelConfiguration();
+
+    try {
+      this.web3Agent.setActiveTabId(tabId);
+      toolRegistry.setLastActiveTabId(tabId);
+    } catch {}
+
+    // Prefer function-calling flow so tools are invoked as function calls
+    const response = await this.web3Agent.processUserInstructionWithFunctionCalling(
+      task,
+      false,
+      undefined,
+      (thinking) => {
+        port.postMessage({ type: 'thinking', actor: Actors.SYSTEM, state: 'THINKING', timestamp: Date.now(), data: { details: thinking?.content, thinkingType: thinking?.type, functionCalling: true, fromModel: true } });
+      },
+      (reactStatus) => {
+        port.postMessage({ type: 'react_status', actor: Actors.SYSTEM, state: 'REACT_STATUS', timestamp: Date.now(), data: reactStatus });
+      },
+      (toolCalls) => {
+        const content = toolCalls?.content || '';
+        const fcs = (toolCalls?.functionCalls || []) as any[];
+        fcs.forEach((c: any) => {
+          const id = c?.id || `call_${c?.name || 'function'}_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+          port.postMessage({
+            type: 'function_call', actor: 'assistant', state: 'ACT_START', timestamp: Date.now(),
+            data: { details: content || `Executing function ${c?.name}`, functionCalls: [{ id, name: c?.name, arguments: c?.arguments || {}, status: c?.status || 'executing', timestamp: Date.now() }] }
+          });
+        });
+      }
+    );
+
     await this.ensureMessageDisplayed({
       type: 'execution',
       actor: Actors.SYSTEM,
-      state: 'TASK_OK',
+      state: response?.success ? 'TASK_OK' : 'TASK_WARNING',
       timestamp: Date.now(),
       data: {
-        details: `I've received your task: "${task}". I'm currently operating in a limited mode and can process this request, but full automation capabilities are not yet available.`,
-        actions: [],
-        plan: null,
-        simulation: null,
+        details: response?.message,
+        actions: response?.actions,
+        plan: (response as any)?.plan,
+        simulation: (response as any)?.simulation,
+        functionCalling: true,
       },
     }, port, 'automation_task_response');
-
-    // For now, we'll respond directly rather than using the mock executor
-    // This ensures the user gets immediate feedback
-    logger.info('AgentService', 'Automation task response sent', {
-      task,
-      tabId,
-    });
   }
 
   private async handleFollowUpTask(

@@ -267,20 +267,19 @@ Execute the requested browser automation or provide guidance on how to accomplis
       contexts: ['browser', 'automation', 'dapp'],
     };
 
-    // Function calling template
+    // Function calling template (Claude-style best practices: brief, direct, tool-first)
     const functionCallingTemplate: PromptTemplate = {
       id: 'function_calling',
       name: 'Function Calling',
       description: 'Structured function calling with tool schemas',
-      systemPrompt: `You are an AI assistant with function calling capabilities. Always use native function calling with the provided tools to accomplish user requests. Do not output JSON in assistant content when tools are needed.
+      systemPrompt: `You are an AI assistant with native tool use. Follow these rules strictly:
 
-Guidelines:
-1. Use the exact tool name and parameters
-2. Provide all required parameters
-3. Follow the parameter schema exactly
-4. Handle errors gracefully
-5. If no tools are needed, provide a concise direct answer
-6. After tool results are available, explain what you did and the results succinctly`,
+1) Use function calls to tools whenever action or data is required.
+2) Prefer plan-first: draft a concise step plan, then call tools.
+3) Never emit JSON in assistant content to represent tool calls.
+4) Use exact tool names and required parameters; be strict with schemas.
+5) Keep responses concise and actionable; avoid verbosity.
+6) After tool results, summarize outcomes and next steps briefly.`,
       userPromptTemplate: `{{userInput}}`,
       variables: [
         {
@@ -318,45 +317,133 @@ Guidelines:
       contexts: ['function_calling', 'web3', 'automation'],
     };
 
-    // Element selection template
+    // Planner Agent template
+    const plannerTemplate: PromptTemplate = {
+      id: 'planner_agent',
+      name: 'Planner Agent',
+      description: 'Create a concise, reliable execution plan before any action',
+      systemPrompt: `You are the Planner Agent.
+
+Goals:
+- Analyze the user instruction
+- Produce a minimal, reliable step plan with clear parameters
+- Avoid execution; return a plan only
+
+Rules:
+- Keep steps atomic and ordered
+- Include timeouts and dependencies when needed
+- Ask for missing critical parameters as notes
+- Output as a plan, not as prose`,
+      userPromptTemplate: `Plan the steps for: {{userInput}}
+
+Context: {{context}}`,
+      variables: [
+        { name: 'userInput', type: 'string', description: 'User input text', required: true },
+        { name: 'context', type: 'object', description: 'Current context', required: false },
+      ],
+      tools: ['planTask'],
+      contexts: ['planner'],
+    };
+
+    // Orchestrator Agent template
+    const orchestratorTemplate: PromptTemplate = {
+      id: 'orchestrator_agent',
+      name: 'Orchestrator Agent',
+      description: 'Execute a provided plan by delegating to Automation/Web3 tools',
+      systemPrompt: `You are the Orchestrator Agent.
+
+Goals:
+- Take a plan and execute it
+- Use tools to perform each step safely
+- Report succinct progress and results
+
+Rules:
+- Do not invent steps; follow the given plan
+- Validate preconditions when necessary
+- Summarize outcomes briefly`,
+      userPromptTemplate: `Execute this plan now:
+{{userInput}}`,
+      variables: [
+        { name: 'userInput', type: 'string', description: 'Plan JSON or structured plan', required: true },
+      ],
+      tools: ['orchestratePlan'],
+      contexts: ['orchestrator'],
+    };
+
+    // Automation Agent template
+    const automationTemplate: PromptTemplate = {
+      id: 'automation_agent',
+      name: 'Automation Agent',
+      description: 'Control the browser with automation tools only',
+      systemPrompt: `You are the Automation Agent.
+
+Goals:
+- Perform precise browser actions using the available tools.
+- Keep actions minimal and safe.
+
+Rules:
+- Use only browser automation tools provided.
+- Prefer index/robust selectors; apply waits when needed.
+- Summarize results briefly.`,
+      userPromptTemplate: `Task: {{userInput}}
+
+Browser Context: {{browserContext}}`,
+      variables: [
+        { name: 'userInput', type: 'string', description: 'Step/task description', required: true },
+        { name: 'browserContext', type: 'object', description: 'Browser context', required: false },
+      ],
+      tools: [
+        'navigateToUrl','clickElement','fillForm','extractContent','waitFor','takeScreenshot','scrollPage','highlightElement','getHighlightedElements','analyzeElement','findElementsByText','captureElementScreenshot'
+      ],
+      contexts: ['automation'],
+    };
+
+    // Web3 Agent template
+    const web3OnlyTemplate: PromptTemplate = {
+      id: 'web3_agent',
+      name: 'Web3 Agent',
+      description: 'Perform Web3 wallet and on-chain operations only',
+      systemPrompt: `You are the Web3 Agent.
+
+Goals:
+- Perform safe blockchain operations using provided tools.
+
+Rules:
+- Use only Web3 tools provided.
+- Confirm risky actions with clear summaries.
+- Keep output concise.`,
+      userPromptTemplate: `Task: {{userInput}}
+
+Web3 Context: {{context}}`,
+      variables: [
+        { name: 'userInput', type: 'string', description: 'Web3 step/task description', required: true },
+        { name: 'context', type: 'object', description: 'Web3 context', required: false },
+      ],
+      tools: ['checkBalance','sendTransaction','approveToken','swapTokens','bridgeTokens','stakeTokens','getNativeBalance','getTokenBalances','getAllAssets','getAssetPrices'],
+      contexts: ['web3only'],
+    };
+
+    // Element selection template (concise Claude-style guidance)
     const elementSelectionTemplate: PromptTemplate = {
       id: 'element_selection',
       name: 'Element Selection',
       description: 'Interactive element selection and analysis for web automation',
-      systemPrompt: `You are an AI assistant specialized in element selection and analysis for web automation. Your capabilities include:
+      systemPrompt: `You are an AI assistant for element selection. Work visually and be precise.
 
-1. Interactive element highlighting and selection
-2. Element analysis and property extraction
-3. DOM traversal and element discovery
-4. Accessibility and interaction analysis
-5. Visual element identification and targeting
+Principles:
+- Highlight elements to guide selection.
+- Prefer robust selectors and index-based fallbacks.
+- Consider visibility, accessibility, and interactivity.
+- Keep guidance concise and stepwise.
 
-You have access to element selection tools that can highlight, analyze, and interact with web page elements. Always:
-
-- Use visual highlighting to guide users to relevant elements
-- Provide clear element descriptions and selectors
-- Analyze element properties for optimal interaction
-- Consider accessibility and user experience
-- Suggest the most reliable selectors for automation
-
-Current element selection context:
-- Selection mode: {{selectionMode}}
-- Current page: {{currentUrl}}
-- Available elements: {{availableElements}}
+Context:
+- Mode: {{selectionMode}}
+- URL: {{currentUrl}}
+- Elements: {{availableElements}}
 - User intent: {{userIntent}}
 
-Available element selection tools:
-- getClickableElements: Build DOM and get interactive elements (nanobrowser-aligned)
-- analyzeElement: Analyze specific element properties
-- highlightElement: Highlight specific elements
-- captureElementScreenshot: Take screenshots of elements
-
-When working with elements:
-1. First activate element selection to show available options
-2. Use element analysis to understand properties and interactions
-3. Provide reliable CSS selectors for automation
-4. Consider element visibility and accessibility
-5. Give clear guidance for user interaction`,
+Tools: getClickableElements, analyzeElement, highlightElement, captureElementScreenshot.
+Flow: activate selector → highlight → analyze as needed → propose reliable selector.`,
       userPromptTemplate: `User: {{userInput}}
 
 Element Selection Context:
@@ -421,6 +508,10 @@ Please help with element selection and analysis. {{additionalContext}}`,
     this.registerTemplate(browserAutomationTemplate);
     this.registerTemplate(functionCallingTemplate);
     this.registerTemplate(elementSelectionTemplate);
+    this.registerTemplate(plannerTemplate);
+    this.registerTemplate(orchestratorTemplate);
+    this.registerTemplate(automationTemplate);
+    this.registerTemplate(web3OnlyTemplate);
 
     // Register DeFi-specific templates
     defiElementSelectionTemplates.forEach(template => {
@@ -521,6 +612,26 @@ Please help with element selection and analysis. {{additionalContext}}`,
    */
   private selectTemplate(promptContext: PromptContext): PromptTemplate {
     const { intent, tools, taskAnalysis, context } = promptContext;
+    // Specialized: planner and orchestrator
+    if (tools && tools.length > 0) {
+      const toolNames = tools.map((t: any) => t?.name || '').filter(Boolean);
+      const hasPlanner = toolNames.includes('planTask');
+      const hasOrchestrator = toolNames.includes('orchestratePlan');
+      const browserToolHits = toolNames.filter((n) => ['navigateToUrl','clickElement','fillForm','extractContent','waitFor','takeScreenshot','scrollPage','highlightElement','getHighlightedElements','analyzeElement','findElementsByText','captureElementScreenshot'].includes(n)).length;
+      const web3ToolHits = toolNames.filter((n) => ['checkBalance','sendTransaction','approveToken','swapTokens','bridgeTokens','stakeTokens','getNativeBalance','getTokenBalances','getAllAssets','getAssetPrices'].includes(n)).length;
+      if (hasPlanner && !hasOrchestrator) {
+        return this.getTemplate('planner_agent') || this.getTemplate('function_calling') || this.getTemplate('web3_assistant')!;
+      }
+      if (hasOrchestrator) {
+        return this.getTemplate('orchestrator_agent') || this.getTemplate('function_calling') || this.getTemplate('web3_assistant')!;
+      }
+      if (browserToolHits > 0 && web3ToolHits === 0) {
+        return this.getTemplate('automation_agent') || this.getTemplate('browser_automation') || this.getTemplate('function_calling')!;
+      }
+      if (web3ToolHits > 0 && browserToolHits === 0) {
+        return this.getTemplate('web3_agent') || this.getTemplate('function_calling') || this.getTemplate('web3_assistant')!;
+      }
+    }
 
     // Check if this is a function calling scenario
     if (tools && tools.length > 0) {

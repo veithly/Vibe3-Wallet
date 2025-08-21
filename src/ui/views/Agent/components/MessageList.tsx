@@ -140,6 +140,42 @@ function MessageBlock({
   // Enhanced message type detection with fallbacks
   const isProgress = message.content === 'Showing progress...';
   const isThinking = message.messageType === 'thinking';
+  // Map assistant tool/function/system content to specific agent names based on known message types
+  const agentLabelFromFunctionName = (fn?: string): string | undefined => {
+    if (!fn) return undefined;
+    const name = String(fn).toLowerCase();
+    // Planner
+    if (name.includes('plan') || name.includes('createexecutionplan')) return 'Planner';
+    // Orchestrator
+    if (name.includes('orchestrate')) return 'Orchestrator';
+    // Automation/browser tools
+    const automationTools = [
+      'navigatetoUrl','navigate','clickelement','fillform','extractcontent','waitfor','takescreenshot','scrollpage','highlightelement','getclickableelements','analyzeelement','gethighlightedelements','captureelementscreenshot','findelementsbytext'
+    ];
+    if (automationTools.some((t) => name.includes(t.toLowerCase()))) return 'Automation';
+    // Web3 tools/actions
+    const web3Tools = [
+      'sendtransaction','approvetoken','swaptokens','bridgetokens','staketokens','getnativebalance','gettokenbalances','getallassets','getassetprices'
+    ];
+    if (web3Tools.some((t) => name.includes(t))) return 'Web3';
+    return undefined;
+  };
+
+  const actorNameOverride = (() => {
+    try {
+      if (message.messageType === 'function_call') {
+        const fn = message.functionCalls && message.functionCalls[0]?.name;
+        return agentLabelFromFunctionName(fn) || 'Assistant';
+      }
+      if (message.messageType === 'tool_result') {
+        const tool = message.toolResults && message.toolResults[0]?.toolName;
+        return agentLabelFromFunctionName(tool) || 'System';
+      }
+      if (message.messageType === 'react_status') return 'System';
+      return undefined;
+    } catch {}
+    return undefined;
+  })();
   // Only render ReAct status if it came from model output (thinking content was included by model)
   const isReActStatus = message.messageType === 'react_status' && !!message.reactStatus?.thinkingContent;
   const isStreaming = message.messageType === 'streaming_chunk' || message.isStreaming;
@@ -251,22 +287,8 @@ function MessageBlock({
   return (
     <div className={`flex gap-3 w-full items-start ${!isSameActor ? 'pt-4 mt-4 border-t border-gray-100 dark:border-gray-800' : ''} ${isThinking ? 'p-2 bg-purple-50 rounded-lg opacity-80 dark:bg-purple-900/10' : ''} ${isReActStatus ? 'p-2 bg-green-50 rounded-lg border-l-4 border-green-300 opacity-90 dark:bg-green-900/10' : ''} ${isStreamingError ? 'p-2 bg-red-50 rounded-lg dark:bg-red-900/10' : ''} ${isFunctionCall ? 'p-2 bg-blue-50 rounded-lg border-l-4 border-blue-300 opacity-90 dark:bg-blue-900/10' : ''} ${isToolResult ? 'p-2 bg-green-50 rounded-lg border-l-4 border-green-400 opacity-90 dark:bg-green-900/10' : ''} ${isAssistantContent ? 'p-2 bg-gray-50 rounded-lg dark:bg-gray-900/10' : ''} ${isWalletAutoConnected ? 'p-3 bg-emerald-50 rounded-lg border border-emerald-200 shadow-sm dark:bg-emerald-900/10 dark:border-emerald-800' : ''} ${isWalletAutoSigned ? 'p-3 bg-blue-50 rounded-lg border border-blue-200 shadow-sm dark:bg-blue-900/10 dark:border-blue-800' : ''} ${isWalletAutoApprovedTx ? 'p-3 bg-purple-50 rounded-lg border border-purple-200 shadow-sm dark:bg-purple-900/10 dark:border-purple-800' : ''}`}>
       {!isSameActor && (
-        <div
-          className="flex flex-shrink-0 justify-center items-center w-8 h-8 rounded-full shadow-md"
-          style={{ backgroundColor: actor.iconBackground }}
-        >
-          <img
-            src={actor.icon}
-            alt={actor.name}
-            className="w-6 h-6"
-            onError={(e) => {
-              logger.warn('MessageList', 'Failed to load actor icon', {
-                actor: actor.name,
-                icon: actor.icon,
-              });
-              (e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyUzYuNDggMjIgMTIgMjJTMjIgMTcuNTIgMjIgMTJTMTcuNTIgMiAxMiAyWk0xMiAxNEM5Ljc5IDE0IDggMTIuMjEgOCAxMFM5Ljc5IDggMTIgOFMxNiA5Ljc5IDE2IDEyUzE0LjIxIDE0IDEyIDE0Wk0xMiAxOEMxMC45IDE4IDEwIDE3LjEgMTAgMTZDMTAgMTUuOSAxMC45IDE1IDEyIDE1UzE0IDE1LjkgMTQgMTZDMTQgMTcuMSAxMy4xIDE4IDEyIDE4WiIgZmlsbD0iY3VycmVudENvbG9yIi8+Cjwvc3ZnPgo=';
-            }}
-          />
+        <div className="flex flex-shrink-0 justify-center items-center px-2 w-auto h-6 text-xs font-medium text-gray-700 bg-gray-100 rounded dark:bg-gray-800 dark:text-gray-300">
+          {actorNameOverride || actor.name}
         </div>
       )}
       {isSameActor && <div className="flex-shrink-0 w-8" />}

@@ -21,6 +21,7 @@ export interface ToolDefinition {
   riskLevel: 'low' | 'medium' | 'high';
   requiresConfirmation: boolean;
   requiredPermissions?: string[];
+  owner?: 'orchestrator' | 'planner' | 'automation' | 'web3' | 'system';
 }
 
 export class ToolRegistry {
@@ -30,6 +31,13 @@ export class ToolRegistry {
   private lastHighlightedByTabId = new Map<number, any[]>();
 
   private lastActiveTabId?: number;
+  // Orchestrator task registry for child-agent callbacks
+  private orchestratorTaskRegistry: Map<string, {
+    planId?: string;
+    steps: Array<{ id: string; status: string; result?: any; owner: string; timestamp: number }>;
+    createdAt: number;
+    updatedAt: number;
+  }> = new Map();
 
   constructor() {
     this.initializeWeb3Tools();
@@ -613,9 +621,10 @@ export class ToolRegistry {
       ],
       required: ['url'],
       handler: this.createBrowserHandler('navigateToUrl'),
-      category: 'web3',
+      category: 'browser',
       riskLevel: 'low',
       requiresConfirmation: false,
+      owner: 'automation',
     });
 
     this.registerTool({
@@ -643,9 +652,10 @@ export class ToolRegistry {
       ],
       required: [],
       handler: this.createBrowserHandler('clickElement'),
-      category: 'web3',
+      category: 'browser',
       riskLevel: 'medium',
       requiresConfirmation: false,
+      owner: 'automation',
     });
 
     this.registerTool({
@@ -663,9 +673,10 @@ export class ToolRegistry {
       ],
       required: ['fields'],
       handler: this.createBrowserHandler('fillForm'),
-      category: 'web3',
+      category: 'browser',
       riskLevel: 'medium',
       requiresConfirmation: false,
+      owner: 'automation',
     });
 
     this.registerTool({
@@ -692,9 +703,10 @@ export class ToolRegistry {
       ],
       required: ['selector'],
       handler: this.createBrowserHandler('extractContent'),
-      category: 'web3',
+      category: 'browser',
       riskLevel: 'low',
       requiresConfirmation: false,
+      owner: 'automation',
     });
 
     this.registerTool({
@@ -719,9 +731,10 @@ export class ToolRegistry {
       ],
       required: [],
       handler: this.createBrowserHandler('waitFor'),
-      category: 'web3',
+      category: 'browser',
       riskLevel: 'low',
       requiresConfirmation: false,
+      owner: 'automation',
     });
 
     this.registerTool({
@@ -742,6 +755,7 @@ export class ToolRegistry {
       category: 'browser',
       riskLevel: 'low',
       requiresConfirmation: false,
+      owner: 'automation',
     });
 
     // Enhanced browser automation tools for multi-agent system
@@ -770,6 +784,7 @@ export class ToolRegistry {
       category: 'browser',
       riskLevel: 'low',
       requiresConfirmation: false,
+      owner: 'automation',
     });
 
     this.registerTool({
@@ -1178,6 +1193,7 @@ export class ToolRegistry {
       category: 'system',
       riskLevel: 'low',
       requiresConfirmation: false,
+      owner: 'planner',
     });
 
     // Enhanced scrollIntoView tool
@@ -1283,6 +1299,60 @@ export class ToolRegistry {
 
   private initializeSystemTools(): void {
     // System tools for wallet and agent management
+    // Plan task using PlannerAgent (via Web3Agent pipeline). No hardcoding: we funnel through Web3Agent when possible.
+    this.registerTool({
+      name: 'planTask',
+      description: 'Create a detailed multi-step plan for a user instruction using PlannerAgent',
+      parameters: [
+        { type: 'string', description: 'The user instruction to plan' },
+        { type: 'string', description: 'Planning strategy', enum: ['conservative','aggressive','adaptive','fallback'] },
+      ],
+      required: ['instruction'],
+      handler: this.createMultiAgentHandler('createExecutionPlan'),
+      category: 'system',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+      owner: 'planner',
+    });
+
+    // Orchestrate: delegate plan steps to underlying agents/tools
+    this.registerTool({
+      name: 'orchestratePlan',
+      description: 'Execute a given plan by orchestrating Automation/Web3 agents',
+      parameters: [
+        { type: 'string', description: 'Plan JSON string' },
+        { type: 'boolean', description: 'Enable validation' },
+      ],
+      required: ['plan'],
+      handler: this.createMultiAgentHandler('orchestratePlan'),
+      category: 'system',
+      riskLevel: 'medium',
+      requiresConfirmation: false,
+      owner: 'orchestrator',
+    });
+
+    // Automation: browser automation toolkit entry via existing browser tools
+    this.registerTool({
+      name: 'automationAction',
+      description: 'Perform a browser automation action (navigate/click/input/etc.)',
+      parameters: [
+        { type: 'string', description: 'Action name (navigateToUrl, clickElement, fillForm, extractContent, waitFor, takeScreenshot, scrollPage)' },
+        { type: 'object', description: 'Action parameters object' },
+      ],
+      required: ['action','params'],
+      handler: async (params: any) => {
+        const action = params?.action;
+        const actionParams = params?.params || {};
+        if (typeof action !== 'string') {
+          throw new Error('Invalid action');
+        }
+        return await this.executeTool(action, actionParams);
+      },
+      category: 'system',
+      riskLevel: 'medium',
+      requiresConfirmation: false,
+      owner: 'orchestrator',
+    });
     this.registerTool({
       name: 'getWalletInfo',
       description:
@@ -1339,6 +1409,7 @@ export class ToolRegistry {
       category: 'system',
       riskLevel: 'low',
       requiresConfirmation: false,
+      owner: 'orchestrator',
     });
 
     this.registerTool({
@@ -1363,6 +1434,68 @@ export class ToolRegistry {
       category: 'system',
       riskLevel: 'low',
       requiresConfirmation: false,
+      owner: 'orchestrator',
+    });
+
+    // Child-agent to Orchestrator callbacks
+    this.registerTool({
+      name: 'automationReport',
+      description: 'Automation agent reports step status back to Orchestrator',
+      parameters: [
+        { type: 'string', description: 'taskId' },
+        { type: 'string', description: 'stepId' },
+        { type: 'string', description: 'status (completed|failed|in_progress)' },
+        { type: 'string', description: 'optional message' },
+        { type: 'object', description: 'optional result payload' },
+      ],
+      required: ['taskId','stepId','status'],
+      handler: async (params: any) => {
+        const { taskId, stepId, status, message, result } = params || {};
+        if (!taskId || !stepId || !status) throw new Error('Missing required callback params');
+        const rec = this.orchestratorTaskRegistry.get(taskId) || {
+          steps: [],
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        rec.steps.push({ id: String(stepId), status: String(status), result, owner: 'automation', timestamp: Date.now() });
+        rec.updatedAt = Date.now();
+        this.orchestratorTaskRegistry.set(taskId, rec);
+        return { success: true, taskId, stepId, status, message, timestamp: Date.now() };
+      },
+      category: 'system',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+      owner: 'automation',
+    });
+
+    this.registerTool({
+      name: 'web3Report',
+      description: 'Web3 agent reports step status back to Orchestrator',
+      parameters: [
+        { type: 'string', description: 'taskId' },
+        { type: 'string', description: 'stepId' },
+        { type: 'string', description: 'status (completed|failed|in_progress)' },
+        { type: 'string', description: 'optional message' },
+        { type: 'object', description: 'optional result payload' },
+      ],
+      required: ['taskId','stepId','status'],
+      handler: async (params: any) => {
+        const { taskId, stepId, status, message, result } = params || {};
+        if (!taskId || !stepId || !status) throw new Error('Missing required callback params');
+        const rec = this.orchestratorTaskRegistry.get(taskId) || {
+          steps: [],
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        rec.steps.push({ id: String(stepId), status: String(status), result, owner: 'web3', timestamp: Date.now() });
+        rec.updatedAt = Date.now();
+        this.orchestratorTaskRegistry.set(taskId, rec);
+        return { success: true, taskId, stepId, status, message, timestamp: Date.now() };
+      },
+      category: 'system',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+      owner: 'web3',
     });
   }
 
@@ -1882,38 +2015,46 @@ export class ToolRegistry {
       try {
         logger.info(`Executing multi-agent action: ${actionName}`, params);
 
-        // Import Web3Agent dynamically to avoid circular dependency
-        const { Web3Agent } = await import('../Web3Agent');
-
-        // Get or create Web3Agent instance
-        // This is a simplified approach - in production, you'd want to manage instances properly
-        let web3Agent: InstanceType<typeof Web3Agent> | null = null;
+        // Access agent service to get Web3Agent if available
+        let web3Agent: any = null;
+        try {
+          const { agent } = await import('../../agent');
+          web3Agent = agent.getWeb3Agent?.() || null;
+        } catch {}
 
         switch (actionName) {
-          case 'createExecutionPlan':
-            // This would integrate with the PlannerAgent
+          case 'createExecutionPlan': {
+            const instruction: string = params?.task || params?.instruction || '';
+            const strategy: string = params?.strategy || params?.planningStrategy || 'adaptive';
+            if (!instruction) throw new Error('instruction is required');
+
+            const { DynamicTaskPlanner } = await import('../agents/TaskPlanner');
+            const planner = new DynamicTaskPlanner(web3Agent?.getLLM?.() || (await import('../llm/factory')).Web3LLM);
+            const planningContext = {
+              instruction,
+              currentUrl: '',
+              previousSteps: [],
+              failedSteps: [],
+              currentStep: 0,
+              maxSteps: 10,
+              context: (web3Agent && (web3Agent as any).state?.currentContext) || ({} as any),
+              executionHistory: [],
+            } as any;
+            const planRes = await planner.createPlan(instruction, planningContext, strategy as any);
             return {
               action: actionName,
               params,
               result: {
-                plan: {
-                  id: `plan_${Date.now()}`,
-                  name: params.task,
-                  description: `Execution plan for: ${params.task}`,
-                  complexity: params.complexity,
-                  estimatedSteps: Math.ceil(params.task.length / 10), // Simple estimation
-                  riskAssessment: params.enableRiskAssessment ? {
-                    overallRisk: params.complexity === 'complex' ? 'MEDIUM' : 'LOW',
-                    factors: [],
-                    recommendations: []
-                  } : undefined
-                },
+                plan: planRes.plan,
+                confidence: planRes.confidence,
+                reasoning: planRes.reasoning,
                 success: true,
-                message: `Created execution plan for task: ${params.task}`
+                message: 'Plan created successfully'
               },
               success: true,
               timestamp: Date.now(),
             };
+          }
 
           case 'validateTaskCompletion':
             // This would integrate with the ValidatorAgent
@@ -1970,6 +2111,75 @@ export class ToolRegistry {
               success: true,
               timestamp: Date.now(),
             };
+
+          case 'orchestratePlan': {
+            const rawPlan = params?.plan;
+            if (!rawPlan) throw new Error('plan is required');
+            let plan: any = rawPlan;
+            if (typeof rawPlan === 'string') {
+              try { plan = JSON.parse(rawPlan); } catch {}
+            }
+            const steps: any[] = Array.isArray(plan?.steps) ? plan.steps : Array.isArray(plan) ? plan : [];
+            if (!Array.isArray(steps) || steps.length === 0) {
+              throw new Error('Invalid plan: no steps found');
+            }
+
+            const results: any[] = [];
+            for (const step of steps) {
+              const type = String(step.type || step.action || '').toLowerCase();
+              let toolName = '';
+              let toolParams: any = {};
+              switch (type) {
+                case 'navigate':
+                  toolName = 'navigateToUrl';
+                  toolParams = { url: step.parameters?.url || step.url };
+                  break;
+                case 'click':
+                  toolName = 'clickElement';
+                  toolParams = { selector: step.parameters?.selector, text: step.parameters?.text };
+                  break;
+                case 'input':
+                  toolName = 'fillForm';
+                  toolParams = { fields: [{ selector: step.parameters?.selector, name: step.parameters?.name, value: step.parameters?.value }] };
+                  break;
+                case 'wait':
+                  toolName = 'waitFor';
+                  toolParams = { waitFor: 'time', timeout: step.parameters?.duration || step.timeout || 1000 };
+                  break;
+                case 'extract':
+                  toolName = 'extractContent';
+                  toolParams = { selector: step.parameters?.selector, type: step.parameters?.format || 'text' };
+                  break;
+                case 'scroll':
+                  toolName = 'scrollPage';
+                  toolParams = { direction: step.parameters?.direction || 'down', selector: step.parameters?.selector, amount: step.parameters?.amount };
+                  break;
+                case 'validate':
+                  toolName = 'validateTaskCompletion';
+                  toolParams = { task: params?.task || '', expectedOutcome: step.parameters?.criteria || 'task_success', deepValidation: true };
+                  break;
+                default:
+                  toolName = 'clickElement';
+                  toolParams = { selector: step.parameters?.selector, text: step.parameters?.text };
+                  break;
+              }
+              const stepResult = await this.executeTool(toolName, toolParams);
+              results.push({ type, tool: toolName, params: toolParams, result: stepResult });
+            }
+
+            return {
+              action: actionName,
+              params,
+              result: {
+                stepsExecuted: steps.length,
+                results,
+                success: true,
+                message: 'Plan orchestrated successfully'
+              },
+              success: true,
+              timestamp: Date.now(),
+            };
+          }
 
           case 'enableMultiAgentCoordination':
             // Enable/disable multi-agent coordination
@@ -2069,13 +2279,44 @@ export class ToolRegistry {
       parameters: {
         type: 'object',
         properties: tool.parameters.reduce((acc, param, index) => {
-          const paramName = this.getParameterName(tool.name, index);
-          acc[paramName] = param;
+          const paramName = (param as any).name || this.getParameterName(tool.name, index);
+          acc[paramName] = {
+            type: param.type,
+            description: param.description,
+            enum: (param as any).enum,
+            minimum: (param as any).minimum,
+            maximum: (param as any).maximum,
+          } as any;
           return acc;
-        }, {} as Record<string, ParameterSchema>),
+        }, {} as Record<string, any>),
         required: tool.required,
       },
     }));
+  }
+
+  getFunctionSchemasForOwners(owners: Array<'orchestrator'|'planner'|'automation'|'web3'|'system'>): FunctionSchema[] {
+    const allowed = new Set(owners);
+    return Array.from(this.tools.values())
+      .filter((t) => t.owner && allowed.has(t.owner))
+      .map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: {
+          type: 'object',
+          properties: tool.parameters.reduce((acc, param, index) => {
+            const paramName = (param as any).name || this.getParameterName(tool.name, index);
+            acc[paramName] = {
+              type: param.type,
+              description: param.description,
+              enum: (param as any).enum,
+              minimum: (param as any).minimum,
+              maximum: (param as any).maximum,
+            } as any;
+            return acc;
+          }, {} as Record<string, any>),
+          required: tool.required,
+        },
+      }));
   }
 
   /**
@@ -2083,6 +2324,17 @@ export class ToolRegistry {
    */
   getOpenAITools(): any[] {
     return this.getFunctionSchemas().map((schema) => ({
+      type: 'function',
+      function: {
+        name: schema.name,
+        description: schema.description,
+        parameters: schema.parameters,
+      },
+    }));
+  }
+
+  getOpenAIToolsForOwners(owners: Array<'orchestrator'|'planner'|'automation'|'web3'|'system'>): any[] {
+    return this.getFunctionSchemasForOwners(owners).map((schema) => ({
       type: 'function',
       function: {
         name: schema.name,

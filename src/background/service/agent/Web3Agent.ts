@@ -430,7 +430,7 @@ export class Web3Agent extends EventEmitter {
       const userMessage = new HumanMessage(instruction);
       this.state.conversationHistory.push(userMessage);
 
-      // Step 1: AI-driven task analysis
+      // Step 1: AI-driven task analysis (PlanAgent first)
       const taskAnalysis = await this.intelligentTaskAnalyzer.analyzeTask(
         instruction,
         this.state.currentContext
@@ -442,18 +442,36 @@ export class Web3Agent extends EventEmitter {
         requiresWeb3: taskAnalysis.requiresWeb3,
       });
 
-      // Step 2: Check if multi-agent coordination should be used
-      if (
-        this.coordinationEnabled &&
-        this.shouldUseMultiAgentCoordination(taskAnalysis)
-      ) {
-        return await this.processWithMultiAgentCoordination(
+      // Step 2: Plan first using PlannerAgent; store plan for Orchestrator
+      try {
+        const planningContext: PlanningContext = {
           instruction,
-          taskAnalysis
+          currentUrl: this.state.currentContext.currentUrl || '',
+          previousSteps: [],
+          failedSteps: [],
+          currentStep: 0,
+          maxSteps: 10,
+          context: this.state.currentContext,
+          executionHistory: [],
+        };
+        const plannerResult = await this.plannerAgent.createPlan(
+          instruction,
+          planningContext,
+          'adaptive'
         );
+        this.state.currentEnhancedPlan = this.convertToExecutionPlan(plannerResult.plan);
+      } catch (e) {
+        logger.warn('Planner plan creation failed; continuing', e);
       }
 
-      // Step 3: Enhanced intent extraction with task analysis context
+      // Step 3: Orchestrate with multi-agent system (Planner → Orchestrator → other agents)
+      // Always prefer multi-agent chain; fallback handled inside if it fails
+      return await this.processWithMultiAgentCoordination(
+        instruction,
+        taskAnalysis
+      );
+
+      // Step 4: Enhanced intent extraction with task analysis context
       const enhancedContext = {
         ...this.state.currentContext,
         taskAnalysis: taskAnalysis.reasoning,
@@ -467,7 +485,7 @@ export class Web3Agent extends EventEmitter {
         `Extracted intent: ${intent.action} with confidence ${intent.confidence}`
       );
 
-      // Step 4: Check if this is a browser automation task
+      // Step 5: Check if this is a browser automation task
       if (taskAnalysis.requiresBrowserAutomation) {
         return await this.handleBrowserAutomationTask(
           instruction,
@@ -475,7 +493,7 @@ export class Web3Agent extends EventEmitter {
         );
       }
 
-      // Step 4: Generate enhanced prompt with new modules
+      // Step 6: Generate enhanced prompt with new modules
       const promptContext: PromptContext = {
         messages: this.buildPrunedMessages(),
         context: enhancedContext,
@@ -574,11 +592,9 @@ export class Web3Agent extends EventEmitter {
           }
         } else if (recovery.fallback) {
           // Surface fallback reason explicitly
-          throw new Error(
-            typeof recovery.fallback === 'string'
-              ? recovery.fallback
-              : JSON.stringify(recovery.fallback)
-          );
+          const fallbackVal = recovery.fallback as any;
+          const fallbackMsg = typeof fallbackVal === 'string' ? fallbackVal : JSON.stringify(fallbackVal ?? {});
+          throw new Error(fallbackMsg);
         } else {
           // No recovery — propagate original error to UI
           const raw =
@@ -603,8 +619,13 @@ export class Web3Agent extends EventEmitter {
       // Step 7: Create action plan if actions were suggested
       let plan: ActionPlan | undefined;
       if (llmResponse.actions.length > 0 && intent.action !== 'QUERY') {
-        plan = await this.actionPlanner.createPlan(intent);
-        logger.info(`Created action plan with ${plan.actions.length} steps`);
+        const createdPlan = await this.actionPlanner.createPlan(intent);
+        if (createdPlan && (createdPlan as any).actions) {
+          plan = createdPlan as ActionPlan;
+          try { logger.info(`Created action plan with ${(plan as ActionPlan).actions.length} steps`); } catch {}
+        } else {
+          plan = undefined;
+        }
       }
 
       // Step 4: Simulate transactions if simulation is enabled and plan exists (with error recovery)
@@ -612,10 +633,10 @@ export class Web3Agent extends EventEmitter {
       if (
         (this.config as any).simulationEnabled &&
         plan &&
-        plan.requiresConfirmation
+        (plan as ActionPlan).requiresConfirmation
       ) {
         try {
-          simulation = await this.transactionSimulator.simulatePlan(plan);
+          simulation = await this.transactionSimulator.simulatePlan(plan as ActionPlan);
           logger.info(
             `Transaction simulation completed with risk level: ${simulation.riskLevel}`
           );
@@ -631,7 +652,7 @@ export class Web3Agent extends EventEmitter {
               ? simulationError
               : new Error(String(simulationError)),
             'transaction_simulation',
-            { plan: plan.actions.map((a) => a.type) }
+            { plan: (plan as ActionPlan).actions.map((a) => a.type) }
           );
 
           // Continue without simulation
@@ -646,9 +667,9 @@ export class Web3Agent extends EventEmitter {
 
       // Step 5: Handle confirmation and execution (with error recovery)
       let executedActions: ActionStep[] = [];
-      if (plan && (await this.shouldExecutePlan(plan, simulation))) {
+      if (plan && (await this.shouldExecutePlan(plan as ActionPlan, simulation))) {
         try {
-          executedActions = await this.executePlan(plan);
+          executedActions = await this.executePlan(plan as ActionPlan);
         } catch (executionError) {
           logger.error('Plan execution failed:', executionError);
 
@@ -658,23 +679,23 @@ export class Web3Agent extends EventEmitter {
               ? executionError
               : new Error(String(executionError)),
             'plan_execution',
-            { plan: plan.actions.map((a) => a.type) }
+            { plan: (plan as ActionPlan).actions.map((a) => a.type) }
           );
 
           if (recovery.success) {
             // Retry execution with recovered context
             try {
-              executedActions = await this.executePlan(plan);
+              executedActions = await this.executePlan(plan as ActionPlan);
             } catch (retryError) {
               logger.error('Retry execution also failed:', retryError);
               executedActions = this.generateFailedActions(
-                plan.actions,
+                (plan as ActionPlan).actions,
                 retryError
               );
             }
           } else {
             executedActions = this.generateFailedActions(
-              plan.actions,
+              (plan as ActionPlan).actions,
               executionError
             );
           }
@@ -2015,8 +2036,12 @@ export class Web3Agent extends EventEmitter {
         // Planning optional; continue without blocking
       }
 
-      // Step 3: Get available tools for function calling
-      const availableTools = this.llm.getAvailableTools();
+      // Step 3: Select tools per role (owners) for strict isolation
+      // Orchestrator always starts; attach orchestrator + planner for first turn
+      const { toolRegistry } = await import('./tools/ToolRegistry');
+      const availableTools = (toolRegistry as any).getFunctionSchemasForOwners
+        ? (toolRegistry as any).getFunctionSchemasForOwners(['orchestrator','planner'])
+        : this.llm.getAvailableTools();
 
       // Build prompt with proper system/user messages
       const promptContext: PromptContext = {
