@@ -10,11 +10,15 @@ import { logger } from '../utils/logger';
 interface MessageListProps {
   messages: Message[];
   isDarkMode?: boolean;
+  onWalletConfirm?: (approvalId: string, data: any, addToWhitelist?: boolean) => void;
+  onWalletReject?: (approvalId: string, data: any) => void;
 }
 
 export default memo(function MessageList({
   messages,
   isDarkMode = false,
+  onWalletConfirm,
+  onWalletReject,
 }: MessageListProps) {
   // Remove filtering: do not drop any LLM messages; normalize instead
   const validMessages = React.useMemo(() => {
@@ -71,6 +75,8 @@ export default memo(function MessageList({
             isDarkMode={isDarkMode}
             messageIndex={index}
             totalMessages={sortedMessages.length}
+            onWalletConfirm={onWalletConfirm}
+            onWalletReject={onWalletReject}
           />
         ))
       )}
@@ -85,6 +91,8 @@ interface MessageBlockProps {
   isDarkMode?: boolean;
   messageIndex?: number;
   totalMessages?: number;
+  onWalletConfirm?: (approvalId: string, data: any, addToWhitelist?: boolean) => void;
+  onWalletReject?: (approvalId: string, data: any) => void;
 }
 
 function MessageBlock({
@@ -93,6 +101,8 @@ function MessageBlock({
   isDarkMode = false,
   messageIndex = 0,
   totalMessages = 0,
+  onWalletConfirm,
+  onWalletReject,
 }: MessageBlockProps) {
   // Enhanced validation with error boundaries
   if (!message || !message.actor) {
@@ -137,6 +147,34 @@ function MessageBlock({
   const isStreamingError = message.messageType === 'streaming_error';
   const isToolResult = message.messageType === 'tool_result';
   const isAssistantContent = message.messageType === 'assistant_content';
+  const isWalletAutoConnected = message.messageType === 'wallet_auto_connected';
+  const isWalletAutoSigned = message.messageType === 'wallet_auto_signed';
+  const isWalletAutoApprovedTx = message.messageType === 'wallet_auto_approved_tx';
+  const isWalletConfirmationRequest = message.messageType === 'wallet_confirmation_request';
+  // Local state for wallet confirmation checkbox within this message block
+  const [addToWhitelist, setAddToWhitelist] = React.useState(false);
+
+  // Helpers for wallet confirmation rendering
+  const wc: any = (message as any).walletConfirmation || {};
+  const approvalId: string = (message as any).approvalId || '';
+  const fmtAddr = (addr?: string) => (addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : '');
+  const fmtHex = (hex?: string) => {
+    try {
+      if (!hex) return '0';
+      return parseInt(hex, 16).toLocaleString();
+    } catch {
+      return String(hex || '');
+    }
+  };
+  const fmtVal = (val?: string) => {
+    if (!val || val === '0x0' || val === '0') return '0';
+    try {
+      const n = Number(BigInt(val)) / 1e18;
+      return n.toFixed(6);
+    } catch {
+      return val as string;
+    }
+  };
 
 
   // Collapsible state for tool results (default collapsed)
@@ -211,7 +249,7 @@ function MessageBlock({
   }, [message, messageIndex, totalMessages, content]);
 
   return (
-    <div className={`flex gap-3 w-full items-start ${!isSameActor ? 'pt-4 mt-4 border-t border-gray-100 dark:border-gray-800' : ''} ${isThinking ? 'p-2 bg-purple-50 rounded-lg opacity-80 dark:bg-purple-900/10' : ''} ${isReActStatus ? 'p-2 bg-green-50 rounded-lg border-l-4 border-green-300 opacity-90 dark:bg-green-900/10' : ''} ${isStreamingError ? 'p-2 bg-red-50 rounded-lg dark:bg-red-900/10' : ''} ${isFunctionCall ? 'p-2 bg-blue-50 rounded-lg border-l-4 border-blue-300 opacity-90 dark:bg-blue-900/10' : ''} ${isToolResult ? 'p-2 bg-green-50 rounded-lg border-l-4 border-green-400 opacity-90 dark:bg-green-900/10' : ''} ${isAssistantContent ? 'p-2 bg-gray-50 rounded-lg dark:bg-gray-900/10' : ''}`}>
+    <div className={`flex gap-3 w-full items-start ${!isSameActor ? 'pt-4 mt-4 border-t border-gray-100 dark:border-gray-800' : ''} ${isThinking ? 'p-2 bg-purple-50 rounded-lg opacity-80 dark:bg-purple-900/10' : ''} ${isReActStatus ? 'p-2 bg-green-50 rounded-lg border-l-4 border-green-300 opacity-90 dark:bg-green-900/10' : ''} ${isStreamingError ? 'p-2 bg-red-50 rounded-lg dark:bg-red-900/10' : ''} ${isFunctionCall ? 'p-2 bg-blue-50 rounded-lg border-l-4 border-blue-300 opacity-90 dark:bg-blue-900/10' : ''} ${isToolResult ? 'p-2 bg-green-50 rounded-lg border-l-4 border-green-400 opacity-90 dark:bg-green-900/10' : ''} ${isAssistantContent ? 'p-2 bg-gray-50 rounded-lg dark:bg-gray-900/10' : ''} ${isWalletAutoConnected ? 'p-3 bg-emerald-50 rounded-lg border border-emerald-200 shadow-sm dark:bg-emerald-900/10 dark:border-emerald-800' : ''} ${isWalletAutoSigned ? 'p-3 bg-blue-50 rounded-lg border border-blue-200 shadow-sm dark:bg-blue-900/10 dark:border-blue-800' : ''} ${isWalletAutoApprovedTx ? 'p-3 bg-purple-50 rounded-lg border border-purple-200 shadow-sm dark:bg-purple-900/10 dark:border-purple-800' : ''}`}>
       {!isSameActor && (
         <div
           className="flex flex-shrink-0 justify-center items-center w-8 h-8 rounded-full shadow-md"
@@ -235,7 +273,7 @@ function MessageBlock({
 
       <div className="flex-1 min-w-0">
         <div className="w-full">
-          <div className={`text-sm break-words whitespace-pre-wrap ${isThinking ? 'italic text-gray-600 dark:text-gray-300' : ''} ${isReActStatus ? 'text-gray-700 dark:text-gray-300' : ''} ${isStreamingError ? 'text-red-700 dark:text-red-300' : ''} ${isFunctionCall ? 'text-blue-700 dark:text-blue-300' : ''} ${isToolResult ? 'text-green-700 dark:text-green-300' : ''} ${isAssistantContent ? 'text-gray-800 dark:text-gray-200' : ''}`}>
+          <div className={`text-sm break-words whitespace-pre-wrap ${isThinking ? 'italic text-gray-600 dark:text-gray-300' : ''} ${isReActStatus ? 'text-gray-700 dark:text-gray-300' : ''} ${isStreamingError ? 'text-red-700 dark:text-red-300' : ''} ${isFunctionCall ? 'text-blue-700 dark:text-blue-300' : ''} ${isToolResult ? 'text-green-700 dark:text-green-300' : ''} ${isAssistantContent ? 'text-gray-800 dark:text-gray-200' : ''} ${isWalletAutoConnected ? 'text-emerald-800 dark:text-emerald-200' : ''} ${isWalletAutoSigned ? 'text-blue-800 dark:text-blue-200' : ''} ${isWalletAutoApprovedTx ? 'text-purple-800 dark:text-purple-200' : ''}`}>
             {isProgress ? (
               <div className="overflow-hidden h-1 bg-gray-200 rounded-full dark:bg-gray-700">
                 <div className="h-full bg-blue-500 animate-pulse" style={{ animation: 'progress-animation 2s linear infinite' }} />
@@ -264,6 +302,157 @@ function MessageBlock({
               <div className="flex gap-2 items-start">
                 <div className="text-lg">❌</div>
                 <div className="flex-1 text-red-700 dark:text-red-300">{content}</div>
+              </div>
+            ) : isWalletAutoConnected ? (
+              <div className="flex gap-3 items-center">
+                <div className="flex flex-shrink-0 justify-center items-center w-10 h-10 bg-emerald-100 rounded-full dark:bg-emerald-900/20">
+                  <div className="text-xl">🔗</div>
+                </div>
+                <div className="flex-1">
+                  <div className="font-medium text-emerald-800 dark:text-emerald-200">Wallet Connected</div>
+                  <div className="text-sm text-emerald-600 dark:text-emerald-300">{content}</div>
+                </div>
+                <div className="flex-shrink-0">
+                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+                </div>
+              </div>
+            ) : isWalletAutoSigned ? (
+              <div className="space-y-3">
+                <div className="flex gap-3 items-center">
+                  <div className="flex flex-shrink-0 justify-center items-center w-10 h-10 bg-blue-100 rounded-full dark:bg-blue-900/20">
+                    <div className="text-xl">✍️</div>
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-medium text-blue-800 dark:text-blue-200">Message Signed</div>
+                    <div className="text-sm text-blue-600 dark:text-blue-300">{content}</div>
+                  </div>
+                  <div className="flex-shrink-0">
+                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                  </div>
+                </div>
+                {/* Show sign details if available */}
+                {(message as any).signData && (
+                  <div className="p-3 rounded-lg border border-blue-100 ml-13 bg-blue-25 dark:bg-blue-900/5 dark:border-blue-800/50">
+                    <div className="space-y-1 text-xs text-blue-700 dark:text-blue-300">
+                      <div><span className="font-medium">Type:</span> {(message as any).signData.signType === 'SignText' ? 'Text Message' : 'Typed Data'}</div>
+                      <div><span className="font-medium">Origin:</span> {(message as any).signData.origin}</div>
+                      {(message as any).signData.message && (
+                        <div>
+                          <span className="font-medium">Message:</span>
+                          <div className="overflow-y-auto p-2 mt-1 max-h-20 font-mono text-xs text-gray-700 bg-white rounded border dark:bg-gray-800 dark:text-gray-300">
+                            {(message as any).signData.message}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : isWalletAutoApprovedTx ? (
+              <div className="space-y-3">
+                <div className="flex gap-3 items-center">
+                  <div className="flex flex-shrink-0 justify-center items-center w-10 h-10 bg-purple-100 rounded-full dark:bg-purple-900/20">
+                    <div className="text-xl">🚀</div>
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-medium text-purple-800 dark:text-purple-200">Transaction Approved</div>
+                    <div className="text-sm text-purple-600 dark:text-purple-300">{content}</div>
+                  </div>
+                  <div className="flex-shrink-0">
+                    <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse"></div>
+                  </div>
+                </div>
+                {/* Show transaction details if available */}
+                {(message as any).txData && (
+                  <div className="p-3 rounded-lg border border-purple-100 ml-13 bg-purple-25 dark:bg-purple-900/5 dark:border-purple-800/50">
+                    <div className="space-y-1 text-xs text-purple-700 dark:text-purple-300">
+                      <div><span className="font-medium">Contract:</span> {(message as any).txData.contractAddress}</div>
+                      <div><span className="font-medium">Origin:</span> {(message as any).txData.origin}</div>
+                      <div><span className="font-medium">Chain ID:</span> {(message as any).txData.chainId}</div>
+                      {(message as any).txData.txParams?.value && (
+                        <div><span className="font-medium">Value:</span> {(message as any).txData.txParams.value}</div>
+                      )}
+                      <div className="p-2 mt-2 text-xs text-purple-600 bg-purple-50 rounded border dark:text-purple-400 dark:bg-purple-900/10">
+                        ✅ This contract is whitelisted for automatic approval
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : isWalletConfirmationRequest ? (
+              <div className="space-y-3">
+                <div className="flex gap-3 items-center">
+                  <div className="flex flex-shrink-0 justify-center items-center w-10 h-10 bg-amber-100 rounded-full dark:bg-amber-900/20">
+                    <div className="text-xl">🪪</div>
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-medium text-amber-800 dark:text-amber-200">Transaction Confirmation Required</div>
+                    <div className="text-sm text-amber-600 dark:text-amber-300">{(wc.origin || 'dApp')}</div>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-white rounded-lg border border-gray-200 ml-13 dark:bg-gray-800 dark:border-gray-700">
+                  <div className="grid grid-cols-2 gap-y-2 text-xs text-gray-700 dark:text-gray-300">
+                    <div className="font-medium">Network</div>
+                    <div>{wc.chain?.name} (id: {wc.chain?.id})</div>
+                    <div className="font-medium">Account</div>
+                    <div className="font-mono">{fmtAddr(wc.account?.address)}</div>
+                    <div className="font-medium">To</div>
+                    <div className="font-mono">{fmtAddr(wc.txParams?.to)}</div>
+                    <div className="font-medium">Value</div>
+                    <div>{fmtVal(wc.txParams?.value)} {wc.chain?.nativeTokenSymbol || ''}</div>
+                    <div className="font-medium">Gas Limit</div>
+                    <div>{fmtHex(wc.txParams?.gas || wc.estimatedGas)}</div>
+                    {wc.txParams?.data && (
+                      <>
+                        <div className="font-medium">Calldata</div>
+                        <div className="overflow-y-auto pr-1 max-h-24 font-mono break-all">{wc.txParams.data}</div>
+                      </>
+                    )}
+                  </div>
+
+                  {wc?.simulating && (
+                    <div className="p-2 mt-3 text-xs text-blue-700 bg-blue-50 rounded border border-blue-200 dark:bg-blue-900/10 dark:border-blue-800 dark:text-blue-300">
+                      Simulating...
+                    </div>
+                  )}
+
+                  {!wc?.simulating && wc?.preExecResult?.pre_exec && wc.preExecResult.pre_exec.success === false && (
+                    <div className="p-2 mt-3 text-xs text-red-700 bg-red-50 rounded border border-red-200 dark:bg-red-900/10 dark:border-red-800 dark:text-red-300">
+                      ⚠️ Simulation failed: {wc.preExecResult.pre_exec.error || 'Unknown error'}
+                    </div>
+                  )}
+
+                  <div className="flex gap-2 items-center mt-3">
+                    <input id={`wl_${approvalId}`} type="checkbox" className="cursor-pointer" checked={addToWhitelist} onChange={(e) => setAddToWhitelist(e.target.checked)} />
+                    <label htmlFor={`wl_${approvalId}`} className="text-xs text-gray-700 cursor-pointer dark:text-gray-300">Add this contract to whitelist for future auto-approval</label>
+                  </div>
+
+                  <div className="flex gap-2 justify-end mt-3">
+                    <button
+                      type="button"
+                      className="px-3 py-1 text-sm rounded border border-gray-300 hover:bg-gray-50 dark:border-gray-700"
+                      onClick={() => onWalletReject && onWalletReject(approvalId, wc)}
+                    >
+                      Reject
+                    </button>
+                    {(() => {
+                      const simDone = !!wc?.preExecResult && !wc?.simulating;
+                      const disabled = wc?.preExecResult?.pre_exec && wc.preExecResult.pre_exec.success === false;
+                      return (
+                        <button
+                          type="button"
+                          className={`px-3 py-1 text-sm text-white rounded ${simDone ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-400 cursor-wait'}`}
+                          onClick={() => simDone && onWalletConfirm && onWalletConfirm(approvalId, wc, addToWhitelist)}
+                          disabled={!simDone}
+                          title={!simDone ? 'Simulating...' : 'Confirm'}
+                        >
+                          {!simDone ? 'Simulating...' : 'Confirm'}
+                        </button>
+                      );
+                    })()}
+                  </div>
+                </div>
               </div>
             ) : isToolResult ? (
               <div className="space-y-2">

@@ -14,7 +14,6 @@ import Settings from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import IconButton from './components/IconButton';
 import ElementSelector from './components/ElementSelector';
-import WalletConfirmationCard from './components/WalletConfirmationCard';
 import {
   StreamingMessage,
   useStreamingMessage,
@@ -562,6 +561,75 @@ export const SidePanelApp = () => {
           connectionRetryCount.current = 0;
           logger.info(COMPONENT_NAME, 'Connected successfully');
           logEvent('connect', 'Connected successfully');
+          return;
+        }
+        if (message.type === 'wallet_auto_connected') {
+          logger.info(COMPONENT_NAME, 'Wallet auto-connected', {
+            origin: message.data?.origin,
+            name: message.data?.name,
+          });
+
+          // Display auto-connection notification card
+          appendMessage({
+            actor: Actors.SYSTEM,
+            content: `Wallet automatically connected to ${message.data?.name || message.data?.origin || 'dApp'}`,
+            timestamp: message.timestamp || Date.now(),
+            messageType: 'wallet_auto_connected',
+          });
+
+          logEvent('wallet_auto_connected', {
+            origin: message.data?.origin,
+            name: message.data?.name
+          });
+          return;
+        }
+        if (message.type === 'wallet_auto_signed') {
+          logger.info(COMPONENT_NAME, 'Wallet auto-signed', {
+            origin: message.data?.origin,
+            name: message.data?.name,
+            signType: message.data?.signType,
+          });
+
+          // Display auto-signing notification card
+          const signTypeText = message.data?.signType === 'SignText' ? 'text message' : 'typed data';
+          appendMessage({
+            actor: Actors.SYSTEM,
+            content: `Automatically signed ${signTypeText} for ${message.data?.name || message.data?.origin || 'dApp'}`,
+            timestamp: message.timestamp || Date.now(),
+            messageType: 'wallet_auto_signed',
+            // Store additional data for the card display
+            ...(message.data && { signData: message.data }),
+          });
+
+          logEvent('wallet_auto_signed', {
+            origin: message.data?.origin,
+            name: message.data?.name,
+            signType: message.data?.signType
+          });
+          return;
+        }
+        if (message.type === 'wallet_auto_approved_tx') {
+          logger.info(COMPONENT_NAME, 'Wallet auto-approved transaction', {
+            origin: message.data?.origin,
+            name: message.data?.name,
+            contractAddress: message.data?.contractAddress,
+          });
+
+          // Display auto-approved transaction notification card
+          appendMessage({
+            actor: Actors.SYSTEM,
+            content: `Automatically approved transaction for ${message.data?.name || message.data?.origin || 'dApp'}`,
+            timestamp: message.timestamp || Date.now(),
+            messageType: 'wallet_auto_approved_tx',
+            // Store additional data for the card display
+            ...(message.data && { txData: message.data }),
+          });
+
+          logEvent('wallet_auto_approved_tx', {
+            origin: message.data?.origin,
+            name: message.data?.name,
+            contractAddress: message.data?.contractAddress
+          });
           return;
         }
         if (message && message.type === EventType.EXECUTION) {
@@ -1191,7 +1259,62 @@ export const SidePanelApp = () => {
             approvalId: message.approvalId,
             hasData: !!message.data,
           });
-          setWalletConfirmation(message);
+          // Stop any ongoing streaming/task and render inline confirmation card as a message
+          try { handleStopTask(); } catch {}
+          // De-duplicate by approvalId: if an existing message with same approvalId exists, update it instead of appending
+          let hasExisting = false;
+          setMessages(prev => {
+            const idx = prev.findIndex(m => (m as any).approvalId === message.approvalId && m.messageType === 'wallet_confirmation_request');
+            if (idx >= 0) {
+              hasExisting = true;
+              const copy = [...prev];
+              copy[idx] = {
+                ...copy[idx],
+                walletConfirmation: message.data,
+              } as any;
+              return copy;
+            }
+            return prev;
+          });
+          if (!hasExisting) appendMessage({
+            actor: Actors.SYSTEM,
+            content: 'Transaction confirmation requested',
+            timestamp: Date.now(),
+            messageType: 'wallet_confirmation_request',
+            approvalId: message.approvalId,
+            walletConfirmation: message.data,
+          } as any);
+          // Immediately ask background to simulate so the card can update with real data
+          try {
+            if (portRef.current) {
+              portRef.current.postMessage({
+                type: 'wallet_simulate',
+                approvalId: message.approvalId,
+                data: message.data,
+              });
+            }
+          } catch (e) {
+            logger.warn(COMPONENT_NAME, 'Failed to request wallet_simulate', e);
+          }
+        } else if (message && message.type === 'wallet_simulate_result') {
+          // Update the inline confirmation message with simulation result
+          const approvalId = message.approvalId;
+          const sim = message.data || {};
+          setMessages(prev => prev.map(m => {
+            if ((m as any).approvalId === approvalId && m.messageType === 'wallet_confirmation_request') {
+              return {
+                ...m,
+                walletConfirmation: {
+                  ...(m as any).walletConfirmation,
+                  txParams: sim.approvalRes || (m as any).walletConfirmation?.txParams,
+                  preExecResult: sim.preExecResult || (m as any).walletConfirmation?.preExecResult,
+                  estimatedGas: sim.estimatedGas || (m as any).walletConfirmation?.estimatedGas,
+                  simulating: false,
+                },
+              } as any;
+            }
+            return m;
+          }));
         } else {
           logger.warn(COMPONENT_NAME, 'Unknown message type received', {
             type: message.type,
@@ -2327,15 +2450,7 @@ export const SidePanelApp = () => {
             </ErrorBoundary>
           ) : (
             <>
-              {walletConfirmation && (
-                <ErrorBoundary componentName="WalletConfirmationCard">
-                  <WalletConfirmationCard
-                    data={walletConfirmation.data}
-                    onConfirm={(addToWhitelist) => handleWalletConfirmation(true, addToWhitelist)}
-                    onReject={() => handleWalletConfirmation(false)}
-                  />
-                </ErrorBoundary>
-              )}
+              {/* Inline confirmation now rendered as a message card inside MessageList; remove overlay card */}
 
               {messages.length === 0 ? (
                 <ErrorBoundary componentName="BookmarkList">
@@ -2349,7 +2464,43 @@ export const SidePanelApp = () => {
                 </ErrorBoundary>
               ) : (
                 <ErrorBoundary componentName="MessageList">
-                  <MessageList messages={messages} />
+                  <MessageList
+                    messages={messages}
+                    onWalletConfirm={(approvalId, data, addToWhitelist) => {
+                      // approve inline and forward to LLM
+                      try {
+                        const resp = {
+                          type: 'wallet_confirmation_response',
+                          approvalId,
+                          approved: true,
+                          data: {
+                            ...data?.txParams,
+                            addToWhitelist: !!addToWhitelist,
+                            origin: data?.origin,
+                            chainId: data?.chain?.id || data?.txParams?.chainId,
+                          },
+                        } as any;
+                        if (portRef.current) portRef.current.postMessage(resp);
+                      } catch (e) {
+                        logger.warn(COMPONENT_NAME, 'Failed to send inline approve', e);
+                      }
+                      // Stop any stream just in case
+                      try { handleStopTask(); } catch {}
+                      // Send a user content to LLM summarizing the tx
+                      try {
+                        const text = `User confirmed a transaction\nOrigin: ${data?.origin}\nChain: ${data?.chain?.name} (id=${data?.chain?.id})\nFrom: ${data?.txParams?.from}\nTo (contract): ${data?.txParams?.to}\nValue: ${data?.txParams?.value || '0x0'}\nGas Limit: ${data?.txParams?.gas || data?.estimatedGas || '0x0'}\n${data?.txParams?.data ? `Calldata: ${data.txParams.data}` : 'Type: Native transfer'}\nAddToWhitelist: ${!!addToWhitelist}`;
+                        (async () => { await handleSendMessage(text); })();
+                      } catch {}
+                    }}
+                    onWalletReject={(approvalId, data) => {
+                      try {
+                        const resp = { type: 'wallet_confirmation_response', approvalId, approved: false, data: null } as any;
+                        if (portRef.current) portRef.current.postMessage(resp);
+                      } catch (e) {
+                        logger.warn(COMPONENT_NAME, 'Failed to send inline reject', e);
+                      }
+                    }}
+                  />
                 </ErrorBoundary>
               )}
 

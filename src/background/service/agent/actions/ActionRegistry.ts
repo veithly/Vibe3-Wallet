@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { ActionStep, ActionDefinition } from '../types';
 import { createLogger } from '@/utils/logger';
+import { AssetQueryAction } from './asset-query-actions';
+import { 
+  getAllAssetsActionSchema,
+  getTokenBalancesActionSchema,
+  getNativeBalanceActionSchema,
+  getAssetPricesActionSchema
+} from './asset-query-schemas';
 
 const logger = createLogger('ActionRegistry');
 
@@ -55,6 +62,7 @@ export class ActionRegistry {
   private executionHistory: ActionResult[] = [];
   private metrics: Map<string, any> = new Map();
   private config: ActionRegistryConfig;
+  private assetQueryAction: AssetQueryAction;
 
   constructor(config?: Partial<ActionRegistryConfig>) {
     this.config = {
@@ -65,6 +73,9 @@ export class ActionRegistry {
       enableMetrics: true,
       ...config,
     };
+
+    // Initialize asset query action
+    this.assetQueryAction = new AssetQueryAction({} as any); // Context will be provided during execution
 
     this.initializeDefaultActions();
     this.initializeCategories();
@@ -322,6 +333,81 @@ export class ActionRegistry {
       riskLevel: 'medium',
       category: 'system',
       timeout: 30000,
+      dependencies: [],
+      retryable: true,
+    });
+
+    // Asset Query Actions
+    this.registerAction('getAllAssets', {
+      name: 'getAllAssets',
+      description: getAllAssetsActionSchema.description,
+      handler: this.executeGetAllAssets.bind(this),
+      schema: {
+        type: 'object',
+        properties: {
+          address: { type: 'string' },
+          chainId: { type: 'string' },
+          includeZeroBalances: { type: 'boolean' },
+        },
+      },
+      riskLevel: 'low',
+      category: 'web3',
+      timeout: 30000,
+      dependencies: [],
+      retryable: true,
+    });
+
+    this.registerAction('getTokenBalances', {
+      name: 'getTokenBalances',
+      description: getTokenBalancesActionSchema.description,
+      handler: this.executeGetTokenBalances.bind(this),
+      schema: {
+        type: 'object',
+        properties: {
+          address: { type: 'string' },
+          chainId: { type: 'string' },
+          tokenAddresses: { type: 'array', items: { type: 'string' } },
+        },
+      },
+      riskLevel: 'low',
+      category: 'web3',
+      timeout: 20000,
+      dependencies: [],
+      retryable: true,
+    });
+
+    this.registerAction('getNativeBalance', {
+      name: 'getNativeBalance',
+      description: getNativeBalanceActionSchema.description,
+      handler: this.executeGetNativeBalance.bind(this),
+      schema: {
+        type: 'object',
+        properties: {
+          address: { type: 'string' },
+          chainId: { type: 'string' },
+        },
+      },
+      riskLevel: 'low',
+      category: 'web3',
+      timeout: 15000,
+      dependencies: [],
+      retryable: true,
+    });
+
+    this.registerAction('getAssetPrices', {
+      name: 'getAssetPrices',
+      description: getAssetPricesActionSchema.description,
+      handler: this.executeGetAssetPrices.bind(this),
+      schema: {
+        type: 'object',
+        properties: {
+          chainId: { type: 'string' },
+          tokenAddresses: { type: 'array', items: { type: 'string' } },
+        },
+      },
+      riskLevel: 'low',
+      category: 'web3',
+      timeout: 15000,
       dependencies: [],
       retryable: true,
     });
@@ -839,6 +925,43 @@ export class ActionRegistry {
     logger.info('Waiting for condition', params);
     await new Promise((resolve) => setTimeout(resolve, params.timeout));
     return { success: true, waited: params.timeout };
+  }
+
+  // Asset Query Action implementations
+  private async executeGetAllAssets(params: any, context?: any): Promise<any> {
+    logger.info('Getting all assets', params);
+    const result = await this.assetQueryAction.getAllAssets(params);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to get all assets');
+    }
+    return result.data;
+  }
+
+  private async executeGetTokenBalances(params: any, context?: any): Promise<any> {
+    logger.info('Getting token balances', params);
+    const result = await this.assetQueryAction.getTokenBalances(params);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to get token balances');
+    }
+    return result.data;
+  }
+
+  private async executeGetNativeBalance(params: any, context?: any): Promise<any> {
+    logger.info('Getting native balance', params);
+    const result = await this.assetQueryAction.getNativeBalance(params);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to get native balance');
+    }
+    return result.data;
+  }
+
+  private async executeGetAssetPrices(params: any, context?: any): Promise<any> {
+    logger.info('Getting asset prices', params);
+    const result = await this.assetQueryAction.getAssetPrices(params);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to get asset prices');
+    }
+    return result.data;
   }
 
   /**

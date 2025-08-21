@@ -5,6 +5,7 @@ import {
   permissionService,
   preferenceService,
   contractWhitelistService,
+  openapiService,
 } from '@/background/service';
 import { PromiseFlow, underline2Camelcase } from '@/background/utils';
 import { EVENTS } from 'consts';
@@ -22,9 +23,11 @@ import { bgRetryTxMethods } from '@/background/utils/errorTxRetry';
 import { hexToNumber } from 'viem';
 import BigNumber from 'bignumber.js';
 import { agent as agentService } from '@/background/service/agent';
+import { transactionHistoryService } from '@/background/service';
 import { walletController } from '@/background/controller';
 import { CHAINS_ENUM } from 'consts';
 import { buildTxApprovalResWithPreExec } from './txHelper';
+import { broadcastChainChanged } from '../utils';
 
 const isSignApproval = (type: string) => {
   const SIGN_APPROVALS = ['SignText', 'SignTypedData', 'SignTx'];
@@ -173,6 +176,22 @@ const flowContext = flow
 
             // Attach account to request so eth_requestAccounts returns it
             ctx.request.account = defaultAccount || preferenceService.getCurrentAccount() || undefined;
+
+            // Notify Agent Sidebar about auto-connection
+            try {
+              agentService.broadcastMessage({
+                type: 'wallet_auto_connected',
+                timestamp: Date.now(),
+                data: {
+                  origin,
+                  name,
+                  account: defaultAccount,
+                  details: `Automatically connected wallet to ${name || origin}`,
+                },
+              });
+            } catch (error) {
+              console.error('Failed to notify Agent Sidebar about auto-connection:', error);
+            }
           } else {
             // Use popup approval when Sidebar is not connected
             const {
@@ -211,6 +230,127 @@ const flowContext = flow
           throw e;
         }
       }
+    }
+
+    return next();
+  })
+  .use(async (ctx, next) => {
+    // Auto-resolve chain from incoming RPC when Sidebar is connected
+    const {
+      request: {
+        data: { method, params },
+        session: { origin, name, icon },
+      },
+    } = ctx;
+
+    const agentConnected = agentService && (agentService as any)['ports'] && (agentService as any)['ports'].has('rabby-agent-connection');
+    const isUnlock = keyringService.memStore.getState().isUnlocked;
+    if (!isUnlock || !agentConnected) return next();
+
+    // Helper: extract desired chainId number from various RPC methods
+    const extractDesiredChainId = (m?: string, p?: any[]): number | null => {
+      if (!m) return null;
+      try {
+        const lower = m.toLowerCase();
+        // wallet_switchEthereumChain / wallet_addEthereumChain handled later, but extract here for consistency
+        if (lower === 'wallet_switchethereumchain' || lower === 'wallet_addethereumchain') {
+          const cid = p?.[0]?.chainId;
+          if (typeof cid === 'number') return cid;
+          if (typeof cid === 'string') return cid.startsWith('0x') ? parseInt(cid, 16) : parseInt(cid, 10);
+        }
+        if (lower === 'eth_sendtransaction') {
+          const cid = p?.[0]?.chainId;
+          if (typeof cid === 'number') return cid;
+          if (typeof cid === 'string') return cid.startsWith('0x') ? parseInt(cid, 16) : parseInt(cid, 10);
+        }
+        // Try to parse typed data domain.chainId for signTypedData variants
+        if (lower === 'eth_signtypeddata' || lower === 'eth_signtypeddata_v1' || lower === 'eth_signtypeddata_v3' || lower === 'eth_signtypeddata_v4') {
+          const candidates: any[] = Array.isArray(p) ? p : [];
+          for (const c of candidates) {
+            if (!c) continue;
+            if (typeof c === 'string') {
+              try {
+                const obj = JSON.parse(c);
+                const cid = obj?.domain?.chainId;
+                if (typeof cid === 'number') return cid;
+                if (typeof cid === 'string') return cid.startsWith('0x') ? parseInt(cid, 16) : parseInt(cid, 10);
+              } catch {}
+            } else if (typeof c === 'object') {
+              const cid = c?.domain?.chainId;
+              if (typeof cid === 'number') return cid;
+              if (typeof cid === 'string') return cid.startsWith('0x') ? parseInt(cid, 16) : parseInt(cid, 10);
+            }
+          }
+        }
+      } catch {}
+      return null;
+    };
+
+    const desiredIdNum = extractDesiredChainId(method, params);
+    if (!desiredIdNum) return next();
+
+    try {
+      const site = permissionService.getConnectedSite(origin);
+      const currentEnum = site?.chain;
+      const current = currentEnum ? findChain({ enum: currentEnum }) : null;
+      if (current && Number(current.id) === Number(desiredIdNum)) {
+        return next();
+      }
+
+      let target = findChain({ id: desiredIdNum });
+      if (!target) {
+        // Try to fetch chain metadata from API and auto-add
+        try {
+          const res = await openapiService.getChainListByIds({ ids: String(desiredIdNum) });
+          const item = res?.[0];
+          if (item) {
+            const chainBase: any = {
+              id: item.chain_id,
+              name: item.name,
+              nativeTokenSymbol: item.native_currency?.symbol || 'ETH',
+              rpcUrl: item.rpc || '',
+              scanLink: item.explorer || '',
+            };
+            const addRes = await walletController.addCustomTestnet(chainBase, { ga: { source: 'dapp' } });
+            if ((addRes as any)?.error) throw new Error((addRes as any).error?.message || 'Failed to add custom network');
+            target = findChain({ id: chainBase.id });
+            (ctx as any)._autoNetworkAdded = true;
+          }
+        } catch {}
+      }
+
+      if (target) {
+        // Update connected site and broadcast
+        const isEnabledDappAccount = preferenceService.getPreference('isEnabledDappAccount');
+        const defaultAccount = ctx.request.account || preferenceService.getCurrentAccount();
+        permissionService.updateConnectSite(origin, { chain: (target as any).enum }, true);
+        if (!permissionService.hasPermission(origin)) {
+          permissionService.addConnectedSiteV2({
+            origin,
+            name,
+            icon,
+            defaultChain: (target as any).enum,
+            defaultAccount: isEnabledDappAccount ? (defaultAccount || undefined) : undefined,
+          });
+        }
+        broadcastChainChanged({ origin, chain: target as any });
+
+        try {
+          agentService.broadcastMessage({
+            type: 'execution',
+            actor: 'SYSTEM',
+            state: 'TASK_OK',
+            timestamp: Date.now(),
+            data: {
+              details: (ctx as any)._autoNetworkAdded
+                ? `Added custom network and switched: ${(target as any).name} (chainId ${desiredIdNum})`
+                : `Switched network: ${(target as any).name} (chainId ${desiredIdNum})`,
+            },
+          });
+        } catch {}
+      }
+    } catch {
+      // ignore failures; fall through
     }
 
     return next();
@@ -259,7 +399,120 @@ const flowContext = flow
       ctx.request.data.params[0] = message;
       ctx.request.data.params[1] = from;
     }
-    if (approvalType && (!condition || !condition(ctx.request))) {
+    // Determine whether approval UI is needed; handle special cases for chain switching/addition
+    let needApproval = false;
+    let autoHandled = false;
+    try {
+      needApproval = !!approvalType && (!condition || !condition(ctx.request));
+    } catch (e: any) {
+      needApproval = true;
+    }
+
+    // Auto-handle chain switching or adding when Agent Sidebar is connected
+    if (needApproval && (approvalType === 'SwitchChain' || approvalType === 'AddChain')) {
+      const agentConnected = agentService && (agentService as any)['ports'] && (agentService as any)['ports'].has('rabby-agent-connection');
+      const isUnlock = keyringService.memStore.getState().isUnlocked;
+      if (isUnlock && agentConnected) {
+        try {
+          const params0 = params?.[0] || {};
+          // Normalize chainId (may be hex or number)
+          let desiredIdNum: number | null = null;
+          if (approvalType === 'SwitchChain') {
+            const cid = params0.chainId;
+            if (typeof cid === 'number') desiredIdNum = cid;
+            else if (typeof cid === 'string') {
+              desiredIdNum = cid.startsWith('0x') ? parseInt(cid, 16) : parseInt(cid, 10);
+            }
+          } else {
+            const cid = params0.chainId;
+            if (typeof cid === 'number') desiredIdNum = cid;
+            else if (typeof cid === 'string') {
+              desiredIdNum = cid.startsWith('0x') ? parseInt(cid, 16) : parseInt(cid, 10);
+            }
+          }
+
+          let targetChain = desiredIdNum ? findChain({ id: desiredIdNum }) : null;
+
+          // If chain not found, try to create a custom network automatically
+          if (!targetChain) {
+            if (approvalType === 'AddChain') {
+              const chainBase = {
+                id: desiredIdNum || 0,
+                name: params0.chainName || `Chain ${desiredIdNum || ''}`,
+                nativeTokenSymbol: params0?.nativeCurrency?.symbol || 'ETH',
+                rpcUrl: (params0?.rpcUrls && params0.rpcUrls[0]) || '',
+                scanLink: (params0?.blockExplorerUrls && params0.blockExplorerUrls[0]) || '',
+              } as any;
+              const res = await walletController.addCustomTestnet(chainBase, { ga: { source: 'dapp' } });
+              if ((res as any)?.error) throw new Error((res as any).error?.message || 'Failed to add custom network');
+              targetChain = findChain({ id: chainBase.id });
+              (ctx as any)._autoNetworkAdded = true;
+            } else if (approvalType === 'SwitchChain' && desiredIdNum) {
+              try {
+                const fetched = await openapiService.getChainListByIds({ ids: String(desiredIdNum) });
+                const item = fetched?.[0];
+                if (item) {
+                  const chainBase = {
+                    id: item.chain_id,
+                    name: item.name,
+                    nativeTokenSymbol: item.native_currency?.symbol || 'ETH',
+                    rpcUrl: item.rpc || '',
+                    scanLink: item.explorer || '',
+                  } as any;
+                  const res = await walletController.addCustomTestnet(chainBase, { ga: { source: 'dapp' } });
+                  if ((res as any)?.error) throw new Error((res as any).error?.message || 'Failed to add custom network');
+                  targetChain = findChain({ id: chainBase.id });
+                  (ctx as any)._autoNetworkAdded = true;
+                }
+              } catch (e) {
+                // ignore; fallback to approval
+              }
+            }
+          }
+
+          if (targetChain) {
+            // Update connected site and broadcast chain changed
+            const { origin, name, icon } = ctx.request.session || {};
+            const isEnabledDappAccount = preferenceService.getPreference('isEnabledDappAccount');
+            const defaultAccount = ctx.request.account || preferenceService.getCurrentAccount();
+            permissionService.updateConnectSite(origin, { chain: (targetChain as any).enum }, true);
+            if (!permissionService.hasPermission(origin)) {
+              permissionService.addConnectedSiteV2({
+                origin,
+                name,
+                icon,
+                defaultChain: (targetChain as any).enum,
+                defaultAccount: isEnabledDappAccount ? (defaultAccount || undefined) : undefined,
+              });
+            }
+            broadcastChainChanged({ origin, chain: targetChain as any });
+
+            // Inform Agent sidebar
+            try {
+              agentService.broadcastMessage({
+                type: 'execution',
+                actor: 'SYSTEM',
+                state: 'TASK_OK',
+                timestamp: Date.now(),
+                data: {
+                  details: (ctx as any)._autoNetworkAdded
+                    ? `Added custom network and switched: ${(targetChain as any).name} (chainId ${desiredIdNum})`
+                    : `Switched network: ${(targetChain as any).name} (chainId ${desiredIdNum})`,
+                },
+              });
+            } catch {}
+
+            autoHandled = true;
+            needApproval = false;
+          }
+        } catch (e) {
+          // If auto handling fails for other reasons, fall back to default flow below
+          // but only if the original error is not the specific chain unrecognized error
+        }
+      }
+    }
+
+    if (needApproval && !autoHandled) {
       ctx.request.requestedApproval = true;
       if (approvalType === 'SignTx' && !('chainId' in params[0])) {
         const site = permissionService.getConnectedSite(origin);
@@ -281,6 +534,25 @@ const flowContext = flow
         if (approvalType === 'SignText' || approvalType === 'SignTypedData') {
           ctx.approvalRes = { extra: { $ctx: ctx?.request?.data?.$ctx } } as any;
           permissionService.updateConnectSite(origin, { isSigned: true }, true);
+
+          // Notify Agent Sidebar about auto-signing
+          try {
+            const signData = params[0];
+            const signMessage = typeof signData === 'string' ? signData : JSON.stringify(signData);
+            agentService.broadcastMessage({
+              type: 'wallet_auto_signed',
+              timestamp: Date.now(),
+              data: {
+                origin,
+                name,
+                signType: approvalType,
+                message: signMessage.length > 100 ? signMessage.substring(0, 100) + '...' : signMessage,
+                details: `Automatically signed ${approvalType === 'SignText' ? 'text message' : 'typed data'} for ${name || origin}`,
+              },
+            });
+          } catch (error) {
+            console.error('Failed to notify Agent Sidebar about auto-signing:', error);
+          }
         } else if (approvalType === 'SignTx') {
           // Handle contract transaction - always require Sidebar confirmation
           const txParams = params[0];
@@ -298,23 +570,71 @@ const flowContext = flow
               origin: origin || '',
             });
             ctx.approvalRes = approvalRes;
+
+            // Notify Agent Sidebar about auto-approved transaction
+            try {
+              agentService.broadcastMessage({
+                type: 'wallet_auto_approved_tx',
+                timestamp: Date.now(),
+                data: {
+                  origin,
+                  name,
+                  txParams,
+                  contractAddress: txParams.to,
+                  chainId: txParams.chainId,
+                  details: `Automatically approved transaction to whitelisted contract ${txParams.to} for ${name || origin}`,
+                },
+              });
+            } catch (error) {
+              console.error('Failed to notify Agent Sidebar about auto-approved transaction:', error);
+            }
           } else {
             // Send confirmation request to Sidebar for non-whitelisted contracts
-            const { approvalRes, preExecResult, estimatedGas } = await buildTxApprovalResWithPreExec({
-              txParams,
-              account,
-              origin: origin || '',
-            });
+            // Do NOT pre-exec here; let Sidebar trigger simulation to mirror wallet popup behavior
+            // Normalize minimum required fields
+            try {
+              if (account?.address && (!txParams.from || String(txParams.from).toLowerCase() !== String(account.address).toLowerCase())) {
+                txParams.from = account.address;
+              }
+              if (!txParams.chainId && chain?.id) {
+                txParams.chainId = chain.id;
+              }
+            } catch {}
 
-            // Send confirmation request to Sidebar and wait for response
+            const chainForUI: any = chain || {
+              id: txParams.chainId || 0,
+              name: 'Unknown',
+              nativeTokenSymbol: 'ETH',
+            };
+
+            const minimalApprovalTx = {
+              chainId: txParams.chainId,
+              to: txParams.to,
+              from: txParams.from,
+              data: txParams.data || '0x',
+              value: txParams.value || '0x0',
+              gas: txParams.gas || '0x0',
+              gasPrice: txParams.gasPrice || '0x0',
+              maxFeePerGas: txParams.maxFeePerGas,
+              maxPriorityFeePerGas: txParams.maxPriorityFeePerGas,
+              nonce: '0x0',
+            } as any;
+
             const confirmationData = {
-              txParams: approvalRes,
-              preExecResult,
-              chain: chain!,
+              txParams: minimalApprovalTx,
+              preExecResult: undefined,
+              chain: chainForUI,
               account,
               origin,
-              estimatedGas,
+              estimatedGas: undefined,
+              simulating: true,
             };
+
+            // Create a signingTxId like popup does, so downstream ethSendTransaction can find it
+            try {
+              const signingTxId = transactionHistoryService.addSigningTx(minimalApprovalTx as any);
+              (confirmationData as any).txParams.signingTxId = signingTxId;
+            } catch {}
 
             ctx.approvalRes = await new Promise((resolve, reject) => {
               const approvalId = Date.now().toString();
@@ -483,6 +803,29 @@ const flowContext = flow
                   },
                 });
               }
+              // After successful processing, notify Agent sidebar about network changes or additions
+              try {
+                if (mapMethod === 'walletSwitchEthereumChain' || mapMethod === 'walletAddEthereumChain') {
+                  const { session: { origin }, data: { params } } = request as any;
+                  let cid: any = params?.[0]?.chainId;
+                  let idNum: number | null = null;
+                  if (typeof cid === 'number') idNum = cid; else if (typeof cid === 'string') idNum = cid.startsWith('0x') ? parseInt(cid, 16) : parseInt(cid, 10);
+                  const chainObj = idNum ? findChain({ id: idNum }) : null;
+                  if (chainObj) {
+                    agentService.broadcastMessage({
+                      type: 'execution',
+                      actor: 'SYSTEM',
+                      state: 'TASK_OK',
+                      timestamp: Date.now(),
+                      data: {
+                        details: (ctx as any)._autoNetworkAdded
+                          ? `Added custom network and switched: ${(chainObj as any).name} (chainId ${idNum})`
+                          : `Switched network: ${(chainObj as any).name} (chainId ${idNum})`,
+                      },
+                    });
+                  }
+                }
+              } catch {}
               return result;
             })
             .then(resolve)

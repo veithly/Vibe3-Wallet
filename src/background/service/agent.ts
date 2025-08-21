@@ -821,6 +821,13 @@ class AgentService {
 
                 // Remove addToWhitelist from data before resolving
                 const { addToWhitelist, ...txData } = data || {};
+                // Ensure signingTxId is present for ethSendTransaction path
+                try {
+                  if (!txData.signingTxId) {
+                    const { transactionHistoryService } = await import('@/background/service');
+                    txData.signingTxId = transactionHistoryService.addSigningTx(txData as any);
+                  }
+                } catch {}
                 resolve(txData);
               } else {
                 reject(new Error('User rejected the transaction in Agent Sidebar'));
@@ -886,6 +893,86 @@ class AgentService {
           } catch (e) {
             logger.error('AgentService', 'Error clearing whitelist', e);
             this.sendWithFallback(port, { type: 'error', error: String(e) });
+          }
+          break;
+
+        case 'wallet_simulate':
+          // Perform pre-execution simulation and gas estimation for Sidebar inline confirmation
+          try {
+            const { approvalId, data } = message as any;
+            const { buildTxApprovalResWithPreExec } = await import('@/background/controller/provider/txHelper');
+
+            const txParams = { ...(data?.txParams || {}) } as any;
+            const account = data?.account;
+            const origin = data?.origin || '';
+
+            // Normalize required fields
+            try {
+              if (account?.address && (!txParams.from || String(txParams.from).toLowerCase() !== String(account.address).toLowerCase())) {
+                txParams.from = account.address;
+              }
+              if (!txParams.chainId && typeof data?.chain?.id === 'number') {
+                txParams.chainId = data.chain.id;
+              }
+            } catch {}
+
+            let approvalRes: any;
+            let preExecResult: any;
+            let estimatedGas: string = '0x0';
+
+            const extractErr = (err: any) => {
+              try {
+                return (
+                  err?.response?.data?.message ||
+                  err?.data?.message ||
+                  err?.error?.message ||
+                  err?.message ||
+                  (typeof err === 'string' ? err : '') ||
+                  'Pre-execution failed'
+                );
+              } catch {
+                return 'Pre-execution failed';
+              }
+            };
+
+            try {
+              const built = await buildTxApprovalResWithPreExec({ txParams, account, origin });
+              approvalRes = built.approvalRes;
+              preExecResult = built.preExecResult;
+              estimatedGas = built.estimatedGas;
+            } catch (err: any) {
+              approvalRes = {
+                chainId: txParams.chainId,
+                to: txParams.to,
+                from: txParams.from,
+                data: txParams.data || '0x',
+                value: txParams.value || '0x0',
+                gas: txParams.gas || '0x0',
+                gasPrice: txParams.gasPrice || '0x0',
+                maxFeePerGas: txParams.maxFeePerGas,
+                maxPriorityFeePerGas: txParams.maxPriorityFeePerGas,
+                nonce: '0x0',
+              } as any;
+              preExecResult = {
+                pre_exec: { success: false, error: extractErr(err) },
+                gas: { success: false, gas_used: 0, gas_limit: 0 },
+              } as any;
+              estimatedGas = txParams.gas || '0x0';
+            }
+
+            await this.sendWithFallback(port, {
+              type: 'wallet_simulate_result',
+              approvalId,
+              data: {
+                approvalRes,
+                preExecResult,
+                estimatedGas,
+              },
+              timestamp: Date.now(),
+            } as any);
+          } catch (e) {
+            logger.error('AgentService', 'wallet_simulate error', e);
+            await this.sendWithFallback(port, { type: 'error', error: String(e) });
           }
           break;
 

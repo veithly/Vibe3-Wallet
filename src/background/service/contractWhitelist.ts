@@ -20,8 +20,16 @@ class ContractWhitelistService {
   init = async () => {
     const storage = await createPersistStore<WhitelistStore>({
       name: 'contractWhitelist',
+      // Ensure a stable default shape so downstream .some/.filter never crash
+      template: {
+        contracts: [],
+      },
     });
     this.store = storage || this.store;
+    // Defensive: normalize legacy or malformed storage
+    if (!Array.isArray((this.store as any).contracts)) {
+      (this.store as any).contracts = [];
+    }
   };
 
   /**
@@ -35,13 +43,17 @@ class ContractWhitelistService {
       chainId?: number;
     }
   ) => {
+    if (!address) return;
+    if (!this.store || !Array.isArray((this.store as any).contracts)) {
+      this.store = { contracts: [] } as WhitelistStore;
+    }
     const normalizedAddress = address.toLowerCase();
-    
+
     // Check if already exists
-    const existingIndex = this.store.contracts.findIndex(
+    const existingIndex = (this.store.contracts || []).findIndex(
       (entry) => entry.address === normalizedAddress
     );
-    
+
     if (existingIndex >= 0) {
       // Update existing entry
       this.store.contracts[existingIndex] = {
@@ -65,8 +77,12 @@ class ContractWhitelistService {
    * Remove a contract address from whitelist
    */
   removeFromWhitelist = (address: string) => {
+    if (!address) return;
+    if (!this.store || !Array.isArray((this.store as any).contracts)) {
+      this.store = { contracts: [] } as WhitelistStore;
+    }
     const normalizedAddress = address.toLowerCase();
-    this.store.contracts = this.store.contracts.filter(
+    this.store.contracts = (this.store.contracts || []).filter(
       (entry) => entry.address !== normalizedAddress
     );
   };
@@ -75,8 +91,12 @@ class ContractWhitelistService {
    * Check if a contract address is whitelisted
    */
   isWhitelisted = (address: string, chainId?: number): boolean => {
+    if (!address) return false;
     const normalizedAddress = address.toLowerCase();
-    return this.store.contracts.some((entry) => {
+    const list = (this.store && Array.isArray((this.store as any).contracts))
+      ? this.store.contracts
+      : [];
+    return list.some((entry) => {
       const addressMatch = entry.address === normalizedAddress;
       const chainMatch = !chainId || !entry.chainId || entry.chainId === chainId;
       return addressMatch && chainMatch;
@@ -87,14 +107,20 @@ class ContractWhitelistService {
    * Get all whitelisted contracts
    */
   getWhitelistedContracts = (): WhitelistEntry[] => {
-    return [...this.store.contracts];
+    const list = (this.store && Array.isArray((this.store as any).contracts))
+      ? this.store.contracts
+      : [];
+    return [...list];
   };
 
   /**
    * Get whitelisted contracts for a specific chain
    */
   getWhitelistedContractsForChain = (chainId: number): WhitelistEntry[] => {
-    return this.store.contracts.filter(
+    const list = (this.store && Array.isArray((this.store as any).contracts))
+      ? this.store.contracts
+      : [];
+    return list.filter(
       (entry) => !entry.chainId || entry.chainId === chainId
     );
   };
@@ -103,6 +129,7 @@ class ContractWhitelistService {
    * Clear all whitelisted contracts
    */
   clearWhitelist = () => {
+    if (!this.store) this.store = { contracts: [] } as WhitelistStore;
     this.store.contracts = [];
   };
 
@@ -110,8 +137,12 @@ class ContractWhitelistService {
    * Get whitelist entry by address
    */
   getWhitelistEntry = (address: string): WhitelistEntry | undefined => {
+    if (!address) return undefined;
     const normalizedAddress = address.toLowerCase();
-    return this.store.contracts.find(
+    const list = (this.store && Array.isArray((this.store as any).contracts))
+      ? this.store.contracts
+      : [];
+    return list.find(
       (entry) => entry.address === normalizedAddress
     );
   };

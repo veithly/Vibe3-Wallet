@@ -20,6 +20,13 @@ import type {
   GetGasPriceActionParams,
   EstimateGasActionParams,
 } from './web3-schemas';
+import { AssetQueryAction } from './asset-query-actions';
+import type {
+  GetAllAssetsActionParams,
+  GetTokenBalancesActionParams,
+  GetNativeBalanceActionParams,
+  GetAssetPricesActionParams,
+} from './asset-query-schemas';
 
 // Import wallet services from Rabby
 import keyringService from '@/background/service/keyring';
@@ -35,9 +42,11 @@ const logger = createLogger('Web3Action');
 
 export class Web3Action {
   private readonly context: AgentContext;
+  private readonly assetQueryAction: AssetQueryAction;
 
   constructor(context: AgentContext) {
     this.context = context;
+    this.assetQueryAction = new AssetQueryAction(context);
   }
 
   async checkBalance(params: CheckBalanceActionParams): Promise<ActionResult> {
@@ -850,6 +859,23 @@ export class Web3Action {
     return encoded;
   }
 
+  // Asset Query Actions
+  async getAllAssets(params: GetAllAssetsActionParams): Promise<ActionResult> {
+    return this.assetQueryAction.getAllAssets(params);
+  }
+
+  async getTokenBalances(params: GetTokenBalancesActionParams): Promise<ActionResult> {
+    return this.assetQueryAction.getTokenBalances(params);
+  }
+
+  async getNativeBalance(params: GetNativeBalanceActionParams): Promise<ActionResult> {
+    return this.assetQueryAction.getNativeBalance(params);
+  }
+
+  async getAssetPrices(params: GetAssetPricesActionParams): Promise<ActionResult> {
+    return this.assetQueryAction.getAssetPrices(params);
+  }
+
   async executeAction(actionName: string, params: any): Promise<ActionResult> {
     switch (actionName) {
       case 'checkBalance':
@@ -876,6 +902,15 @@ export class Web3Action {
         return this.switchNetwork(params);
       case 'signMessage':
         return this.signMessage(params);
+      // Asset Query Actions
+      case 'getAllAssets':
+        return this.getAllAssets(params);
+      case 'getTokenBalances':
+        return this.getTokenBalances(params);
+      case 'getNativeBalance':
+        return this.getNativeBalance(params);
+      case 'getAssetPrices':
+        return this.getAssetPrices(params);
       default:
         return {
           success: false,

@@ -410,6 +410,14 @@ export function isEstimateGasActionParams(
   return typeof obj === 'object' && typeof obj.to === 'string';
 }
 
+// Import asset query schemas
+import {
+  getAllAssetsActionSchema,
+  getTokenBalancesActionSchema,
+  getNativeBalanceActionSchema,
+  getAssetPricesActionSchema,
+} from './asset-query-schemas';
+
 // Export all Web3 action schemas
 export const web3ActionSchemas = [
   checkBalanceActionSchema,
@@ -430,4 +438,9 @@ export const web3ActionSchemas = [
   getTransactionHistoryActionSchema,
   getGasPriceActionSchema,
   estimateGasActionSchema,
+  // Asset Query Schemas
+  getAllAssetsActionSchema,
+  getTokenBalancesActionSchema,
+  getNativeBalanceActionSchema,
+  getAssetPricesActionSchema,
 ] as const;
