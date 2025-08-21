@@ -9,7 +9,6 @@ import {
   getUiType,
   openInternalPageInTab,
 } from '@/ui/utils';
-import rabbyLogo from '@/ui/assets/unlock/rabby.svg';
 import { ReactComponent as BackgroundSVG } from '@/ui/assets/unlock/background.svg';
 import clsx from 'clsx';
 import styled from 'styled-components';
@@ -95,7 +94,6 @@ const Unlock = () => {
       <div className="unlock page-has-ant-input relative h-full min-h-[550px]">
         <BackgroundSVG className="absolute inset-0 z-[-1]" />
         <div className="pt-80">
-          <img src={rabbyLogo} className="m-auto w-[100px] h-[100px]" />
           <h1
             className={clsx(
               'text-[24px] font-semibold',
@@ -104,7 +102,8 @@ const Unlock = () => {
               'text-center'
             )}
           >
-            {t('page.unlock.title')}
+            {/* {t('page.unlock.title')} */}
+            Vibe3 Wallet
           </h1>
           <p
             className={clsx(
