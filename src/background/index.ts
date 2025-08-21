@@ -43,6 +43,7 @@ import {
   uninstalledService,
   whitelistService,
   OfflineChainsService,
+  contractWhitelistService,
 } from './service';
 import { agent as agentService } from './service/agent';
 
@@ -113,6 +114,7 @@ async function restoreAppState() {
   await metamaskModeService.init();
   await OfflineChainsService.init();
   await syncChainService.init();
+  await contractWhitelistService.init();
 
   await walletController.tryUnlock();
 

@@ -62,6 +62,41 @@ class AgentService {
   private forcedContinuationForTask: Set<string> = new Set();
   private toolResultTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
+  // Wallet confirmation pending approvals
+  private pendingApprovals = new Map<string, { resolve: (data: any) => void; reject: (error: Error) => void }>();
+
+  /**
+   * Add a pending approval resolver
+   */
+  public addPendingApproval(approvalId: string, resolver: { resolve: (data: any) => void; reject: (error: Error) => void }) {
+    this.pendingApprovals.set(approvalId, resolver);
+  }
+
+  /**
+   * Check if a pending approval exists
+   */
+  public hasPendingApproval(approvalId: string): boolean {
+    return this.pendingApprovals.has(approvalId);
+  }
+
+  /**
+   * Remove a pending approval
+   */
+  public removePendingApproval(approvalId: string): boolean {
+    return this.pendingApprovals.delete(approvalId);
+  }
+
+  /**
+   * Get and remove a pending approval
+   */
+  public getPendingApproval(approvalId: string): { resolve: (data: any) => void; reject: (error: Error) => void } | undefined {
+    const resolver = this.pendingApprovals.get(approvalId);
+    if (resolver) {
+      this.pendingApprovals.delete(approvalId);
+    }
+    return resolver;
+  }
+
   /**
    * Force-continue the conversation with buffered tool results in case the
    * model/provider didn't perform a second turn automatically.
@@ -759,8 +794,123 @@ class AgentService {
           port.postMessage({ type: 'heartbeat_ack' });
           break;
 
+        case 'wallet_confirmation_response':
+          // Handle confirmation responses from Sidebar
+          try {
+            const { approvalId, approved, data } = message;
+            const resolver = this.getPendingApproval(approvalId);
+
+            if (resolver) {
+              const { resolve, reject } = resolver;
+
+              if (approved) {
+                // Handle whitelist addition if requested
+                if (data?.addToWhitelist && data?.to) {
+                  try {
+                    const { contractWhitelistService } = await import('@/background/service');
+                    contractWhitelistService.addToWhitelist(data.to, {
+                      name: `Contract ${data.to.slice(0, 8)}...`,
+                      origin: data.origin || 'Unknown',
+                      chainId: data.chainId,
+                    });
+                    logger.info('AgentService', 'Added contract to whitelist', { address: data.to });
+                  } catch (e) {
+                    logger.error('AgentService', 'Failed to add contract to whitelist', e);
+                  }
+                }
+
+                // Remove addToWhitelist from data before resolving
+                const { addToWhitelist, ...txData } = data || {};
+                resolve(txData);
+              } else {
+                reject(new Error('User rejected the transaction in Agent Sidebar'));
+              }
+            } else {
+              logger.warn('AgentService', 'Received confirmation response for unknown approval ID', { approvalId });
+            }
+          } catch (e) {
+            logger.error('AgentService', 'Error handling wallet confirmation response', e);
+            this.sendWithFallback(port, { type: 'error', error: String(e) });
+          }
+          break;
+
         case 'new_task':
           await this.handleNewTask(message, port);
+          break;
+
+        case 'whitelist_list':
+          // Get all whitelisted contracts
+          try {
+            const { contractWhitelistService } = await import('@/background/service');
+            const contracts = contractWhitelistService.getWhitelistedContracts();
+            this.sendWithFallback(port, {
+              type: 'whitelist_list_response',
+              data: contracts,
+            });
+          } catch (e) {
+            logger.error('AgentService', 'Error getting whitelist', e);
+            this.sendWithFallback(port, { type: 'error', error: String(e) });
+          }
+          break;
+
+        case 'whitelist_remove':
+          // Remove a contract from whitelist
+          try {
+            const { address } = message;
+            if (!address) {
+              throw new Error('Address is required for whitelist removal');
+            }
+            const { contractWhitelistService } = await import('@/background/service');
+            contractWhitelistService.removeFromWhitelist(address);
+            this.sendWithFallback(port, {
+              type: 'whitelist_remove_response',
+              success: true,
+            });
+            logger.info('AgentService', 'Removed contract from whitelist', { address });
+          } catch (e) {
+            logger.error('AgentService', 'Error removing from whitelist', e);
+            this.sendWithFallback(port, { type: 'error', error: String(e) });
+          }
+          break;
+
+        case 'whitelist_clear':
+          // Clear all whitelisted contracts
+          try {
+            const { contractWhitelistService } = await import('@/background/service');
+            contractWhitelistService.clearWhitelist();
+            this.sendWithFallback(port, {
+              type: 'whitelist_clear_response',
+              success: true,
+            });
+            logger.info('AgentService', 'Cleared all contracts from whitelist');
+          } catch (e) {
+            logger.error('AgentService', 'Error clearing whitelist', e);
+            this.sendWithFallback(port, { type: 'error', error: String(e) });
+          }
+          break;
+
+        case 'whitelist_add':
+          // Manually add a contract to whitelist
+          try {
+            const { address, name, chainId } = message;
+            if (!address) {
+              throw new Error('Address is required for whitelist addition');
+            }
+            const { contractWhitelistService } = await import('@/background/service');
+            contractWhitelistService.addToWhitelist(address, {
+              name: name || `Contract ${address.slice(0, 8)}...`,
+              chainId: chainId || undefined,
+              origin: 'Manual Addition',
+            });
+            this.sendWithFallback(port, {
+              type: 'whitelist_add_response',
+              success: true,
+            });
+            logger.info('AgentService', 'Manually added contract to whitelist', { address, name, chainId });
+          } catch (e) {
+            logger.error('AgentService', 'Error adding to whitelist', e);
+            this.sendWithFallback(port, { type: 'error', error: String(e) });
+          }
           break;
 
         case 'follow_up_task':

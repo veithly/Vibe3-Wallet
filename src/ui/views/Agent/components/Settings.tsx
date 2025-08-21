@@ -68,6 +68,115 @@ export default function Settings({ onClose }: SettingsProps) {
   });
 
   const [activeTab, setActiveTab] = useState('providers');
+  const [whitelistContracts, setWhitelistContracts] = useState<any[]>([]);
+  const [whitelistLoading, setWhitelistLoading] = useState(false);
+
+  // Fetch whitelist data
+  const fetchWhitelist = async () => {
+    try {
+      setWhitelistLoading(true);
+      const port = chrome.runtime.connect({ name: 'rabby-agent-connection' });
+
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          port.disconnect();
+          reject(new Error('Timeout fetching whitelist'));
+        }, 5000);
+
+        port.onMessage.addListener((message) => {
+          if (message.type === 'whitelist_list_response') {
+            clearTimeout(timeout);
+            port.disconnect();
+            setWhitelistContracts(message.data || []);
+            resolve(message.data);
+          } else if (message.type === 'error') {
+            clearTimeout(timeout);
+            port.disconnect();
+            reject(new Error(message.error));
+          }
+        });
+
+        port.postMessage({ type: 'whitelist_list' });
+      });
+    } catch (error) {
+      logger.error('Settings', 'Failed to fetch whitelist', error);
+      setWhitelistContracts([]);
+    } finally {
+      setWhitelistLoading(false);
+    }
+  };
+
+  // Remove contract from whitelist
+  const removeFromWhitelist = async (address: string) => {
+    try {
+      const port = chrome.runtime.connect({ name: 'rabby-agent-connection' });
+
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          port.disconnect();
+          reject(new Error('Timeout removing from whitelist'));
+        }, 5000);
+
+        port.onMessage.addListener((message) => {
+          if (message.type === 'whitelist_remove_response') {
+            clearTimeout(timeout);
+            port.disconnect();
+            if (message.success) {
+              setWhitelistContracts(prev => prev.filter(c => c.address !== address));
+              resolve(true);
+            } else {
+              reject(new Error('Failed to remove from whitelist'));
+            }
+          } else if (message.type === 'error') {
+            clearTimeout(timeout);
+            port.disconnect();
+            reject(new Error(message.error));
+          }
+        });
+
+        port.postMessage({ type: 'whitelist_remove', address });
+      });
+    } catch (error) {
+      logger.error('Settings', 'Failed to remove from whitelist', error);
+      throw error;
+    }
+  };
+
+  // Clear all whitelist
+  const clearWhitelist = async () => {
+    try {
+      const port = chrome.runtime.connect({ name: 'rabby-agent-connection' });
+
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          port.disconnect();
+          reject(new Error('Timeout clearing whitelist'));
+        }, 5000);
+
+        port.onMessage.addListener((message) => {
+          if (message.type === 'whitelist_clear_response') {
+            clearTimeout(timeout);
+            port.disconnect();
+            if (message.success) {
+              setWhitelistContracts([]);
+              resolve(true);
+            } else {
+              reject(new Error('Failed to clear whitelist'));
+            }
+          } else if (message.type === 'error') {
+            clearTimeout(timeout);
+            port.disconnect();
+            reject(new Error(message.error));
+          }
+        });
+
+        port.postMessage({ type: 'whitelist_clear' });
+      });
+    } catch (error) {
+      logger.error('Settings', 'Failed to clear whitelist', error);
+      throw error;
+    }
+  };
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -353,6 +462,19 @@ export default function Settings({ onClose }: SettingsProps) {
               onClick={() => setActiveTab('react')}
             >
               ReAct Config
+            </button>
+            <button
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'whitelist'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+              onClick={() => {
+                setActiveTab('whitelist');
+                fetchWhitelist();
+              }}
+            >
+              Contract Whitelist
             </button>
           </nav>
         </div>
@@ -733,6 +855,108 @@ export default function Settings({ onClose }: SettingsProps) {
                     </label>
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'whitelist' && (
+            <div className="whitelist-tab-content">
+              <div className="p-6 mb-6 bg-white rounded-xl border border-gray-200 shadow-sm">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-semibold text-gray-900">Contract Whitelist</h3>
+                  <div className="flex space-x-2">
+                    <button
+                      type="button"
+                      className="px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-md hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
+                      onClick={fetchWhitelist}
+                      disabled={whitelistLoading}
+                    >
+                      {whitelistLoading ? 'Loading...' : 'Refresh'}
+                    </button>
+                    {whitelistContracts.length > 0 && (
+                      <button
+                        type="button"
+                        className="px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 rounded-md hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-500 transition-colors"
+                        onClick={async () => {
+                          if (confirm('Are you sure you want to clear all whitelisted contracts?')) {
+                            try {
+                              await clearWhitelist();
+                            } catch (error) {
+                              alert('Failed to clear whitelist: ' + error.message);
+                            }
+                          }
+                        }}
+                      >
+                        Clear All
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <p className="text-sm text-gray-600 mb-4">
+                  Whitelisted contracts will be automatically approved for transactions when the Agent Sidebar is open.
+                </p>
+
+                {whitelistLoading ? (
+                  <div className="flex justify-center py-8">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                  </div>
+                ) : whitelistContracts.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <p>No contracts in whitelist</p>
+                    <p className="text-sm mt-1">Contracts will be added here when you approve them with the "Add to whitelist" option.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {whitelistContracts.map((contract, index) => (
+                      <div key={contract.address || index} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <div className="flex items-center space-x-2 mb-2">
+                              <span className="font-mono text-sm font-medium text-gray-900">
+                                {contract.address}
+                              </span>
+                              {contract.name && (
+                                <span className="px-2 py-1 text-xs font-medium text-blue-600 bg-blue-100 rounded-full">
+                                  {contract.name}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center space-x-4 text-xs text-gray-500">
+                              {contract.chainId && (
+                                <span>Chain ID: {contract.chainId}</span>
+                              )}
+                              {contract.origin && (
+                                <span>Origin: {contract.origin}</span>
+                              )}
+                              {contract.addedAt && (
+                                <span>Added: {new Date(contract.addedAt).toLocaleDateString()}</span>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="p-2 text-gray-400 rounded-lg transition-colors hover:text-red-500 hover:bg-red-50"
+                            onClick={async () => {
+                              if (confirm(`Remove ${contract.address} from whitelist?`)) {
+                                try {
+                                  await removeFromWhitelist(contract.address);
+                                } catch (error) {
+                                  alert('Failed to remove from whitelist: ' + error.message);
+                                }
+                              }
+                            }}
+                            title="Remove from whitelist"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

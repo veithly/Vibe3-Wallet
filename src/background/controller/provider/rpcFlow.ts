@@ -4,6 +4,7 @@ import {
   notificationService,
   permissionService,
   preferenceService,
+  contractWhitelistService,
 } from '@/background/service';
 import { PromiseFlow, underline2Camelcase } from '@/background/utils';
 import { EVENTS } from 'consts';
@@ -20,6 +21,10 @@ import { Account } from '@/background/service/preference';
 import { bgRetryTxMethods } from '@/background/utils/errorTxRetry';
 import { hexToNumber } from 'viem';
 import BigNumber from 'bignumber.js';
+import { agent as agentService } from '@/background/service/agent';
+import { walletController } from '@/background/controller';
+import { CHAINS_ENUM } from 'consts';
+import { buildTxApprovalResWithPreExec } from './txHelper';
 
 const isSignApproval = (type: string) => {
   const SIGN_APPROVALS = ['SignText', 'SignTypedData', 'SignTx'];
@@ -132,35 +137,74 @@ const flowContext = flow
         connectOrigins.add(origin);
         try {
           const isUnlock = keyringService.memStore.getState().isUnlocked;
-          const {
-            defaultChain,
-            defaultAccount,
-          } = await notificationService.requestApproval(
-            {
-              params: { origin, name, icon, $ctx: data.$ctx },
-              account: ctx.request.account,
-              approvalComponent: 'Connect',
-            },
-            { height: isUnlock ? 800 : 628 }
-          );
-          const isEnabledDappAccount = preferenceService.getPreference(
-            'isEnabledDappAccount'
-          );
-          if (!isEnabledDappAccount) {
-            preferenceService.setCurrentAccount(defaultAccount);
+
+          // If Agent Sidebar is connected and wallet is unlocked, auto-authorize connect
+          const agentConnected = agentService && (agentService as any)['ports'] && (agentService as any)['ports'].has('rabby-agent-connection');
+          if (isUnlock && agentConnected) {
+            // Ensure we have a valid default account to return to dapp
+            let defaultAccount = ctx.request.account || preferenceService.getCurrentAccount();
+            if (!defaultAccount) {
+              try {
+                const accounts = await keyringService.getAllVisibleAccountsArray();
+                if (accounts && accounts.length > 0) {
+                  defaultAccount = accounts[0];
+                }
+              } catch (e) {
+                console.error('Failed to load accounts for auto-connect:', e);
+              }
+            }
+
+            const site = permissionService.getSite(origin);
+            const defaultChain = site?.chain || CHAINS_ENUM.ETH;
+            const isEnabledDappAccount = preferenceService.getPreference('isEnabledDappAccount');
+
+            // If global dapp account override not enabled, set current account globally to trigger events
+            if (!isEnabledDappAccount && defaultAccount) {
+              preferenceService.setCurrentAccount(defaultAccount);
+            }
+
+            permissionService.addConnectedSiteV2({
+              origin,
+              name,
+              icon,
+              defaultChain,
+              defaultAccount: isEnabledDappAccount ? (defaultAccount || undefined) : undefined,
+            });
+
+            // Attach account to request so eth_requestAccounts returns it
+            ctx.request.account = defaultAccount || preferenceService.getCurrentAccount() || undefined;
+          } else {
+            // Use popup approval when Sidebar is not connected
+            const {
+              defaultChain,
+              defaultAccount,
+            } = await notificationService.requestApproval(
+              {
+                params: { origin, name, icon, $ctx: data.$ctx },
+                account: ctx.request.account,
+                approvalComponent: 'Connect',
+              },
+              { height: isUnlock ? 800 : 628 }
+            );
+            const isEnabledDappAccount = preferenceService.getPreference(
+              'isEnabledDappAccount'
+            );
+            if (!isEnabledDappAccount) {
+              preferenceService.setCurrentAccount(defaultAccount);
+            }
+            permissionService.addConnectedSiteV2({
+              origin,
+              name,
+              icon,
+              defaultChain,
+              defaultAccount: isEnabledDappAccount
+                ? defaultAccount || preferenceService.getCurrentAccount()
+                : undefined,
+            });
+            ctx.request.account =
+              defaultAccount || preferenceService.getCurrentAccount();
           }
           connectOrigins.delete(origin);
-          permissionService.addConnectedSiteV2({
-            origin,
-            name,
-            icon,
-            defaultChain,
-            defaultAccount: isEnabledDappAccount
-              ? defaultAccount || preferenceService.getCurrentAccount()
-              : undefined,
-          });
-          ctx.request.account =
-            defaultAccount || preferenceService.getCurrentAccount();
         } catch (e) {
           console.error(e);
           connectOrigins.delete(origin);
@@ -228,20 +272,108 @@ const flowContext = flow
           }
         }
       }
-      ctx.approvalRes = await notificationService.requestApproval(
-        {
-          approvalComponent: approvalType,
-          params: {
-            $ctx: ctx?.request?.data?.$ctx,
-            method,
-            data: ctx.request.data.params,
-            session: { origin, name, icon },
+
+      // Check if Agent Sidebar is connected and wallet is unlocked
+      const agentConnected = agentService && (agentService as any)['ports'] && (agentService as any)['ports'].has('rabby-agent-connection');
+      const isUnlock = keyringService.memStore.getState().isUnlocked;
+      if (isUnlock && agentConnected) {
+        // For SignText/SignTypedData: auto-approve when Sidebar is connected
+        if (approvalType === 'SignText' || approvalType === 'SignTypedData') {
+          ctx.approvalRes = { extra: { $ctx: ctx?.request?.data?.$ctx } } as any;
+          permissionService.updateConnectSite(origin, { isSigned: true }, true);
+        } else if (approvalType === 'SignTx') {
+          // Handle contract transaction - always require Sidebar confirmation
+          const txParams = params[0];
+          const account = ctx.request.account || preferenceService.getCurrentAccount();
+          const chain = findChain({ id: txParams.chainId });
+
+          // Check if contract is whitelisted for auto-approval
+          const isWhitelisted = contractWhitelistService.isWhitelisted(txParams.to, chain?.id);
+
+          if (isWhitelisted) {
+            // Auto-approve whitelisted contracts using helper
+            const { approvalRes } = await buildTxApprovalResWithPreExec({
+              txParams,
+              account,
+              origin: origin || '',
+            });
+            ctx.approvalRes = approvalRes;
+          } else {
+            // Send confirmation request to Sidebar for non-whitelisted contracts
+            const { approvalRes, preExecResult, estimatedGas } = await buildTxApprovalResWithPreExec({
+              txParams,
+              account,
+              origin: origin || '',
+            });
+
+            // Send confirmation request to Sidebar and wait for response
+            const confirmationData = {
+              txParams: approvalRes,
+              preExecResult,
+              chain: chain!,
+              account,
+              origin,
+              estimatedGas,
+            };
+
+            ctx.approvalRes = await new Promise((resolve, reject) => {
+              const approvalId = Date.now().toString();
+
+              // Store the resolver for this approval
+              agentService.addPendingApproval(approvalId, { resolve, reject });
+
+              // Send confirmation request to Sidebar
+              agentService.broadcastMessage({
+                type: 'wallet_confirmation',
+                approvalId,
+                data: confirmationData,
+              });
+
+              // Set timeout for approval
+              setTimeout(() => {
+                if (agentService.hasPendingApproval(approvalId)) {
+                  agentService.removePendingApproval(approvalId);
+                  reject(new Error('Confirmation timeout'));
+                }
+              }, 60000); // 60 second timeout
+            });
+          }
+
+          permissionService.touchConnectedSite(origin);
+        } else {
+          // Fallback to popup for other types
+          ctx.approvalRes = await notificationService.requestApproval(
+            {
+              approvalComponent: approvalType,
+              params: {
+                $ctx: ctx?.request?.data?.$ctx,
+                method,
+                data: ctx.request.data.params,
+                session: { origin, name, icon },
+              },
+              account: ctx.request.account,
+              origin,
+            },
+            { height: windowHeight }
+          );
+        }
+      } else {
+        ctx.approvalRes = await notificationService.requestApproval(
+          {
+            approvalComponent: approvalType,
+            params: {
+              $ctx: ctx?.request?.data?.$ctx,
+              method,
+              data: ctx.request.data.params,
+              session: { origin, name, icon },
+            },
+            account: ctx.request.account,
+            origin,
           },
-          account: ctx.request.account,
-          origin,
-        },
-        { height: windowHeight }
-      );
+          { height: windowHeight }
+        );
+      }
+
       if (isSignApproval(approvalType)) {
         permissionService.updateConnectSite(origin, { isSigned: true }, true);
       } else {

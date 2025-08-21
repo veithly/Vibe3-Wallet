@@ -14,6 +14,7 @@ import Settings from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import IconButton from './components/IconButton';
 import ElementSelector from './components/ElementSelector';
+import WalletConfirmationCard from './components/WalletConfirmationCard';
 import {
   StreamingMessage,
   useStreamingMessage,
@@ -74,6 +75,7 @@ export const SidePanelApp = () => {
   const [reactStatus, setReactStatus] = useState<ReActStatusMessage | null>(null);
   const [showNewChatConfirm, setShowNewChatConfirm] = useState(false);
   const [showElementSelector, setShowElementSelector] = useState(false);
+  const [walletConfirmation, setWalletConfirmation] = useState<any>(null);
   const portRef = useRef<chrome.runtime.Port | null>(null);
   const heartbeatIntervalRef = useRef<number | null>(null);
   const contentAreaRef = useRef<HTMLDivElement | null>(null);
@@ -467,6 +469,28 @@ export const SidePanelApp = () => {
   const logEvent = useCallback((type: any, details?: any) => {
     connectionMonitor.logEvent(type, details);
   }, []);
+
+  // Handle wallet confirmation response
+  const handleWalletConfirmation = useCallback((approved: boolean, addToWhitelist?: boolean) => {
+    if (!walletConfirmation || !portRef.current) return;
+
+    const responseData = approved ? {
+      ...walletConfirmation.data.txParams,
+      addToWhitelist: addToWhitelist || false,
+      origin: walletConfirmation.data.origin,
+      chainId: walletConfirmation.data.chain?.id || walletConfirmation.data.txParams.chainId,
+    } : null;
+
+    portRef.current.postMessage({
+      type: 'wallet_confirmation_response',
+      approvalId: walletConfirmation.approvalId,
+      approved,
+      data: responseData,
+    });
+
+    setWalletConfirmation(null);
+    logger.info(COMPONENT_NAME, 'Wallet confirmation response sent', { approved, addToWhitelist });
+  }, [walletConfirmation]);
 
   // Clean connection teardown
   const stopConnection = useCallback(() => {
@@ -1162,6 +1186,12 @@ export const SidePanelApp = () => {
             `${message.tools?.length || 0} tools available`
           );
           logEvent('available_tools', { count: message.tools?.length || 0 });
+        } else if (message && message.type === 'wallet_confirmation') {
+          logger.info(COMPONENT_NAME, 'Received wallet confirmation request', {
+            approvalId: message.approvalId,
+            hasData: !!message.data,
+          });
+          setWalletConfirmation(message);
         } else {
           logger.warn(COMPONENT_NAME, 'Unknown message type received', {
             type: message.type,
@@ -2297,6 +2327,16 @@ export const SidePanelApp = () => {
             </ErrorBoundary>
           ) : (
             <>
+              {walletConfirmation && (
+                <ErrorBoundary componentName="WalletConfirmationCard">
+                  <WalletConfirmationCard
+                    data={walletConfirmation.data}
+                    onConfirm={(addToWhitelist) => handleWalletConfirmation(true, addToWhitelist)}
+                    onReject={() => handleWalletConfirmation(false)}
+                  />
+                </ErrorBoundary>
+              )}
+
               {messages.length === 0 ? (
                 <ErrorBoundary componentName="BookmarkList">
                   <BookmarkList

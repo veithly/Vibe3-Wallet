@@ -36,6 +36,12 @@ export default memo(function MessageList({
   const sortedMessages = React.useMemo(() => {
     return [...validMessages].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
   }, [validMessages]);
+  // Auto-scroll to bottom whenever messages change
+  const bottomRef = React.useRef<HTMLDivElement | null>(null);
+  React.useEffect(() => {
+    try { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); } catch {}
+  }, [sortedMessages.length]);
+
 
   // Log message statistics for debugging
   React.useEffect(() => {
@@ -68,6 +74,7 @@ export default memo(function MessageList({
           />
         ))
       )}
+      <div ref={(el) => { try { (MessageList as any)._bottom = el; } catch {} }} />
     </div>
   );
 });
@@ -272,7 +279,7 @@ function MessageBlock({
                   <div className="ml-8">
                     <button
                       type="button"
-                      className="flex items-center gap-2 px-2 py-1 text-xs rounded bg-green-50 border border-green-200 hover:bg-green-100 dark:bg-green-900/20 dark:border-green-800"
+                      className="flex gap-2 items-center px-2 py-1 text-xs bg-green-50 rounded border border-green-200 hover:bg-green-100 dark:bg-green-900/20 dark:border-green-800"
                       onClick={() => setToolCollapsed(prev => !prev)}
                     >
                       <span className="font-medium text-green-700 dark:text-green-300">
