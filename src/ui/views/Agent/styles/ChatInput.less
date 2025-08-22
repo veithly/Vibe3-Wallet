@@ -1,5 +1,4 @@
-// This file is mostly empty now as ChatInput has been converted to Tailwind CSS
-// Only keeping essential animations and any custom styles that can't be easily replicated with Tailwind
+// ChatInput component styles with modern animations and effects
 
 @keyframes spin {
   from {
@@ -16,5 +15,205 @@
   }
   50% {
     opacity: 0.7;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes ripple {
+  0% {
+    transform: scale(0.95);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+
+// Chat input wrapper animations
+.chat-input-wrapper {
+  animation: slideUp 0.3s ease-out;
+  
+  &.loading {
+    pointer-events: none;
+    
+    .chat-input-container {
+      animation: pulse 1.5s infinite;
+    }
+  }
+}
+
+// Smooth transitions for focus states
+.chat-input-container {
+  position: relative;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #468585, #50a0a0);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    z-index: -1;
+  }
+  
+  &.focused::before {
+    opacity: 0.1;
+  }
+}
+
+// Button hover effects
+.send-button {
+  position: relative;
+  overflow: hidden;
+  
+  &::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.3);
+    transform: translate(-50%, -50%);
+    transition: width 0.6s, height 0.6s;
+  }
+  
+  &:active::after {
+    width: 100px;
+    height: 100px;
+  }
+}
+
+// Stop button pulse animation
+.stop-button {
+  position: relative;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+    border: 2px solid rgba(255, 75, 75, 0.5);
+    transform: translate(-50%, -50%);
+    animation: ripple 1.5s infinite;
+  }
+}
+
+// Textarea scrollbar styling
+.chat-input-textarea {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(70, 133, 133, 0.3) transparent;
+  
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  &::-webkit-scrollbar-thumb {
+    background: rgba(70, 133, 133, 0.3);
+    border-radius: 3px;
+    
+    &:hover {
+      background: rgba(70, 133, 133, 0.5);
+    }
+  }
+}
+
+// Character counter animation
+.char-counter {
+  transition: all 0.2s ease;
+  
+  &.warning {
+    color: #ff9800;
+    font-weight: 600;
+  }
+  
+  &.danger {
+    color: #ff4b4b;
+    font-weight: 600;
+    animation: pulse 0.5s;
+  }
+}
+
+// Keyboard shortcut badges
+kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  line-height: 1.4;
+  color: inherit;
+  vertical-align: middle;
+  background-color: rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+  
+  &:hover {
+    background-color: rgba(70, 133, 133, 0.1);
+    border-color: rgba(70, 133, 133, 0.3);
+  }
+}
+
+// Dark mode specific styles
+.dark {
+  kbd {
+    background-color: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.1);
+    
+    &:hover {
+      background-color: rgba(70, 133, 133, 0.2);
+      border-color: rgba(70, 133, 133, 0.4);
+    }
+  }
+}
+
+// Accessibility improvements
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+// Mobile responsiveness
+@media (max-width: 480px) {
+  .chat-input-wrapper {
+    padding: 12px;
+  }
+  
+  .chat-input-container {
+    border-radius: 10px;
+  }
+  
+  .chat-input-textarea {
+    font-size: 14px;
+    padding: 10px 45px 10px 14px;
   }
 }
