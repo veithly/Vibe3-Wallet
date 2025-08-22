@@ -173,12 +173,13 @@ export const ElementSelector: React.FC<ElementSelectorProps> = ({
 
   const highlightAll = useCallback(async () => {
     try {
-      await executeTool('highlightElements', { interactiveOnly: 'all', limit: 500 });
+      // Re-scan and draw overlay using backend DOM service
+      await scanInteractive();
       setHighlightedElements(elements);
     } catch (e) {
       logger.warn('Highlight all failed', e);
     }
-  }, [elements, executeTool]);
+  }, [elements, scanInteractive]);
 
   const clearHighlights = useCallback(async () => {
     if (!activeTabId) return;

@@ -29,6 +29,11 @@ export class ToolRegistry {
   private executionTracker = new Map<string, number>();
   private lastHighlightedByTabId = new Map<number, any[]>();
 
+  // Deduplication controls for high-frequency element scanning
+  private pendingGetClickableByKey = new Map<string, Promise<any>>();
+  private lastGetClickableResultByKey = new Map<string, any>();
+  private lastGetClickableAtByKey = new Map<string, number>();
+
   private lastActiveTabId?: number;
 
   constructor() {
@@ -324,98 +329,7 @@ export class ToolRegistry {
       requiresConfirmation: true,
     });
 
-    // Advanced DeFi tools
-    this.registerTool({
-      name: 'addLiquidity',
-      description: 'Add liquidity to a decentralized exchange pool',
-      parameters: [
-        {
-          type: 'string',
-          description: 'First token address or symbol',
-        },
-        {
-          type: 'string',
-          description: 'Second token address or symbol',
-        },
-        {
-          type: 'string',
-          description: 'Amount of first token',
-        },
-        {
-          type: 'string',
-          description: 'Amount of second token',
-        },
-        {
-          type: 'number',
-          description: 'Optional: Chain ID',
-          minimum: 1,
-        },
-      ],
-      required: ['tokenA', 'tokenB', 'amountA', 'amountB'],
-      handler: this.createWeb3Handler('addLiquidity'),
-      category: 'web3',
-      riskLevel: 'medium',
-      requiresConfirmation: true,
-    });
-
-    this.registerTool({
-      name: 'removeLiquidity',
-      description: 'Remove liquidity from a decentralized exchange pool',
-      parameters: [
-        {
-          type: 'string',
-          description: 'First token address or symbol',
-        },
-        {
-          type: 'string',
-          description: 'Second token address or symbol',
-        },
-        {
-          type: 'string',
-          description: 'Amount of LP tokens to remove',
-        },
-        {
-          type: 'number',
-          description: 'Optional: Chain ID',
-          minimum: 1,
-        },
-      ],
-      required: ['tokenA', 'tokenB', 'liquidityTokenAmount'],
-      handler: this.createWeb3Handler('removeLiquidity'),
-      category: 'web3',
-      riskLevel: 'medium',
-      requiresConfirmation: true,
-    });
-
-    this.registerTool({
-      name: 'stakeTokens',
-      description: 'Stake tokens in a staking contract',
-      parameters: [
-        {
-          type: 'string',
-          description: 'Token address to stake',
-        },
-        {
-          type: 'string',
-          description: 'Amount to stake',
-        },
-        {
-          type: 'string',
-          description: 'Staking contract address',
-          pattern: '^0x[a-fA-F0-9]{40}$',
-        },
-        {
-          type: 'number',
-          description: 'Optional: Chain ID',
-          minimum: 1,
-        },
-      ],
-      required: ['tokenAddress', 'amount', 'stakingContract'],
-      handler: this.createWeb3Handler('stakeTokens'),
-      category: 'web3',
-      riskLevel: 'medium',
-      requiresConfirmation: true,
-    });
+    // Advanced DeFi tools (selected tools removed)
 
     this.registerTool({
       name: 'unstakeTokens',
@@ -1008,7 +922,7 @@ export class ToolRegistry {
       requiresConfirmation: false,
     });
 
-    // Element selection tool (only one): highlightElement will be registered after DOM tool
+    // Element selection tools are provided via DOM service and content script helpers
 
     // Enhanced DOM clickable elements builder (nanobrowser-aligned)
     this.registerTool({
@@ -1022,97 +936,113 @@ export class ToolRegistry {
       ],
       required: [],
       handler: async (params: any) => {
-        // Resolve target tab and URL (robust)
-        let targetTab: chrome.tabs.Tab | undefined;
-        try {
-          if (this.lastActiveTabId) {
-            const t = await chrome.tabs.get(this.lastActiveTabId);
-            if (t && t.id) targetTab = t;
-          }
-        } catch {}
-        if (!targetTab || !targetTab.id) {
-          const validation = await this.validateElementSelectionPrerequisites();
-          if (!validation.valid) {
-            return { success: false, error: validation.error, action: 'getClickableElements', params };
-          }
-          targetTab = await this.getOrCreateActiveTab();
-        }
-        const url = targetTab.url || 'about:blank';
+        // Global dedupe key: tab + url + highlight flags
+        const tabForKey = this.lastActiveTabId || 0;
         const showHighlight = params?.[0] ?? params?.showHighlightElements ?? true;
         const focusIndex = params?.[1] ?? params?.focusElement ?? -1;
         const viewportExpansion = params?.[2] ?? params?.viewportExpansion ?? 0;
         const debugMode = params?.[3] ?? params?.debugMode ?? false;
 
-        const domState = await getClickableElements(targetTab.id!, url, showHighlight, focusIndex, viewportExpansion, debugMode);
+        let keyUrl = 'about:blank';
+        try {
+          if (this.lastActiveTabId) {
+            const t = await chrome.tabs.get(this.lastActiveTabId);
+            keyUrl = t?.url || 'about:blank';
+          }
+        } catch {}
+        const dedupeKey = `${tabForKey}|${keyUrl}|${showHighlight}|${focusIndex}|${viewportExpansion}|${debugMode}`;
 
-        // Enhanced serialization with better element data
-        const items: any[] = [];
-        const selectorMap: Map<number, any> = (domState as any).selectorMap;
-        if (selectorMap && typeof selectorMap.forEach === 'function') {
-          selectorMap.forEach((node: any, idx: number) => {
-            const bounds = node?.viewportCoordinates || node?.pageCoordinates;
-            const selector = node?.xpath || '';
-            const text = node?.textContent || (node?.getAllTextTillNextClickableElement ? node.getAllTextTillNextClickableElement(1) : '');
-            const attrs = node?.attributes || {};
+        // Throttle window to avoid back-to-back identical scans within 800ms
+        const nowTs = Date.now();
+        const lastAt = this.lastGetClickableAtByKey.get(dedupeKey) || 0;
+        const recentMs = nowTs - lastAt;
+        if (recentMs < 800) {
+          const cached = this.lastGetClickableResultByKey.get(dedupeKey);
+          if (cached) return cached;
+        }
 
-            items.push({
-              highlightIndex: idx,
-              selector,
-              element: {
-                tagName: node?.tagName,
-                textContent: text,
-                attributes: attrs,
-                type: attrs.type || '',
-                role: attrs.role || '',
-                id: attrs.id || '',
-                name: attrs.name || '',
-                className: attrs.class || ''
-              },
-              bounds,
-              isVisible: node?.isVisible,
-              isInteractive: node?.isInteractive,
-              isTopElement: node?.isTopElement,
-              isInViewport: node?.isInViewport,
+        // If an identical call is in-flight, await the same promise
+        const pending = this.pendingGetClickableByKey.get(dedupeKey);
+        if (pending) return pending;
+
+        const execPromise = (async () => {
+          // Resolve target tab and URL (robust)
+          let targetTab: chrome.tabs.Tab | undefined;
+          try {
+            if (this.lastActiveTabId) {
+              const t = await chrome.tabs.get(this.lastActiveTabId);
+              if (t && t.id) targetTab = t;
+            }
+          } catch {}
+          if (!targetTab || !targetTab.id) {
+            const validation = await this.validateElementSelectionPrerequisites();
+            if (!validation.valid) {
+              const fail = { success: false, error: validation.error, action: 'getClickableElements', params };
+              return fail;
+            }
+            targetTab = await this.getOrCreateActiveTab();
+          }
+          const url = targetTab.url || 'about:blank';
+
+          const domState = await getClickableElements(targetTab.id!, url, showHighlight, focusIndex, viewportExpansion, debugMode);
+
+          // Enhanced serialization with better element data
+          const items: any[] = [];
+          const selectorMap: Map<number, any> = (domState as any).selectorMap;
+          if (selectorMap && typeof selectorMap.forEach === 'function') {
+            selectorMap.forEach((node: any, idx: number) => {
+              const bounds = node?.viewportCoordinates || node?.pageCoordinates;
+              const selector = node?.xpath || '';
+              const text = node?.textContent || (node?.getAllTextTillNextClickableElement ? node.getAllTextTillNextClickableElement(1) : '');
+              const attrs = node?.attributes || {};
+
+              items.push({
+                highlightIndex: idx,
+                selector,
+                element: {
+                  tagName: node?.tagName,
+                  textContent: text,
+                  attributes: attrs,
+                  type: attrs.type || '',
+                  role: attrs.role || '',
+                  id: attrs.id || '',
+                  name: attrs.name || '',
+                  className: attrs.class || ''
+                },
+                bounds,
+                isVisible: node?.isVisible,
+                isInteractive: node?.isInteractive,
+                isTopElement: node?.isTopElement,
+                isInViewport: node?.isInViewport,
+              });
             });
-          });
-        }
+          }
 
-        // Include performance metrics if debug mode
-        const result: any = { success: true, data: { items, count: items.length } };
-        if (debugMode && (domState as any).perfMetrics) {
-          result.data.perfMetrics = (domState as any).perfMetrics;
-        }
+          // Include performance metrics if debug mode
+          const result: any = { success: true, data: { items, count: items.length } };
+          if (debugMode && (domState as any).perfMetrics) {
+            result.data.perfMetrics = (domState as any).perfMetrics;
+          }
 
-        return result;
+          return result;
+        })();
+
+        this.pendingGetClickableByKey.set(dedupeKey, execPromise);
+        try {
+          const res = await execPromise;
+          this.lastGetClickableAtByKey.set(dedupeKey, Date.now());
+          this.lastGetClickableResultByKey.set(dedupeKey, res);
+          return res;
+        } finally {
+          this.pendingGetClickableByKey.delete(dedupeKey);
+        }
       },
       category: 'browser',
       riskLevel: 'low',
       requiresConfirmation: false,
     });
 
-    this.registerTool({
-      name: 'highlightElement',
-      description: "Highlight elements with numbered wireframe boxes. 'interactiveOnly' can be a kind string to control which elements: 'button' | 'clickable' | 'input' | 'link' | 'all'. Optionally pass 'selector' to highlight only one element, and 'limit' to cap results.",
-      parameters: [
-        {
-          type: 'string',
-          description: "interactiveOnly kind: 'button' | 'clickable' | 'input' | 'link' | 'all' (also accepts boolean for backward-compat; true='button', false='all')",
-        },
-        {
-          type: 'string',
-          description: 'selector: optional CSS selector to only highlight a single element',
-        },
-        {
-          type: 'number',
-          description: 'limit: optional maximum number of elements to return (1..500)',
-        },
-      ],
-      required: [],
-      handler: this.createElementSelectionHandler('highlightElement'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
+
 
     // Additional element selection helpers (content-script backed)
     this.registerTool({
@@ -1126,18 +1056,7 @@ export class ToolRegistry {
       requiresConfirmation: false,
     });
 
-    this.registerTool({
-      name: 'highlightElements',
-      description: 'Highlight multiple elements by selector with optional labels',
-      parameters: [
-        { type: 'string', description: 'items: JSON string or array of { selector, type?, label? }' },
-      ],
-      required: [],
-      handler: this.createElementSelectionHandler('highlightElements'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
+
 
     this.registerTool({
       name: 'getInteractiveElements',
@@ -1371,35 +1290,33 @@ export class ToolRegistry {
       const startTime = Date.now();
       const executionId = `browser_${actionName}_${Date.now()}`;
 
-      // Prevent accidental duplicate executions (skip for highlightElement to allow rapid refresh)
-      if (actionName !== 'highlightElement') {
-        // Allow UI-triggered actions to bypass dedup to keep panel responsive
-        const bypassDedup = params?.noDedup === true || params?._source === 'ElementSelector' || params?._source === 'ui' || params?.__from === 'ui';
-        if (!bypassDedup) {
-          const normalizedUrl = (params && typeof params.url === 'string') ? String(params.url).trim().toLowerCase() : '';
-          const duplicateKey = actionName === 'navigateToUrl'
-            ? `${actionName}_${normalizedUrl}`
-            : `${actionName}_${JSON.stringify(params)}`;
-          const lastExecution = this.executionTracker.get(duplicateKey);
-          // Finer-grained intervals per action
-          const intervalMap: Record<string, number> = {
-            navigateToUrl: 5000,
-            clickElement: 300,
-            hoverElement: 300,
-            fillForm: 500,
-            scrollPage: 300,
-          };
-          const duplicateInterval = intervalMap[actionName] ?? 1500;
-          if (lastExecution && (Date.now() - lastExecution) < duplicateInterval) {
-            logger.warn(`Preventing duplicate execution of ${actionName}`, {
-              params,
-              timeSinceLastExecution: Date.now() - lastExecution,
-              duplicateInterval
-            });
-            throw new Error(`Duplicate execution prevented for ${actionName}`);
-          }
-          this.executionTracker.set(duplicateKey, Date.now());
+      // Prevent accidental duplicate executions
+      // Allow UI-triggered actions to bypass dedup to keep panel responsive
+      const bypassDedup = params?.noDedup === true || params?._source === 'ElementSelector' || params?._source === 'ui' || params?.__from === 'ui';
+      if (!bypassDedup) {
+        const normalizedUrl = (params && typeof params.url === 'string') ? String(params.url).trim().toLowerCase() : '';
+        const duplicateKey = actionName === 'navigateToUrl'
+          ? `${actionName}_${normalizedUrl}`
+          : `${actionName}_${JSON.stringify(params)}`;
+        const lastExecution = this.executionTracker.get(duplicateKey);
+        // Finer-grained intervals per action
+        const intervalMap: Record<string, number> = {
+          navigateToUrl: 5000,
+          clickElement: 300,
+          hoverElement: 300,
+          fillForm: 500,
+          scrollPage: 300,
+        };
+        const duplicateInterval = intervalMap[actionName] ?? 1500;
+        if (lastExecution && (Date.now() - lastExecution) < duplicateInterval) {
+          logger.warn(`Preventing duplicate execution of ${actionName}`, {
+            params,
+            timeSinceLastExecution: Date.now() - lastExecution,
+            duplicateInterval
+          });
+          throw new Error(`Duplicate execution prevented for ${actionName}`);
         }
+        this.executionTracker.set(duplicateKey, Date.now());
       }
 
       try {
@@ -1600,16 +1517,8 @@ export class ToolRegistry {
           resultData: result.data ? JSON.stringify(result.data).substring(0, 200) : undefined,
         });
 
-        // Shape result for LLM ReAct friendliness (especially for highlightElement)
+        // Shape result for LLM ReAct friendliness
         let llmResult = result.data;
-        if (actionName === 'highlightElement') {
-          const elements = (result.data?.elements || []) as Array<{ selector: string; tag?: string; text?: string }>;
-          llmResult = {
-            elements,
-            count: elements.length,
-            note: 'Use clickElement with an element.selector to click, or input text with ELEMENT_INPUT_SELECTOR on a specific selector. Choose index by content/position.',
-          };
-        }
 
         return {
           action: actionName,
@@ -1626,14 +1535,11 @@ export class ToolRegistry {
       } catch (error) {
         // Remove from tracker on error to allow retries
         try {
-          // duplicateKey only exists when not highlightElement; guard
-          if (actionName !== 'highlightElement') {
-            const normalizedUrl = (params && typeof params.url === 'string') ? String(params.url).trim().toLowerCase() : '';
-            const duplicateKey = actionName === 'navigateToUrl'
-              ? `${actionName}_${normalizedUrl}`
-              : `${actionName}_${JSON.stringify(params)}`;
-            this.executionTracker.delete(duplicateKey);
-          }
+          const normalizedUrl = (params && typeof params.url === 'string') ? String(params.url).trim().toLowerCase() : '';
+          const duplicateKey = actionName === 'navigateToUrl'
+            ? `${actionName}_${normalizedUrl}`
+            : `${actionName}_${JSON.stringify(params)}`;
+          this.executionTracker.delete(duplicateKey);
         } catch {}
 
         const executionTime = Date.now() - startTime;
@@ -1783,9 +1689,7 @@ export class ToolRegistry {
           deactivateElementSelector: 'ELEMENT_SELECTOR_DEACTIVATE',
           getHighlightedElements: 'ELEMENT_SELECTOR_GET_HIGHLIGHTS',
           analyzeElement: 'ELEMENT_ANALYZE',
-          highlightElement: 'ELEMENT_HIGHLIGHT',
           clearHighlights: 'ELEMENT_SELECTOR_CLEAR',
-          highlightElements: 'ELEMENT_HIGHLIGHT_ELEMENTS',
           // Use a dedicated message that content script actually handles
           getInteractiveElements: 'ELEMENT_GET_INTERACTIVE_ELEMENTS',
         };
@@ -1814,44 +1718,11 @@ export class ToolRegistry {
           throw new Error(errorDetails);
         }
 
-        // Store last highlighted candidates for the tab so agent can use them next
-        let elementsData = response?.data;
-        try {
-          if (actionName === 'highlightElement') {
-            // If no elements returned, try to fetch current highlights
-            const elems = response?.data?.elements;
-            if (!elems || !Array.isArray(elems)) {
-              try {
-                const fetchResp = await chrome.tabs.sendMessage(targetTab.id!, {
-                  type: 'ELEMENT_SELECTOR_GET_HIGHLIGHTS',
-                  params: { includeAttributes: true }
-                });
-                if (fetchResp?.success) {
-                  elementsData = fetchResp.data;
-                }
-              } catch (e) {
-                logger.warn('Fallback fetch of highlights failed', e);
-              }
-            }
-
-            if (elementsData?.elements && targetTab.id) {
-              this.lastHighlightedByTabId.set(targetTab.id, elementsData.elements);
-            }
-          }
-        } catch (storeErr) {
-          logger.warn('Failed to store last highlighted candidates', storeErr);
-        }
+        // Store last candidates for the tab so agent can use them next (generic)
+        const elementsData = response?.data;
 
         // Shape result for LLM
-        let llmResult = elementsData;
-        if (actionName === 'highlightElement') {
-          const elements = (elementsData?.elements || []) as Array<any>;
-          llmResult = {
-            elements,
-            count: elements.length,
-            note: 'Choose the correct element by its text/aria/title/icon cues, then call clickElement with element.selector. For input, use inputElement with selector.',
-          };
-        }
+        const llmResult = elementsData;
 
         return {
           action: actionName,
@@ -2113,9 +1984,6 @@ export class ToolRegistry {
       estimateGas: ['to', 'value', 'data', 'chainId'],
       switchNetwork: ['chainId'],
       signMessage: ['message', 'address'],
-      addLiquidity: ['tokenA', 'tokenB', 'amountA', 'amountB', 'chainId'],
-      removeLiquidity: ['tokenA', 'tokenB', 'liquidityTokenAmount', 'chainId'],
-      stakeTokens: ['tokenAddress', 'amount', 'stakingContract', 'chainId'],
       unstakeTokens: ['tokenAddress', 'amount', 'stakingContract', 'chainId'],
       bridgeTokens: [
         'tokenAddress',
@@ -2148,7 +2016,6 @@ export class ToolRegistry {
       analyzeElement: ['selector', 'includeAccessibility', 'includeEvents'],
       findElementsByText: ['text', 'elementType', 'caseSensitive', 'visibleOnly'],
       getInteractiveElements: ['elementType', 'textFilter', 'includeAttributes'],
-      highlightElement: ['interactiveOnly', 'selector', 'limit'],
       captureElementScreenshot: ['selector', 'includeHighlights'],
       highlightDeFiElements: [],
       // Utility tools
@@ -2261,9 +2128,7 @@ export class ToolRegistry {
    */
   private isElementSelectionTool(toolName: string): boolean {
     const elementSelectionTools = [
-      'highlightElement',
       'clearHighlights',
-      'highlightElements',
       'getInteractiveElements',
       'getClickableElementsDOM'
     ];
@@ -2725,19 +2590,7 @@ export class ToolRegistry {
       // Prepare success message for LLM
       let successMessage = `Tool "${toolName}" executed successfully.`;
 
-      if (toolName === 'highlightElement' && result?.elements) {
-        const elements = result.elements;
-        successMessage += ` Found ${elements.length} interactive elements on the page:`;
-        elements.slice(0, 10).forEach((el: any, idx: number) => {
-          successMessage += `\n${idx + 1}. ${el.tag} - "${el.text.slice(0, 50)}${el.text.length > 50 ? '...' : ''}"`;
-        });
-        if (elements.length > 10) {
-          successMessage += `\n... and ${elements.length - 10} more elements.`;
-        }
-        if (elements.length < 5) {
-          successMessage += '\nNote: Few elements found. Consider using scrollPage tool to reveal more content.';
-        }
-      } else if (toolName === 'navigateToUrl' && result?.data?.url) {
+      if (toolName === 'navigateToUrl' && result?.data?.url) {
         successMessage += ` Successfully navigated to: ${result.data.url}`;
         if (result.data.title) {
           successMessage += ` (Page title: "${result.data.title}")`;

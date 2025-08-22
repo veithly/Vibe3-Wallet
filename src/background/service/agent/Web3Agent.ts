@@ -1777,28 +1777,149 @@ export class Web3Agent extends EventEmitter {
    */
   private sanitizeDanglingToolCalls(): void {
     try {
-      const msgs = this.state.conversationHistory;
-      // Find last assistant message containing tool_calls
-      const lastAssistantToolCallsIdx = [...msgs].reverse().findIndex((m: any) => m?.additional_kwargs?.tool_calls);
-      if (lastAssistantToolCallsIdx < 0) return;
-      const idx = msgs.length - 1 - lastAssistantToolCallsIdx;
-      const toolCalls = msgs[idx]?.additional_kwargs?.tool_calls || [];
-      if (!Array.isArray(toolCalls) || toolCalls.length === 0) return;
+      const msgs = this.state.conversationHistory as any[];
+      if (!Array.isArray(msgs) || msgs.length === 0) return;
 
-      // Collect tool_call_ids that already have a matching tool message after it
-      const respondedIds = new Set<string>();
-      for (let i = idx + 1; i < msgs.length; i++) {
-        const m: any = msgs[i];
-        const tcId = m?.additional_kwargs?.tool_call_id;
-        if (m?.type === 'tool' && typeof tcId === 'string') respondedIds.add(tcId);
+      // 1) For every assistant entry with tool_calls, keep only ids that have a matching
+      //    tool message AFTER that assistant entry. If none remain, drop that assistant entry.
+      const toRemove = new Set<number>();
+      const toReplace = new Map<number, BaseMessage>();
+
+      for (let idx = 0; idx < msgs.length; idx++) {
+        const m: any = msgs[idx];
+        const toolCalls = m?.additional_kwargs?.tool_calls;
+        if (!Array.isArray(toolCalls) || toolCalls.length === 0) continue;
+
+        // Deduplicate tool_calls by id while preserving order
+        const seenIds = new Set<string>();
+        const dedupedCalls = toolCalls.filter((tc: any) => {
+          const id = tc?.id;
+          if (typeof id !== 'string' || seenIds.has(id)) return false;
+          seenIds.add(id);
+          return true;
+        });
+
+        // Collect tool_call_ids that already have a matching tool message after this assistant entry
+        const respondedIds = new Set<string>();
+        for (let i = idx + 1; i < msgs.length; i++) {
+          const mm: any = msgs[i];
+          const tcId = mm?.additional_kwargs?.tool_call_id;
+          if (mm?.type === 'tool' && typeof tcId === 'string') respondedIds.add(tcId);
+        }
+
+        const matchedCalls = dedupedCalls.filter((tc: any) => respondedIds.has(tc?.id));
+
+        if (matchedCalls.length === 0) {
+          toRemove.add(idx);
+        } else if (matchedCalls.length < dedupedCalls.length) {
+          // Create a shallow clone AIMessage with filtered tool_calls
+          const cloned = new AIMessage(m.content || '', {
+            ...(m.additional_kwargs || {}),
+            tool_calls: matchedCalls,
+          });
+          toReplace.set(idx, cloned);
+        } else if (dedupedCalls.length < toolCalls.length) {
+          // Only dedup needed
+          const cloned = new AIMessage(m.content || '', {
+            ...(m.additional_kwargs || {}),
+            tool_calls: dedupedCalls,
+          });
+          toReplace.set(idx, cloned);
+        }
       }
 
-      // Remove the assistant tool_calls message if none of its ids have responses,
-      // to avoid schema errors in the next request
-      const allUnresponded = toolCalls.every((tc: any) => !respondedIds.has(tc.id));
-      if (allUnresponded) {
-        msgs.splice(idx, 1);
+      // Apply removals/replacements for assistant entries
+      if (toRemove.size > 0 || toReplace.size > 0) {
+        const updated: BaseMessage[] = [] as any;
+        for (let i = 0; i < msgs.length; i++) {
+          if (toRemove.has(i)) continue;
+          updated.push(toReplace.get(i) || msgs[i]);
+        }
+        this.state.conversationHistory = updated;
       }
+
+      // 2) Remove any tool messages that do not have a preceding assistant tool_calls in the updated history
+      const remaining = this.state.conversationHistory as any[];
+      const assistantIdsUpToIndex: Map<number, Set<string>> = new Map();
+      const collectedIds = new Set<string>();
+      for (let i = 0; i < remaining.length; i++) {
+        const mm: any = remaining[i];
+        const tcs = mm?.additional_kwargs?.tool_calls;
+        if (Array.isArray(tcs)) {
+          for (const tc of tcs) {
+            const id = tc?.id;
+            if (typeof id === 'string') collectedIds.add(id);
+          }
+        }
+        assistantIdsUpToIndex.set(i, new Set(collectedIds));
+      }
+
+      const toRemoveTool = new Set<number>();
+      for (let i = 0; i < remaining.length; i++) {
+        const mm: any = remaining[i];
+        if (mm?.type === 'tool') {
+          const id = mm?.additional_kwargs?.tool_call_id;
+          const hasPreceding = typeof id === 'string' && assistantIdsUpToIndex.get(i - 1 || 0)?.has(id);
+          if (!hasPreceding) {
+            toRemoveTool.add(i);
+          }
+        }
+      }
+
+      if (toRemoveTool.size > 0) {
+        const cleaned: BaseMessage[] = [] as any;
+        for (let i = 0; i < remaining.length; i++) {
+          if (toRemoveTool.has(i)) continue;
+          cleaned.push(remaining[i]);
+        }
+        this.state.conversationHistory = cleaned;
+      }
+
+      // 3) Merge consecutive assistant entries that contain tool_calls into a single assistant message
+      //    with deduplicated tool_call ids. This satisfies providers that forbid two assistant.tool_calls
+      //    in a row without intervening tool messages.
+      const merged: BaseMessage[] = [] as any;
+      let i = 0;
+      while (i < this.state.conversationHistory.length) {
+        const cur: any = this.state.conversationHistory[i];
+        if (Array.isArray(cur?.additional_kwargs?.tool_calls) && cur.additional_kwargs.tool_calls.length > 0) {
+          // Start combined list with current tool calls (dedup by id)
+          const combined: any[] = [];
+          const seen = new Set<string>();
+          const pushCalls = (calls: any[]) => {
+            for (const tc of calls) {
+              const id = tc?.id;
+              if (typeof id !== 'string' || seen.has(id)) continue;
+              seen.add(id);
+              combined.push(tc);
+            }
+          };
+          pushCalls(cur.additional_kwargs.tool_calls);
+
+          let j = i + 1;
+          while (
+            j < this.state.conversationHistory.length &&
+            Array.isArray((this.state.conversationHistory[j] as any)?.additional_kwargs?.tool_calls) &&
+            (this.state.conversationHistory[j] as any).additional_kwargs.tool_calls.length > 0
+          ) {
+            const next: any = this.state.conversationHistory[j];
+            pushCalls(next.additional_kwargs.tool_calls);
+            j++;
+          }
+
+          // Rebuild a single AIMessage preserving the last assistant's additional kwargs except tool_calls
+          const clone = new AIMessage(cur.content || '', {
+            ...(cur.additional_kwargs || {}),
+            tool_calls: combined,
+          });
+          merged.push(clone);
+          i = j; // skip merged assistants
+          continue;
+        }
+        merged.push(cur);
+        i++;
+      }
+      this.state.conversationHistory = merged;
     } catch {}
   }
   /**
@@ -1937,6 +2058,7 @@ export class Web3Agent extends EventEmitter {
       this._cancelled = false;
       const startTime = Date.now();
       let finishReason: string | undefined;
+      let processedSecondTurn = false;
 
       // Safety: remove any dangling tool_calls from previous turn to avoid provider schema errors
       try { this.sanitizeDanglingToolCalls(); } catch (e) {}
@@ -2540,6 +2662,7 @@ export class Web3Agent extends EventEmitter {
             llmResponse
           );
           if (secondTurnFunctionCalls && secondTurnFunctionCalls.length > 0) {
+            processedSecondTurn = true;
             // Insert an assistant message with tool_calls to satisfy OpenAI schema
             try {
               const assistantToolCallMsg2 = new AIMessage('', {
@@ -2611,72 +2734,75 @@ export class Web3Agent extends EventEmitter {
         }
       }
 
-      // Step 5: Execute function calls if any (second turn)
-      const secondTurnFunctionCalls = this.extractFunctionCallsFromResponse(
-        llmResponse
-      );
-      if (secondTurnFunctionCalls && secondTurnFunctionCalls.length > 0) {
-        // Insert an assistant message with tool_calls to satisfy OpenAI schema
-        try {
-          const assistantToolCallMsg2 = new AIMessage('', {
-            tool_calls: secondTurnFunctionCalls.map((fc) => ({
-              id: fc.id || `call_${fc.name}_${Date.now()}`,
-              type: 'function',
-              function: {
-                name: fc.name,
-                arguments: JSON.stringify(fc.arguments || {}),
-              },
-            })),
-          });
-          this.state.conversationHistory.push(assistantToolCallMsg2);
-        } catch (e) {
-          logger.warn(
-            'Failed to append assistant tool_calls message for second turn',
-            { error: e instanceof Error ? e.message : String(e) }
-          );
-        }
-
-        const secondTurnActions = await this.executeFunctionCalls(
-          secondTurnFunctionCalls
+      // Step 5 (fallback duplicate guard): Execute function calls if any (second turn) only if not already processed
+      if (!processedSecondTurn) {
+        const secondTurnFunctionCalls = this.extractFunctionCallsFromResponse(
+          llmResponse
         );
-        accumulatedActions.push(...secondTurnActions);
-
-        // Append tool results as ToolMessages (second turn) so the LLM can use them in ReAct
-        try {
-          for (let i = 0; i < secondTurnActions.length; i++) {
-            const step = secondTurnActions[i];
-
-            // Notify UI: mark function_call cards as completed/failed with results (second turn)
-            if (onToolCalls) {
-              try {
-                const updates2 = secondTurnFunctionCalls.map((fc2, i) => ({
-                  id: fc2.id || `call_${fc2.name || 'fn'}_${Date.now()}_${i}`,
-                  name: fc2.name,
-                  arguments: fc2.arguments || {},
-                  status: secondTurnActions[i]?.status || 'completed',
-                  result: secondTurnActions[i]?.result,
-                  timestamp: Date.now(),
-                }));
-                onToolCalls({ content: '', functionCalls: updates2 as any });
-              } catch {}
-            }
-
-            const fc2 = secondTurnFunctionCalls[i];
-            const toolMsg2 = new ToolMessage({
-              content: JSON.stringify({
-                success: step.status === 'completed',
-                result: step.result,
-                params: step.params,
-              }),
-              name: step.type || 'tool',
-              tool_call_id: fc2?.id || `${step.type || 'tool'}_${i}`,
+        if (secondTurnFunctionCalls && secondTurnFunctionCalls.length > 0) {
+          processedSecondTurn = true;
+          // Insert an assistant message with tool_calls to satisfy OpenAI schema
+          try {
+            const assistantToolCallMsg2 = new AIMessage('', {
+              tool_calls: secondTurnFunctionCalls.map((fc) => ({
+                id: fc.id || `call_${fc.name}_${Date.now()}`,
+                type: 'function',
+                function: {
+                  name: fc.name,
+                  arguments: JSON.stringify(fc.arguments || {}),
+                },
+              })),
             });
-            this.state.conversationHistory.push(toolMsg2);
+            this.state.conversationHistory.push(assistantToolCallMsg2);
+          } catch (e) {
+            logger.warn(
+              'Failed to append assistant tool_calls message for second turn',
+              { error: e instanceof Error ? e.message : String(e) }
+            );
           }
-        } catch (e) {
-          logger.warn('Failed to append second turn tool results', {
-            error: e instanceof Error ? e.message : String(e),
-          });
+
+          const secondTurnActions = await this.executeFunctionCalls(
+            secondTurnFunctionCalls
+          );
+          accumulatedActions.push(...secondTurnActions);
+
+          // Append tool results as ToolMessages (second turn) so the LLM can use them in ReAct
+          try {
+            for (let i = 0; i < secondTurnActions.length; i++) {
+              const step = secondTurnActions[i];
+
+              // Notify UI: mark function_call cards as completed/failed with results (second turn)
+              if (onToolCalls) {
+                try {
+                  const updates2 = secondTurnFunctionCalls.map((fc2, i) => ({
+                    id: fc2.id || `call_${fc2.name || 'fn'}_${Date.now()}_${i}`,
+                    name: fc2.name,
+                    arguments: fc2.arguments || {},
+                    status: secondTurnActions[i]?.status || 'completed',
+                    result: secondTurnActions[i]?.result,
+                    timestamp: Date.now(),
+                  }));
+                  onToolCalls({ content: '', functionCalls: updates2 as any });
+                } catch {}
+              }
+
+              const fc2 = secondTurnFunctionCalls[i];
+              const toolMsg2 = new ToolMessage({
+                content: JSON.stringify({
+                  success: step.status === 'completed',
+                  result: step.result,
+                  params: step.params,
+                }),
+                name: step.type || 'tool',
+                tool_call_id: fc2?.id || `${step.type || 'tool'}_${i}`,
+              });
+              this.state.conversationHistory.push(toolMsg2);
+            }
+          } catch (e) {
+            logger.warn('Failed to append second turn tool results', {
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
         }
       }
 
