@@ -1,11 +1,359 @@
-// This file is mostly empty now as MessageList has been converted to Tailwind CSS
-// Only keeping essential animations and any custom styles that can't be easily replicated with Tailwind
+// MessageList component styles with modern animations and layout
 
-@keyframes progress-animation {
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes progressSlide {
   0% {
     transform: translateX(-100%);
   }
   100% {
-    transform: translateX(100%);
+    transform: translateX(200%);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+// Message list container
+.message-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  max-width: 100%;
+  overflow-x: hidden;
+  
+  // Smooth scrolling
+  scroll-behavior: smooth;
+  
+  // Custom scrollbar
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  &::-webkit-scrollbar-thumb {
+    background: rgba(70, 133, 133, 0.3);
+    border-radius: 3px;
+    
+    &:hover {
+      background: rgba(70, 133, 133, 0.5);
+    }
+  }
+}
+
+// Message block styling
+.message-block {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  animation: slideUp 0.3s ease-out;
+  width: 100%;
+  
+  &.user-message {
+    flex-direction: row-reverse;
+  }
+  
+  &.agent-message {
+    flex-direction: row;
+  }
+}
+
+// Message avatar
+.message-avatar {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  animation: fadeIn 0.3s ease-out;
+  
+  img {
+    width: 24px;
+    height: 24px;
+    object-fit: contain;
+  }
+}
+
+// Message bubble
+.message-bubble {
+  position: relative;
+  padding: 12px 16px;
+  border-radius: 18px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  word-break: break-word;
+  max-width: 70%;
+  min-width: 100px;
+  animation: slideUp 0.3s ease-out;
+  
+  // Bubble tail effect (positioned at top)
+  &::before {
+    content: '';
+    position: absolute;
+    width: 0;
+    height: 0;
+    border-style: solid;
+  }
+  
+  .user-message & {
+    border-radius: 4px 18px 18px 18px;
+    background: linear-gradient(135deg, #468585, #50a0a0);
+    color: #ffffff;
+    
+    &::before {
+      right: -8px;
+      top: 10px;
+      border-width: 10px 0 10px 10px;
+      border-color: transparent transparent transparent #488a8a;
+    }
+  }
+  
+  .agent-message & {
+    border-radius: 18px 4px 18px 18px;
+    
+    &::before {
+      left: -8px;
+      top: 10px;
+      border-width: 10px 10px 10px 0;
+      border-color: transparent #f5f5f5 transparent transparent;
+    }
+    
+    .dark & {
+      &::before {
+        border-color: transparent #2a2a2a transparent transparent;
+      }
+    }
+  }
+}
+
+// Message content
+.message-content {
+  position: relative;
+  
+  // Markdown content styling
+  .markdown-content {
+    font-size: 14px;
+    line-height: 1.6;
+    
+    p {
+      margin: 0 0 8px 0;
+      
+      &:last-child {
+        margin-bottom: 0;
+      }
+    }
+    
+    code {
+      background: rgba(0, 0, 0, 0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+    }
+    
+    pre {
+      background: rgba(0, 0, 0, 0.1);
+      padding: 12px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 8px 0;
+      
+      code {
+        background: transparent;
+        padding: 0;
+      }
+    }
+    
+    ul, ol {
+      margin: 8px 0;
+      padding-left: 20px;
+    }
+    
+    li {
+      margin: 4px 0;
+    }
+    
+    blockquote {
+      border-left: 3px solid rgba(70, 133, 133, 0.5);
+      padding-left: 12px;
+      margin: 8px 0;
+      color: rgba(0, 0, 0, 0.7);
+    }
+    
+    a {
+      color: #468585;
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.2s;
+      
+      &:hover {
+        border-bottom-color: #468585;
+      }
+    }
+    
+    h1, h2, h3, h4, h5, h6 {
+      margin: 12px 0 8px 0;
+      font-weight: 600;
+    }
+    
+    h1 { font-size: 20px; }
+    h2 { font-size: 18px; }
+    h3 { font-size: 16px; }
+    h4 { font-size: 14px; }
+    h5 { font-size: 13px; }
+    h6 { font-size: 12px; }
+  }
+  
+  // Dark mode markdown adjustments
+  .dark & .markdown-content {
+    code {
+      background: rgba(255, 255, 255, 0.1);
+    }
+    
+    pre {
+      background: rgba(255, 255, 255, 0.05);
+    }
+    
+    blockquote {
+      color: rgba(255, 255, 255, 0.7);
+    }
+    
+    a {
+      color: #50a0a0;
+      
+      &:hover {
+        border-bottom-color: #50a0a0;
+      }
+    }
+  }
+}
+
+// Special message cards
+.special-message-card {
+  animation: slideUp 0.3s ease-out;
+  margin-bottom: 16px;
+  
+  .card-content {
+    padding: 16px;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+}
+
+// Typing indicator
+.typing-indicator {
+  display: flex;
+  gap: 4px;
+  padding: 12px;
+  
+  span {
+    width: 8px;
+    height: 8px;
+    background: rgba(70, 133, 133, 0.6);
+    border-radius: 50%;
+    animation: pulse 1.4s infinite;
+    
+    &:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+    
+    &:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+  }
+}
+
+// Loading state
+.message-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  
+  .spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(70, 133, 133, 0.2);
+    border-top-color: #468585;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+// Responsive adjustments
+@media (max-width: 480px) {
+  .message-list-container {
+    padding: 12px;
+  }
+  
+  .message-bubble {
+    max-width: 85%;
+    font-size: 14px;
+  }
+  
+  .message-avatar {
+    width: 32px;
+    height: 32px;
+    
+    img {
+      width: 20px;
+      height: 20px;
+    }
+  }
+}
+
+// Accessibility improvements
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+// High contrast mode support
+@media (prefers-contrast: high) {
+  .message-bubble {
+    border: 2px solid currentColor;
+  }
+  
+  .message-content a {
+    text-decoration: underline;
   }
 }
