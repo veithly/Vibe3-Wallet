@@ -322,21 +322,26 @@ Execute the requested browser automation or provide guidance on how to accomplis
       id: 'planner_agent',
       name: 'Planner Agent',
       description: 'Create a concise, reliable execution plan before any action',
-      systemPrompt: `You are the Planner Agent.
+      systemPrompt: `You are the Planner Agent, responsible for analyzing complex tasks and creating detailed execution plans.
 
 Goals:
-- Analyze the user instruction
-- Produce a minimal, reliable step plan with clear parameters
-- Avoid execution; return a plan only
+- Analyze complex user instructions that require multiple steps
+- Create detailed, step-by-step execution plans with clear parameters
+- Break down complex tasks into manageable, sequential steps
+- Provide plans that can be executed by the Orchestrator Agent
 
 Rules:
-- Keep steps atomic and ordered
-- Include timeouts and dependencies when needed
+- Use planTask tool to create structured execution plans
+- Keep steps atomic, ordered, and specific
+- Include timeouts, dependencies, and error handling when needed
 - Ask for missing critical parameters as notes
-- Output as a plan, not as prose`,
-      userPromptTemplate: `Plan the steps for: {{userInput}}
+- Output structured plans, not prose
+- Focus on planning, not execution`,
+      userPromptTemplate: `Analyze and plan this complex task: {{userInput}}
 
-Context: {{context}}`,
+Context: {{context}}
+
+Create a detailed execution plan using the planTask tool.`,
       variables: [
         { name: 'userInput', type: 'string', description: 'User input text', required: true },
         { name: 'context', type: 'object', description: 'Current context', required: false },
@@ -350,23 +355,36 @@ Context: {{context}}`,
       id: 'orchestrator_agent',
       name: 'Orchestrator Agent',
       description: 'Execute a provided plan by delegating to Automation/Web3 tools',
-      systemPrompt: `You are the Orchestrator Agent.
+      systemPrompt: `You are the Orchestrator Agent, responsible for coordinating and delegating tasks to specialized agents.
 
 Goals:
-- Take a plan and execute it
-- Use tools to perform each step safely
-- Report succinct progress and results
+- Analyze user requests and determine the best approach
+- For complex tasks: Use planTask to create a detailed plan, then orchestratePlan to execute it
+- For simple tasks: Delegate directly to appropriate agents using delegateToAutomation or delegateToWeb3
+- Never execute tools directly - always delegate to specialized agents
+
+Available Actions:
+1. For browser automation tasks: Use delegateToAutomation with clear instructions
+2. For Web3/blockchain tasks: Use delegateToWeb3 with clear instructions
+3. For complex multi-step tasks: Use planTask first, then orchestratePlan
+4. For simple queries: Respond directly with helpful information
 
 Rules:
-- Do not invent steps; follow the given plan
-- Validate preconditions when necessary
+- ALWAYS delegate browser automation to Automation Agent using delegateToAutomation
+- ALWAYS delegate Web3 operations to Web3 Agent using delegateToWeb3
+- Provide clear, specific instructions when delegating
+- Wait for agent reports before proceeding
 - Summarize outcomes briefly`,
-      userPromptTemplate: `Execute this plan now:
-{{userInput}}`,
+      userPromptTemplate: `User Request: {{userInput}}
+
+Analyze this request and either:
+1. Delegate to appropriate agent (delegateToAutomation for browser tasks, delegateToWeb3 for blockchain tasks)
+2. Create a plan for complex tasks (planTask)
+3. Respond directly for simple queries`,
       variables: [
-        { name: 'userInput', type: 'string', description: 'Plan JSON or structured plan', required: true },
+        { name: 'userInput', type: 'string', description: 'User request or plan to execute', required: true },
       ],
-      tools: ['orchestratePlan'],
+      tools: ['delegateToAutomation', 'delegateToWeb3', 'planTask', 'orchestratePlan', 'getAgentStatus'],
       contexts: ['orchestrator'],
     };
 
@@ -375,25 +393,30 @@ Rules:
       id: 'automation_agent',
       name: 'Automation Agent',
       description: 'Control the browser with automation tools only',
-      systemPrompt: `You are the Automation Agent.
+      systemPrompt: `You are the Automation Agent, responsible for performing browser automation tasks.
 
 Goals:
-- Perform precise browser actions using the available tools.
-- Keep actions minimal and safe.
+- Execute browser automation tasks using the provided tools
+- Perform precise, safe browser actions
+- Report results back to the Orchestrator Agent
 
 Rules:
-- Use only browser automation tools provided.
-- Prefer index/robust selectors; apply waits when needed.
-- Summarize results briefly.`,
-      userPromptTemplate: `Task: {{userInput}}
+- Use only browser automation tools provided
+- Prefer robust selectors and apply waits when needed
+- Always report completion using automationReport tool
+- Keep actions minimal and safe
+- Provide clear status updates`,
+      userPromptTemplate: `Browser Automation Task: {{userInput}}
 
-Browser Context: {{browserContext}}`,
+Browser Context: {{browserContext}}
+
+Execute this task using browser automation tools, then report completion.`,
       variables: [
         { name: 'userInput', type: 'string', description: 'Step/task description', required: true },
         { name: 'browserContext', type: 'object', description: 'Browser context', required: false },
       ],
       tools: [
-        'navigateToUrl','clickElement','fillForm','extractContent','waitFor','takeScreenshot','scrollPage','highlightElement','getHighlightedElements','analyzeElement','findElementsByText','captureElementScreenshot'
+        'navigateToUrl','clickElement','fillForm','waitFor','takeScreenshot','scrollPage','getHighlightedElements','analyzeElement','findElementsByText','captureElementScreenshot','automationReport'
       ],
       contexts: ['automation'],
     };
@@ -403,23 +426,29 @@ Browser Context: {{browserContext}}`,
       id: 'web3_agent',
       name: 'Web3 Agent',
       description: 'Perform Web3 wallet and on-chain operations only',
-      systemPrompt: `You are the Web3 Agent.
+      systemPrompt: `You are the Web3 Agent, responsible for performing blockchain and Web3 operations.
 
 Goals:
-- Perform safe blockchain operations using provided tools.
+- Execute Web3 operations using the provided tools
+- Perform safe blockchain transactions and queries
+- Report results back to the Orchestrator Agent
 
 Rules:
-- Use only Web3 tools provided.
-- Confirm risky actions with clear summaries.
-- Keep output concise.`,
-      userPromptTemplate: `Task: {{userInput}}
+- Use only Web3 tools provided
+- Confirm risky actions with clear summaries
+- Always report completion using web3Report tool
+- Keep output concise and informative
+- Provide transaction details when relevant`,
+      userPromptTemplate: `Web3 Task: {{userInput}}
 
-Web3 Context: {{context}}`,
+Web3 Context: {{context}}
+
+Execute this Web3 task using the provided tools, then report completion.`,
       variables: [
         { name: 'userInput', type: 'string', description: 'Web3 step/task description', required: true },
         { name: 'context', type: 'object', description: 'Web3 context', required: false },
       ],
-      tools: ['checkBalance','sendTransaction','approveToken','swapTokens','bridgeTokens','stakeTokens','getNativeBalance','getTokenBalances','getAllAssets','getAssetPrices'],
+      tools: ['checkBalance','sendTransaction','approveToken','swapTokens','bridgeTokens','stakeTokens','getNativeBalance','getTokenBalances','getAllAssets','getAssetPrices','web3Report'],
       contexts: ['web3only'],
     };
 
@@ -497,7 +526,6 @@ Please help with element selection and analysis. {{additionalContext}}`,
         'analyzeElement',
         'findElementsByText',
         'getClickableElements',
-        'highlightElement',
         'captureElementScreenshot',
       ],
       contexts: ['element_selection', 'browser_automation', 'ui_interaction'],
@@ -611,122 +639,46 @@ Please help with element selection and analysis. {{additionalContext}}`,
    * Select appropriate template based on context
    */
   private selectTemplate(promptContext: PromptContext): PromptTemplate {
-    const { intent, tools, taskAnalysis, context } = promptContext;
-    // Specialized: planner and orchestrator
-    if (tools && tools.length > 0) {
-      const toolNames = tools.map((t: any) => t?.name || '').filter(Boolean);
-      const hasPlanner = toolNames.includes('planTask');
-      const hasOrchestrator = toolNames.includes('orchestratePlan');
-      const browserToolHits = toolNames.filter((n) => ['navigateToUrl','clickElement','fillForm','extractContent','waitFor','takeScreenshot','scrollPage','highlightElement','getHighlightedElements','analyzeElement','findElementsByText','captureElementScreenshot'].includes(n)).length;
-      const web3ToolHits = toolNames.filter((n) => ['checkBalance','sendTransaction','approveToken','swapTokens','bridgeTokens','stakeTokens','getNativeBalance','getTokenBalances','getAllAssets','getAssetPrices'].includes(n)).length;
-      if (hasPlanner && !hasOrchestrator) {
-        return this.getTemplate('planner_agent') || this.getTemplate('function_calling') || this.getTemplate('web3_assistant')!;
-      }
-      if (hasOrchestrator) {
-        return this.getTemplate('orchestrator_agent') || this.getTemplate('function_calling') || this.getTemplate('web3_assistant')!;
-      }
-      if (browserToolHits > 0 && web3ToolHits === 0) {
-        return this.getTemplate('automation_agent') || this.getTemplate('browser_automation') || this.getTemplate('function_calling')!;
-      }
-      if (web3ToolHits > 0 && browserToolHits === 0) {
-        return this.getTemplate('web3_agent') || this.getTemplate('function_calling') || this.getTemplate('web3_assistant')!;
-      }
+    // Priority-based template selection
+    const { tools } = promptContext;
+
+    // Check if we have agent-specific tools (indicating a specific agent turn)
+    const hasOrchestratorTools = tools?.some(tool => tool.owner === 'orchestrator') || false;
+    const hasPlannerTools = tools?.some(tool => tool.owner === 'planner') || false;
+    const hasAutomationTools = tools?.some(tool => tool.owner === 'automation') || false;
+    const hasWeb3Tools = tools?.some(tool => tool.owner === 'web3') || false;
+
+    // Debug logging
+    logger.info('🔍 Prompt template selection:', {
+      hasOrchestratorTools,
+      hasPlannerTools,
+      hasAutomationTools,
+      hasWeb3Tools,
+      toolOwners: tools?.map(t => t.owner).filter(Boolean) || [],
+      toolNames: tools?.map(t => t.name) || []
+    });
+
+    // Agent-specific template selection with strict isolation
+    if (hasAutomationTools && !hasOrchestratorTools && !hasPlannerTools && !hasWeb3Tools) {
+      logger.info('🤖 Selecting Automation Agent template');
+      return this.getTemplate('automation_agent') || this.getTemplate('browser_automation')!;
+    }
+    if (hasWeb3Tools && !hasOrchestratorTools && !hasPlannerTools && !hasAutomationTools) {
+      logger.info('🔗 Selecting Web3 Agent template');
+      return this.getTemplate('web3_agent') || this.getTemplate('web3_assistant')!;
+    }
+    if (hasPlannerTools && !hasOrchestratorTools && !hasAutomationTools && !hasWeb3Tools) {
+      logger.info('📋 Selecting Planner Agent template');
+      return this.getTemplate('planner_agent') || this.getTemplate('function_calling')!;
+    }
+    if (hasOrchestratorTools && !hasAutomationTools && !hasWeb3Tools) {
+      logger.info('🎯 Selecting Orchestrator Agent template');
+      return this.getTemplate('orchestrator_agent') || this.getTemplate('function_calling')!;
     }
 
-    // Check if this is a function calling scenario
-    if (tools && tools.length > 0) {
-      // Check for DeFi-specific contexts first
-      if (intent && intent.action) {
-        const action = intent.action.toLowerCase();
-        if (action.includes('connect') || action.includes('wallet')) {
-          return (
-            this.getTemplate('defi_wallet_connection') ||
-            this.getTemplate('function_calling') ||
-            this.getTemplate('web3_assistant')!
-          );
-        }
-        if (action.includes('swap') || action.includes('exchange')) {
-          return (
-            this.getTemplate('defi_token_swap') ||
-            this.getTemplate('function_calling') ||
-            this.getTemplate('web3_assistant')!
-          );
-        }
-        if (action.includes('approve') || action.includes('enable')) {
-          return (
-            this.getTemplate('defi_token_approval') ||
-            this.getTemplate('function_calling') ||
-            this.getTemplate('web3_assistant')!
-          );
-        }
-        if (action.includes('liquidity') || action.includes('pool')) {
-          return (
-            this.getTemplate('defi_liquidity_provision') ||
-            this.getTemplate('function_calling') ||
-            this.getTemplate('web3_assistant')!
-          );
-        }
-        if (action.includes('stake') || action.includes('farm') || action.includes('yield')) {
-          return (
-            this.getTemplate('defi_staking_yield') ||
-            this.getTemplate('function_calling') ||
-            this.getTemplate('web3_assistant')!
-          );
-        }
-      }
-
-      // Check for element selection tools
-      const elementSelectionTools = tools.filter(tool =>
-        tool.name.includes('Element') ||
-        tool.name.includes('element') ||
-        tool.name.includes('highlight') ||
-        tool.name.includes('analyze')
-      );
-
-      if (elementSelectionTools.length > 0) {
-        return (
-          this.getTemplate('element_selection') ||
-          this.getTemplate('function_calling') ||
-          this.getTemplate('web3_assistant')!
-        );
-      }
-
-      return (
-        this.getTemplate('function_calling') ||
-        this.getTemplate('web3_assistant')!
-      );
-    }
-
-    // Check if this is a browser automation task
-    if (taskAnalysis && taskAnalysis.requiresBrowserAutomation) {
-      return (
-        this.getTemplate('browser_automation') ||
-        this.getTemplate('element_selection') ||
-        this.getTemplate('web3_assistant')!
-      );
-    }
-
-    // Check for DeFi context based on conversation or available actions
-    if (context && context.conversationHistory) {
-      const recentMessages = context.conversationHistory.slice(-3);
-      const hasDeFiKeywords = recentMessages.some(msg => {
-        const content = (msg.content || '').toLowerCase();
-        return content.includes('defi') ||
-               content.includes('swap') ||
-               content.includes('stake') ||
-               content.includes('liquidity') ||
-               content.includes('approve') ||
-               content.includes('wallet') ||
-               content.includes('connect');
-      });
-
-      if (hasDeFiKeywords) {
-        return this.getTemplate('web3_assistant')!;
-      }
-    }
-
-    // Default to Web3 assistant
-    return this.getTemplate('web3_assistant')!;
+    // Fallback to orchestrator for mixed or unclear contexts
+    logger.info('🎯 Falling back to Orchestrator Agent template');
+    return this.getTemplate('orchestrator_agent') || this.getTemplate('function_calling')!;
   }
 
   /**

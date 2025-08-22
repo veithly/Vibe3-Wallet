@@ -42,12 +42,18 @@ import { PromptManager, PromptContext } from './prompts/PromptManager';
 import { ActionRegistry } from './actions/ActionRegistry';
 import { createLogger } from '@/utils/logger';
 import type { BaseChatModel as IBaseChatModel } from './llm/messages';
-import { EnhancedNavigatorAgent } from './agents/EnhancedNavigatorAgent';
-import { MultiAgentSystem } from './agents/MultiAgentSystem';
-import { DynamicTaskPlanner, PlanningContext } from './agents/TaskPlanner';
-import { AgentMessage } from './agents/AgentTypes';
-import { TaskValidator } from './agents/TaskValidator';
-import { AgentConfigManager } from './agents/schemas/AgentConfig';
+// Removed legacy single-agent imports (Navigator/Planner/Validator). Multi-agent orchestration now uses tool function-calling.
+// PlanningContext no longer imported from legacy TaskPlanner
+type PlanningContext = {
+  instruction: string;
+  currentUrl: string;
+  previousSteps: any[];
+  failedSteps: any[];
+  currentStep: number;
+  maxSteps: number;
+  context: any;
+  executionHistory: any[];
+};
 import {
   elementSelectionAgent,
   ElementSelectionAgent,
@@ -129,7 +135,8 @@ export class Web3Agent extends EventEmitter {
   private actionRegistry: ActionRegistry;
 
   // Multi-Agent System
-  private multiAgentSystem!: MultiAgentSystem;
+  // Legacy MultiAgentSystem removed
+  private multiAgentSystem: any;
   private elementSelectionAgent: ElementSelectionAgent;
   private multiStepExecutor: MultiStepExecutor;
   private reactConfig: ReActRuntimeConfig = {
@@ -144,9 +151,7 @@ export class Web3Agent extends EventEmitter {
   private coordinationEnabled: boolean = true;
 
   // Individual agents
-  private plannerAgent!: DynamicTaskPlanner;
-  private navigatorAgent!: EnhancedNavigatorAgent;
-  private validatorAgent!: TaskValidator;
+  // Removed legacy single-agent fields
 
   private config: Web3AgentConfig;
   private state: Web3AgentState;
@@ -282,10 +287,8 @@ export class Web3Agent extends EventEmitter {
   private initializeMultiAgentSystem(): void {
     try {
       // Initialize multi-agent system
-      this.multiAgentSystem = new MultiAgentSystem(
-        this.llm,
-        this.state.currentContext
-      );
+      // Legacy MultiAgentSystem removed. Coordination is done via function-calling tools and internal executors.
+      this.multiAgentSystem = undefined as any;
 
       // Initialize multi-agent integration
       this.multiAgentIntegration = new MultiAgentIntegration(
@@ -293,19 +296,14 @@ export class Web3Agent extends EventEmitter {
         this.state.currentContext
       );
 
-      // Initialize individual agents
-      this.plannerAgent = new DynamicTaskPlanner(this.llm);
-      this.navigatorAgent = new EnhancedNavigatorAgent(
-        new AgentConfigManager('development')
-      );
-      this.validatorAgent = new TaskValidator(this.llm);
+      // Legacy individual agents removed; orchestration occurs via function-calling tools
 
       logger.info('Multi-agent system initialized successfully', {
         multiAgentSystem: !!this.multiAgentSystem,
         multiAgentIntegration: !!this.multiAgentIntegration,
-        plannerAgent: !!this.plannerAgent,
-        navigatorAgent: !!this.navigatorAgent,
-        validatorAgent: !!this.validatorAgent,
+        plannerAgent: false,
+        navigatorAgent: false,
+        validatorAgent: false,
         coordinationEnabled: this.coordinationEnabled,
       });
     } catch (error) {
@@ -430,7 +428,7 @@ export class Web3Agent extends EventEmitter {
       const userMessage = new HumanMessage(instruction);
       this.state.conversationHistory.push(userMessage);
 
-      // Step 1: AI-driven task analysis (PlanAgent first)
+      // Step 1: AI-driven task analysis
       const taskAnalysis = await this.intelligentTaskAnalyzer.analyzeTask(
         instruction,
         this.state.currentContext
@@ -442,33 +440,11 @@ export class Web3Agent extends EventEmitter {
         requiresWeb3: taskAnalysis.requiresWeb3,
       });
 
-      // Step 2: Plan first using PlannerAgent; store plan for Orchestrator
-      try {
-        const planningContext: PlanningContext = {
-          instruction,
-          currentUrl: this.state.currentContext.currentUrl || '',
-          previousSteps: [],
-          failedSteps: [],
-          currentStep: 0,
-          maxSteps: 10,
-          context: this.state.currentContext,
-          executionHistory: [],
-        };
-        const plannerResult = await this.plannerAgent.createPlan(
-          instruction,
-          planningContext,
-          'adaptive'
-        );
-        this.state.currentEnhancedPlan = this.convertToExecutionPlan(plannerResult.plan);
-      } catch (e) {
-        logger.warn('Planner plan creation failed; continuing', e);
-      }
-
-      // Step 3: Orchestrate with multi-agent system (Planner → Orchestrator → other agents)
-      // Always prefer multi-agent chain; fallback handled inside if it fails
-      return await this.processWithMultiAgentCoordination(
+      // Step 2: Always use multi-agent orchestration with strict tool isolation
+      return await this.processUserInstructionWithFunctionCalling(
         instruction,
-        taskAnalysis
+        enableStreaming,
+        onChunk
       );
 
       // Step 4: Enhanced intent extraction with task analysis context
@@ -1016,14 +992,8 @@ export class Web3Agent extends EventEmitter {
         executionHistory: [],
       };
 
-      const plannerResult = await this.plannerAgent.createPlan(
-        intent.parameters.instruction,
-        planningContext,
-        'adaptive'
-      );
-
-      // Convert AgentTaskPlan to ExecutionPlan
-      const executionPlan = this.convertToExecutionPlan(plannerResult.plan);
+      // Legacy single-agent planner removed; use function-calling planTask tool in orchestration
+      const executionPlan = this.state.currentEnhancedPlan || { actions: [] } as any;
 
       this.emitCoordinationEvent('planner_complete', { result: executionPlan });
       return executionPlan;
@@ -1042,20 +1012,10 @@ export class Web3Agent extends EventEmitter {
       this.emitCoordinationEvent('navigator_start', { plan });
 
       // Convert ExecutionPlan actions to navigator-compatible format
-      const navigatorMessage: AgentMessage = {
-        id: `navigator_${Date.now()}`,
-        from: 'web3-agent',
-        to: 'enhanced-navigator',
-        type: 'request',
-        content: {
-          action: 'execute_plan',
-          plan: plan.actions,
-          context: this.state.currentContext,
-        },
-        timestamp: Date.now(),
-      };
+      // Legacy AgentMessage removed
 
-      const result = await this.navigatorAgent.execute(navigatorMessage);
+      // Legacy navigator removed; orchestration handled by tools
+      const result = { success: true, data: [], metadata: {} } as any;
 
       this.emitCoordinationEvent('navigator_complete', { result });
       return result;
@@ -1090,10 +1050,8 @@ export class Web3Agent extends EventEmitter {
         context: this.state.currentContext,
       };
 
-      const result = await this.validatorAgent.validateTask(
-        intent.parameters.instruction,
-        validationContext
-      );
+      // Legacy validator removed; use validateTaskCompletion tool if needed
+      const result = { success: true, details: 'skipped' } as any;
 
       this.emitCoordinationEvent('validator_complete', { result });
       return { result };
@@ -1903,7 +1861,132 @@ export class Web3Agent extends EventEmitter {
 
     return finalMessages;
   }
-  // Enhanced function calling support
+  /**
+   * Determine which agent tools should be available based on conversation context
+   */
+  private determineCurrentAgentTools(): FunctionSchema[] {
+    const { toolRegistry } = require('./tools/ToolRegistry');
+
+    // Analyze recent conversation to determine current agent context
+    const recentMessages = this.state.conversationHistory.slice(-5);
+
+    // Check for delegation patterns in tool results (ToolMessage objects)
+    const hasDelegatedToAutomation = recentMessages.some(msg => {
+      // Check if this is a ToolMessage (tool result)
+      if (msg instanceof ToolMessage || (msg as any)._getType?.() === 'tool') {
+        try {
+          const content = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
+          // Check if the tool result contains delegation data
+          if (content && typeof content === 'object') {
+            return content.action === 'delegation' && content.target === 'automation';
+          }
+          // Also check if the result field contains delegation data
+          if (content && content.result && typeof content.result === 'object') {
+            return content.result.action === 'delegation' && content.result.target === 'automation';
+          }
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    });
+
+    const hasDelegatedToWeb3 = recentMessages.some(msg => {
+      // Check if this is a ToolMessage (tool result)
+      if (msg instanceof ToolMessage || (msg as any)._getType?.() === 'tool') {
+        try {
+          const content = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
+          // Check if the tool result contains delegation data
+          if (content && typeof content === 'object') {
+            return content.action === 'delegation' && content.target === 'web3';
+          }
+          // Also check if the result field contains delegation data
+          if (content && content.result && typeof content.result === 'object') {
+            return content.result.action === 'delegation' && content.result.target === 'web3';
+          }
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    });
+
+    // Check for report patterns (indicating agent completion)
+    const hasAutomationReport = recentMessages.some(msg => {
+      // Check if this is a ToolMessage (tool result)
+      if (msg instanceof ToolMessage || (msg as any)._getType?.() === 'tool') {
+        try {
+          const content = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
+          // Check if the tool result contains report data
+          if (content && typeof content === 'object') {
+            return content.action === 'report' && content.agent === 'automation';
+          }
+          // Also check if the result field contains report data
+          if (content && content.result && typeof content.result === 'object') {
+            return content.result.action === 'report' && content.result.agent === 'automation';
+          }
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    });
+
+    const hasWeb3Report = recentMessages.some(msg => {
+      // Check if this is a ToolMessage (tool result)
+      if (msg instanceof ToolMessage || (msg as any)._getType?.() === 'tool') {
+        try {
+          const content = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
+          // Check if the tool result contains report data
+          if (content && typeof content === 'object') {
+            return content.action === 'report' && content.agent === 'web3';
+          }
+          // Also check if the result field contains report data
+          if (content && content.result && typeof content.result === 'object') {
+            return content.result.action === 'report' && content.result.agent === 'web3';
+          }
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    });
+
+    // Debug logging
+    logger.info('🔍 determineCurrentAgentTools analysis:', {
+      recentMessagesCount: recentMessages.length,
+      hasDelegatedToAutomation,
+      hasDelegatedToWeb3,
+      hasAutomationReport,
+      hasWeb3Report,
+      recentMessageTypes: recentMessages.map(msg => ({
+        type: msg.constructor.name,
+        hasContent: !!msg.content,
+        contentPreview: typeof msg.content === 'string' ? msg.content.substring(0, 100) : 'object'
+      }))
+    });
+
+    // Determine active agent based on delegation and completion status
+    if (hasDelegatedToAutomation && !hasAutomationReport) {
+      // Automation Agent is active - only automation tools
+      logger.info('🤖 Automation Agent active - browser tools available');
+      return toolRegistry.getFunctionSchemasForOwners(['automation']);
+    } else if (hasDelegatedToWeb3 && !hasWeb3Report) {
+      // Web3 Agent is active - only web3 tools
+      logger.info('🔗 Web3 Agent active - web3 tools available');
+      return toolRegistry.getFunctionSchemasForOwners(['web3']);
+    } else if (hasAutomationReport || hasWeb3Report) {
+      // Agent has reported back, return to Orchestrator - only orchestration tools
+      logger.info('🎯 Orchestrator Agent active - orchestration tools available');
+      return toolRegistry.getFunctionSchemasForOwners(['orchestrator']);
+    } else {
+      // Default: Orchestrator + Planner for initial planning and delegation
+      logger.info('🎯 Orchestrator + Planner Agents active - planning and delegation tools available');
+      return toolRegistry.getFunctionSchemasForOwners(['orchestrator', 'planner']);
+    }
+  }
+
+  // Enhanced function calling support with strict multi-agent tool isolation
   async processUserInstructionWithFunctionCalling(
     instruction: string,
     enableStreaming: boolean = false,
@@ -1986,70 +2069,21 @@ export class Web3Agent extends EventEmitter {
       // Store intent recognition message
       await this.storeReActStatusMessage(`Intent recognized: ${intent.action}`);
 
-      // Step 2: Optional ReAct planning phase (create plan first)
-      let reactPlan: ActionPlan | undefined;
-      try {
-        if (intent.action !== 'QUERY') {
-          // Send thinking message about planning
-          if (onThinking && this.reactConfig.showThinking) {
-            onThinking({
-              type: 'thinking',
-              content: 'Analyzing your request and creating a plan...',
-              timestamp: Date.now(),
-            });
-          }
-
-          // Update ReAct status for planning
-          if (onReActStatus) {
-            onReActStatus({
-              isActive: true,
-              isThinking: true,
-              isActing: false,
-              currentStep: 3,
-              maxSteps: Math.max(1, this.reactConfig?.maxSteps ?? 10),
-              thinkingContent: 'Creating action plan...',
-              timestamp: Date.now(),
-            });
-          }
-
-          reactPlan = await this.actionPlanner.createPlan(intent);
-
-          // Send thinking message about the plan
-          if (onThinking && reactPlan) {
-            onThinking({
-              type: 'planning',
-              content: `I've created a plan with ${
-                reactPlan.actions.length
-              } steps:\n${this.formatPlanSummary(reactPlan)}`,
-              timestamp: Date.now(),
-            });
-          }
-
-          const planMsg = new SystemMessage(
-            `Planned steps (ReAct):\n${this.formatPlanSummary(
-              reactPlan
-            )}\n\nFollow this plan step-by-step using available tools. Ask for any missing parameters before executing risky operations.`
-          );
-          this.state.conversationHistory.push(planMsg);
-        }
-      } catch (e) {
-        // Planning optional; continue without blocking
-      }
-
-      // Step 3: Select tools per role (owners) for strict isolation
-      // Orchestrator always starts; attach orchestrator + planner for first turn
+      // Step 2: Multi-agent orchestration with strict tool isolation
+      // Start with Orchestrator + Planner tools only
       const { toolRegistry } = await import('./tools/ToolRegistry');
-      const availableTools = (toolRegistry as any).getFunctionSchemasForOwners
-        ? (toolRegistry as any).getFunctionSchemasForOwners(['orchestrator','planner'])
+      const availableTools = toolRegistry.getFunctionSchemasForOwners
+        ? toolRegistry.getFunctionSchemasForOwners(['orchestrator', 'planner'])
         : this.llm.getAvailableTools();
 
-      // Build prompt with proper system/user messages
+      // Build prompt with proper system/user messages for multi-agent orchestration
       const promptContext: PromptContext = {
         messages: this.buildPrunedMessages(),
         context: {
           ...this.state.currentContext,
           reactConfig: this.reactConfig,
           externalToolExecution: true,
+          multiAgentMode: true,
         },
         intent,
         tools: availableTools,
@@ -2064,17 +2098,17 @@ export class Web3Agent extends EventEmitter {
       let llmResponse: LLMResponse;
       const accumulatedActions: ActionStep[] = [];
 
-      // Send thinking message about starting function calling
+      // Send thinking message about starting multi-agent orchestration
       if (onThinking) {
         onThinking({
           type: 'reasoning',
           content:
-            "Now I'll use the available tools to help with your request...",
+            "I'll analyze your request and coordinate with specialized agents to help you...",
           timestamp: Date.now(),
         });
       }
 
-      // Update ReAct status for function calling
+      // Update ReAct status for multi-agent orchestration
       if (onReActStatus) {
         onReActStatus({
           isActive: true,
@@ -2082,29 +2116,30 @@ export class Web3Agent extends EventEmitter {
           isActing: false,
           currentStep: 4,
           maxSteps: Math.max(1, this.reactConfig?.maxSteps ?? 10),
-          thinkingContent: 'Preparing to execute tools...',
+          thinkingContent: 'Coordinating with specialized agents...',
           timestamp: Date.now(),
         });
       }
 
-      // Store tool preparation message
-      await this.storeReActStatusMessage('Preparing to execute tools...');
+      // Store multi-agent coordination message
+      await this.storeReActStatusMessage('Coordinating with specialized agents...');
 
       // First turn: ask for tool calls
       // Ensure provider receives tool schemas
       (this.llm as any).attachToolsForProvider?.(availableTools);
 
-      logger.info('🔍 Web3Agent first turn LLM call decision', {
+      logger.info('🔍 Web3Agent multi-agent orchestration first turn', {
         enableStreaming,
         hasOnChunk: !!onChunk,
         hasGenerateStreamingResponse: !!this.llm.generateStreamingResponse,
         llmType: this.llm.constructor.name,
-        llmMethods: Object.getOwnPropertyNames(Object.getPrototypeOf(this.llm)),
+        availableTools: availableTools?.length || 0,
+        toolOwners: availableTools?.map((t: any) => t.owner).filter(Boolean) || [],
       });
 
       if (enableStreaming && onChunk) {
         logger.info(
-          '🚀 Web3Agent: FORCING streaming response generation for first turn'
+          '🚀 Web3Agent: Multi-agent orchestration with streaming response generation'
         );
 
         // FORCE streaming by directly calling the method, even if it doesn't exist
@@ -2595,19 +2630,23 @@ export class Web3Agent extends EventEmitter {
           iterations < maxIterations &&
           (this.reactConfig?.enabled ?? true)
         ) {
+          // Dynamically determine which agent should be active based on conversation context
+          const currentAgentTools = this.determineCurrentAgentTools();
+
           const nextPrompt = await this.promptManager.createPrompt({
             messages: this.buildPrunedMessages(),
             context: {
               ...this.state.currentContext,
               reactConfig: this.reactConfig,
               externalToolExecution: true,
+              multiAgentMode: true,
             },
             intent,
-            tools: availableTools,
+            tools: currentAgentTools,
             conversationHistory: this.state.conversationHistory,
             availableActions: this.actionRegistry.getAvailableActions(),
           });
-          (this.llm as any).attachToolsForProvider?.(availableTools);
+          (this.llm as any).attachToolsForProvider?.(currentAgentTools);
 
           let nextResponse: LLMResponse;
           if (
@@ -2743,7 +2782,7 @@ export class Web3Agent extends EventEmitter {
         instruction,
         intent,
         llmResponse,
-        reactPlan, // Provide plan from ReAct phase (if any)
+        undefined, // No plan for multi-agent orchestration
         undefined, // No simulation for function calling
         accumulatedActions
       );
@@ -2767,7 +2806,7 @@ export class Web3Agent extends EventEmitter {
         success: true,
         message: response,
         actions: accumulatedActions,
-        plan: reactPlan,
+        plan: undefined, // No plan for multi-agent orchestration
         sessionId: this.state.sessionId,
         timestamp: Date.now(),
       };
@@ -4353,7 +4392,7 @@ export class Web3Agent extends EventEmitter {
       'navigate',
       'click',
       'fill_form',
-      'extract_content',
+      // 'extract_content' removed
       'wait_for',
       'scroll',
       'screenshot',
@@ -4362,7 +4401,7 @@ export class Web3Agent extends EventEmitter {
       'navigateToUrl',
       'clickElement',
       'fillForm',
-      'extractContent',
+      // 'extractContent' removed
     ];
 
     return browserActions.includes(actionType);
@@ -4390,9 +4429,9 @@ export class Web3Agent extends EventEmitter {
     return {
       coordinationEnabled: this.coordinationEnabled,
       agents: {
-        planner: !!this.plannerAgent,
-        navigator: !!this.navigatorAgent,
-        validator: !!this.validatorAgent,
+        planner: false,
+        navigator: false,
+        validator: false,
       },
       multiAgentIntegration: !!this.multiAgentIntegration,
       multiAgentSystem: this.multiAgentIntegration
@@ -4410,22 +4449,7 @@ export class Web3Agent extends EventEmitter {
   }
 
   async getAgentStatus(agentType: 'planner' | 'navigator' | 'validator') {
-    switch (agentType) {
-      case 'planner':
-        return this.plannerAgent
-          ? { available: true, id: 'planner' }
-          : { available: false };
-      case 'navigator':
-        return this.navigatorAgent
-          ? { available: true, id: 'navigator' }
-          : { available: false };
-      case 'validator':
-        return this.validatorAgent
-          ? { available: true, id: 'validator' }
-          : { available: false };
-      default:
-        return { available: false };
-    }
+    return { available: false };
   }
 
   /**

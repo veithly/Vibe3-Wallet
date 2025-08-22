@@ -1,19 +1,19 @@
 // Multi-Agent Automation System
-// 
+//
 // A sophisticated automation system for Vibe3-Wallet that enables
 // complex web interactions through AI-powered agent coordination.
-// 
+//
 // @module MultiAgentSystem
 
 // Configuration management
 export * from './schemas/AgentConfig';
 
 // Schema validation - with explicit exports to avoid conflicts
-export { 
-  AgentActionSchema, 
-  TaskPlanSchema, 
-  ElementSelectionSchema, 
-  ValidationResultSchema, 
+export {
+  AgentActionSchema,
+  TaskPlanSchema,
+  ElementSelectionSchema,
+  ValidationResultSchema,
   PerformanceMetricsSchema,
   AgentSchemaValidator,
   type AgentAction,
@@ -37,30 +37,21 @@ export {
 } from './agents/AgentTypes';
 
 // Enhanced highlighting and navigation components
-export {
-  ElementHighlighter,
-  type HighlightBox,
-  type HighlightOptions,
-  type ElementInfo
-} from './agents/ElementHighlighter';
+// ElementHighlighter removed (deprecated)
 
-export {
-  EnhancedNavigatorAgent,
-  type NavigationStep,
-  type NavigationResult
-} from './agents/EnhancedNavigatorAgent';
+// Legacy EnhancedNavigatorAgent removed
 
 // Export conflicting types with aliases
-import { 
+import {
   PerformanceMetrics as AgentPerformanceMetrics,
   TaskPlan as AgentTaskPlan,
-  ValidationResult as AgentValidationResult 
+  ValidationResult as AgentValidationResult
 } from './agents/AgentTypes';
 
-export { 
+export {
   AgentPerformanceMetrics as PerformanceMetrics_Agent,
   AgentTaskPlan as TaskPlan_Agent,
-  AgentValidationResult as ValidationResult_Agent 
+  AgentValidationResult as ValidationResult_Agent
 };
 
 // System version

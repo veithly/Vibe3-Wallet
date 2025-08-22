@@ -586,39 +586,7 @@ export class ElementSelectionAgent {
       });
     }
 
-    // First highlight the element with recovery logic and message tracking
-    let highlightResult = await this.executeToolWithMessageTracking('highlightElement', {
-      selector: task.params.selector,
-      color: 'blue',
-      duration: 2000,
-    });
-
-    if (!highlightResult.success) {
-      // Try to recover from tab-related errors
-      if (highlightResult.error?.includes('No active tab found') ||
-          highlightResult.error?.includes('No active tab available') ||
-          highlightResult.error?.includes('Content script not available')) {
-        logger.warn('Element highlight failed, attempting recovery...', {
-          error: highlightResult.error
-        });
-
-        // Wait a moment before retry
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        // Retry the highlight with message tracking
-        highlightResult = await this.executeToolWithMessageTracking('highlightElement', {
-          selector: task.params.selector,
-          color: 'blue',
-          duration: 2000,
-        });
-
-        if (!highlightResult.success) {
-          throw new Error(`Failed to highlight element after recovery: ${highlightResult.error}`);
-        }
-      } else {
-        throw new Error(`Failed to highlight element: ${highlightResult.error}`);
-      }
-    }
+    // Element highlighting removed. Proceeding without visual highlight.
 
     // Perform the interaction with recovery logic and message tracking
     let interactionResult;

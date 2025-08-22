@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ActionStep, ActionDefinition } from '../types';
 import { createLogger } from '@/utils/logger';
 import { AssetQueryAction } from './asset-query-actions';
-import { 
+import {
   getAllAssetsActionSchema,
   getTokenBalancesActionSchema,
   getNativeBalanceActionSchema,
@@ -280,26 +280,7 @@ export class ActionRegistry {
       retryable: true,
     });
 
-    this.registerAction('extractContent', {
-      name: 'extractContent',
-      description: 'Extract content from page',
-      handler: this.executeExtractContent.bind(this),
-      schema: {
-        type: 'object',
-        properties: {
-          selector: { type: 'string' },
-          type: { type: 'string', enum: ['text', 'html', 'attribute'] },
-          attribute: { type: 'string' },
-          multiple: { type: 'boolean' },
-        },
-        required: ['selector'],
-      },
-      riskLevel: 'low',
-      category: 'browser',
-      timeout: 10000,
-      dependencies: [],
-      retryable: true,
-    });
+    // extractContent action removed (deprecated)
 
     // System Actions
     this.registerAction('switchNetwork', {
@@ -903,13 +884,7 @@ export class ActionRegistry {
     return { success: true, fieldsFilled: params.fields.length };
   }
 
-  private async executeExtractContent(
-    params: any,
-    context?: any
-  ): Promise<any> {
-    logger.info('Extracting content', params);
-    return { content: 'Sample content', selector: params.selector };
-  }
+  // executeExtractContent removed (deprecated)
 
   private async executeSwitchNetwork(params: any, context?: any): Promise<any> {
     logger.info('Switching network', params);

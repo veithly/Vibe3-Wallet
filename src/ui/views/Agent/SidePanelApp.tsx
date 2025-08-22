@@ -1972,6 +1972,7 @@ export const SidePanelApp = () => {
       // Ignore any further streaming/tool/status messages until next user send
       try { ignoreStreamingRef.current = true; } catch {}
 
+      // Send cancel message to background service
       if (portRef.current) {
         portRef.current.postMessage({ type: 'cancel_task' });
         logger.info(COMPONENT_NAME, 'Stop task message sent');
@@ -1983,21 +1984,53 @@ export const SidePanelApp = () => {
       if (streamingMessageId) {
         setMessages(prev => prev.map(msg =>
           msg.messageId === streamingMessageId
-            ? { ...msg, isStreaming: false, messageType: 'streaming_error' as const, content: (msg.content || '') || 'Task stopped by user' }
+            ? { ...msg, isStreaming: false, messageType: 'streaming_error' as const, content: (msg.content || '') + '\n\n**Task stopped by user**' }
             : msg
         ));
         setStreamingMessageId(null);
       }
 
-      // Reset UI state regardless
+      // Also mark any other streaming or executing messages as stopped
+      setMessages(prev => prev.map(msg => {
+        if (msg.isStreaming || msg.messageType === 'streaming_chunk' ||
+            (msg.functionCalls && msg.functionCalls.some(call => call.status === 'executing'))) {
+          return {
+            ...msg,
+            isStreaming: false,
+            messageType: 'streaming_error' as const,
+            content: (msg.content || '') + '\n\n**Task stopped by user**',
+            functionCalls: msg.functionCalls?.map(call =>
+              call.status === 'executing' ? { ...call, status: 'failed' as const } : call
+            )
+          };
+        }
+        return msg;
+      }));
+
+      // Reset UI state immediately and forcefully
       setInputEnabled(true);
       setShowStopButton(false);
       resetReActStatus();
+
+      // Add a system message to indicate the task was stopped
+      const stopMessage: Message = {
+        messageId: `stop-${Date.now()}`,
+        actor: Actors.SYSTEM,
+        content: '⏹️ Task stopped by user',
+        messageType: 'streaming_error',
+        timestamp: Date.now(),
+        isStreaming: false
+      };
+
+      setMessages(prev => [...prev, stopMessage]);
+
+      logger.info(COMPONENT_NAME, 'Task stop completed successfully');
     } catch (error) {
       logger.error(COMPONENT_NAME, 'Error stopping task', { error });
       // Still reset UI state on error
       setInputEnabled(true);
       setShowStopButton(false);
+      resetReActStatus();
     }
   }, [streamingMessageId, resetReActStatus]);
 

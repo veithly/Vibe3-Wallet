@@ -172,37 +172,26 @@ export const ElementSelector: React.FC<ElementSelectorProps> = ({
   }, []);
 
   const highlightAll = useCallback(async () => {
-    try {
-      await executeTool('highlightElements', { interactiveOnly: 'all', limit: 500 });
-      setHighlightedElements(elements);
-    } catch (e) {
-      logger.warn('Highlight all failed', e);
-    }
-  }, [elements, executeTool]);
+    logger.warn('highlightElements tool removed; skipping highlightAll');
+  }, [elements]);
 
   const clearHighlights = useCallback(async () => {
     if (!activeTabId) return;
     try {
-      await executeTool('clearHighlights', {});
+      // Direct cleanup fallback
+      await chrome.scripting.executeScript({
+        target: { tabId: activeTabId, allFrames: true },
+        func: () => {
+          const overlayId = 'vibe3-debug-overlay';
+          const overlay = document.getElementById(overlayId);
+          if (overlay) overlay.innerHTML = '';
+        }
+      });
       setHighlightedElements([]);
-    } catch (e) {
-      logger.warn('Clear highlights failed', e);
-      // Fallback to direct cleanup
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId: activeTabId, allFrames: true },
-          func: () => {
-            const overlayId = 'vibe3-debug-overlay';
-            const overlay = document.getElementById(overlayId);
-            if (overlay) overlay.innerHTML = '';
-          }
-        });
-        setHighlightedElements([]);
-      } catch (execErr) {
-        logger.warn('Clear highlights fallback failed', execErr);
-      }
+    } catch (execErr) {
+      logger.warn('Clear highlights failed', execErr);
     }
-  }, [activeTabId, executeTool]);
+  }, [activeTabId]);
 
   // Enhanced action detection based on DOMState (nanobrowser-aligned)
   const getElementActions = useCallback((el: any) => {

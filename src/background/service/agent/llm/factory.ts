@@ -720,9 +720,10 @@ class Web3LLM implements IWeb3LLM {
         return await this.generateMultiAgentResponse(messages, context, intent);
       }
 
-      // Prefer function calling whenever model supports it. If caller didn't provide tools,
-      // fall back to all available tool schemas from the registry.
-      const effectiveTools = (tools && tools.length > 0) ? tools : this.getAvailableTools();
+      // Prefer function calling whenever model supports it.
+      // IMPORTANT: If caller explicitly provides an empty tools array, respect it and DO NOT fall back.
+      // Only fall back to all tools when tools is truly undefined (not intentionally empty).
+      const effectiveTools = (tools === undefined) ? this.getAvailableTools() : tools;
       if (this._supportsFunctionCalling && effectiveTools.length > 0) {
         return await this.generateFunctionCallingResponse(
           messages,
@@ -947,7 +948,16 @@ class Web3LLM implements IWeb3LLM {
   // Internal: attach OpenAI tools for RealChatModel when provider supports it
   private attachToolsForProvider(tools?: FunctionSchema[]) {
     if (!tools || tools.length === 0) return;
-    const openaiTools = toolRegistry.getOpenAITools();
+
+    // Convert provided FunctionSchema[] into OpenAI-compatible tool list
+    const openaiTools = tools.map((schema) => ({
+      type: 'function',
+      function: {
+        name: schema.name,
+        description: schema.description,
+        parameters: schema.parameters,
+      },
+    }));
 
     // Always set on Web3LLM wrapper for reference
     (this as any)._pending_tools = openaiTools;
@@ -1368,7 +1378,7 @@ Current Context:
 - Network: ${context.currentChain}
 - Address: ${context.currentAddress}
 - Risk Level: ${context.riskLevel}
-- Balance: ${Object.entries(context.balances).map(([token, amount]) => `${token}: ${amount}`).join(', ')}
+- Balance: ${Object.entries((context && (context as any).balances) ? (context as any).balances : {}).map(([token, amount]) => `${token}: ${amount}`).join(', ')}
 
 Guidelines:
 - Think step by step about what information you need

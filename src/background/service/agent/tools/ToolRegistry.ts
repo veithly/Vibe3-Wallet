@@ -679,35 +679,7 @@ export class ToolRegistry {
       owner: 'automation',
     });
 
-    this.registerTool({
-      name: 'extractContent',
-      description: 'Extract content from web pages using CSS selectors',
-      parameters: [
-        {
-          type: 'string',
-          description: 'CSS selector to extract content from',
-        },
-        {
-          type: 'string',
-          description: 'Type of content to extract',
-          enum: ['text', 'html', 'value', 'attribute'],
-        },
-        {
-          type: 'boolean',
-          description: 'Optional: Extract multiple elements',
-        },
-        {
-          type: 'string',
-          description: 'Optional: Attribute name if type is "attribute"',
-        },
-      ],
-      required: ['selector'],
-      handler: this.createBrowserHandler('extractContent'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-      owner: 'automation',
-    });
+
 
     this.registerTool({
       name: 'waitFor',
@@ -897,7 +869,7 @@ export class ToolRegistry {
             const byXPath = (xp: string): Element | null => { try { const r = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null); return (r.singleNodeValue as Element) || null; } catch { return null; } };
             const sel: string = String(p.selector || '');
             const element = sel.startsWith('/') ? byXPath(sel) : bySelector(sel);
-            if (!element) return { success: false, error: 'Element not found' };
+            if (!element) return { action: 'error', error: 'Element not found', context: 'browser_automation', selector: sel };
             const el = element as HTMLElement;
             if (p.scrollIntoView !== false) {
               try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any }); } catch { try { el.scrollIntoView(); } catch {} }
@@ -919,7 +891,7 @@ export class ToolRegistry {
           args: [params]
         });
 
-        return result[0]?.result || { success: false, error: 'Script execution failed' };
+        return result[0]?.result || { action: 'error', error: 'Script execution failed', context: 'browser_automation', tool: 'hoverElement' };
       },
       category: 'browser',
       riskLevel: 'low',
@@ -1105,54 +1077,10 @@ export class ToolRegistry {
       requiresConfirmation: false,
     });
 
-    this.registerTool({
-      name: 'highlightElement',
-      description: "Highlight elements with numbered wireframe boxes. 'interactiveOnly' can be a kind string to control which elements: 'button' | 'clickable' | 'input' | 'link' | 'all'. Optionally pass 'selector' to highlight only one element, and 'limit' to cap results.",
-      parameters: [
-        {
-          type: 'string',
-          description: "interactiveOnly kind: 'button' | 'clickable' | 'input' | 'link' | 'all' (also accepts boolean for backward-compat; true='button', false='all')",
-        },
-        {
-          type: 'string',
-          description: 'selector: optional CSS selector to only highlight a single element',
-        },
-        {
-          type: 'number',
-          description: 'limit: optional maximum number of elements to return (1..500)',
-        },
-      ],
-      required: [],
-      handler: this.createElementSelectionHandler('highlightElement'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
+
 
     // Additional element selection helpers (content-script backed)
-    this.registerTool({
-      name: 'clearHighlights',
-      description: 'Clear all element highlights overlay on the active web page',
-      parameters: [],
-      required: [],
-      handler: this.createElementSelectionHandler('clearHighlights'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
-
-    this.registerTool({
-      name: 'highlightElements',
-      description: 'Highlight multiple elements by selector with optional labels',
-      parameters: [
-        { type: 'string', description: 'items: JSON string or array of { selector, type?, label? }' },
-      ],
-      required: [],
-      handler: this.createElementSelectionHandler('highlightElements'),
-      category: 'browser',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
+    // NOTE: `clearHighlights` and `highlightElements` tools were removed as they are deprecated.
 
     this.registerTool({
       name: 'getInteractiveElements',
@@ -1218,7 +1146,7 @@ export class ToolRegistry {
             const bySelector = (s: string): Element | null => { try { return document.querySelector(s); } catch { return null; } };
             const byXPath = (xp: string): Element | null => { try { const r = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null); return (r.singleNodeValue as Element) || null; } catch { return null; } };
             const element = sel.startsWith('/') ? byXPath(sel) : bySelector(sel);
-            if (!element) return { success: false, error: 'Element not found' };
+            if (!element) return { action: 'error', error: 'Element not found', context: 'browser_automation', selector: sel };
 
             const options: ScrollIntoViewOptions = {
               block: (block as any) || 'center',
@@ -1238,7 +1166,7 @@ export class ToolRegistry {
           args: [params.selector, params.block || 'center', params.inline || 'center', Boolean(params.smooth), Number(params.offset || 0)]
         });
 
-        return result[0]?.result || { success: false, error: 'Script execution failed' };
+        return result[0]?.result || { action: 'error', error: 'Script execution failed', context: 'browser_automation', tool: 'scrollToElement' };
       },
       category: 'browser',
       riskLevel: 'low',
@@ -1304,11 +1232,71 @@ export class ToolRegistry {
       name: 'planTask',
       description: 'Create a detailed multi-step plan for a user instruction using PlannerAgent',
       parameters: [
-        { type: 'string', description: 'The user instruction to plan' },
-        { type: 'string', description: 'Planning strategy', enum: ['conservative','aggressive','adaptive','fallback'] },
+        { name: 'instruction', type: 'string', description: 'The user instruction to plan' } as any,
+        { name: 'strategy', type: 'string', description: 'Planning strategy', enum: ['conservative','aggressive','adaptive','fallback'] } as any,
       ],
       required: ['instruction'],
       handler: this.createMultiAgentHandler('createExecutionPlan'),
+      category: 'system',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+      owner: 'planner',
+    });
+
+    // Create a simple TODO list from a plan's steps for UI rendering
+    this.registerTool({
+      name: 'createTodoList',
+      description: 'Create a TODO list for the current task based on provided steps/plan',
+      parameters: [
+        { type: 'string', description: 'Task identifier' },
+        { type: 'object', description: 'Plan object or array of steps to turn into TODOs' },
+      ],
+      required: ['steps'],
+      handler: async (params: any) => {
+        const rawPlan = params?.plan || params?.steps || [];
+        const taskId = String(params?.taskId || `task_${Date.now()}_${Math.random().toString(36).slice(2,6)}`);
+        let steps: any[] = [];
+        try {
+          if (Array.isArray(rawPlan)) {
+            steps = rawPlan;
+          } else if (typeof rawPlan === 'string') {
+            const parsed = JSON.parse(rawPlan);
+            steps = Array.isArray(parsed?.steps) ? parsed.steps : Array.isArray(parsed) ? parsed : [];
+          } else if (typeof rawPlan === 'object') {
+            steps = Array.isArray(rawPlan?.steps) ? rawPlan.steps : [];
+          }
+        } catch {}
+
+        // Normalize items
+        const items = steps.map((s: any, idx: number) => ({
+          id: String(s.id || `step_${idx + 1}`),
+          title: String(s.title || s.name || s.action || s.type || `Step ${idx + 1}`),
+          owner: ['navigate','click','input','wait','extract','scroll','screenshot','select','hover'].includes(String(s.type || s.action || '').toLowerCase()) ? 'automation' : 'web3',
+          status: 'pending' as const,
+          parameters: s.parameters || s.params || s,
+        }));
+
+        // Record into orchestrator registry for later progress updates
+        const rec = this.orchestratorTaskRegistry.get(taskId) || {
+          steps: [],
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        for (const it of items) {
+          rec.steps.push({ id: it.id, status: it.status, result: undefined, owner: it.owner, timestamp: Date.now() });
+        }
+        rec.updatedAt = Date.now();
+        this.orchestratorTaskRegistry.set(taskId, rec);
+
+        // Return raw TODO data for LLM/UI to interpret
+        return {
+          action: 'todo',
+          agent: 'planner',
+          taskId,
+          items,
+          timestamp: Date.now(),
+        };
+      },
       category: 'system',
       riskLevel: 'low',
       requiresConfirmation: false,
@@ -1320,8 +1308,8 @@ export class ToolRegistry {
       name: 'orchestratePlan',
       description: 'Execute a given plan by orchestrating Automation/Web3 agents',
       parameters: [
-        { type: 'string', description: 'Plan JSON string' },
-        { type: 'boolean', description: 'Enable validation' },
+        { name: 'plan', type: 'string', description: 'Plan JSON string' } as any,
+        { name: 'validate', type: 'boolean', description: 'Enable validation' } as any,
       ],
       required: ['plan'],
       handler: this.createMultiAgentHandler('orchestratePlan'),
@@ -1331,25 +1319,55 @@ export class ToolRegistry {
       owner: 'orchestrator',
     });
 
-    // Automation: browser automation toolkit entry via existing browser tools
+    // Orchestrator cannot directly call tools; it must delegate to child agents
     this.registerTool({
-      name: 'automationAction',
-      description: 'Perform a browser automation action (navigate/click/input/etc.)',
+      name: 'delegateToAutomation',
+      description: 'Delegate a step to the Automation Agent (browser tools only)',
       parameters: [
-        { type: 'string', description: 'Action name (navigateToUrl, clickElement, fillForm, extractContent, waitFor, takeScreenshot, scrollPage)' },
-        { type: 'object', description: 'Action parameters object' },
+        { type: 'string', description: 'taskId' },
+        { type: 'string', description: 'stepId' },
+        { type: 'string', description: 'Instruction or action description' },
+        { type: 'object', description: 'Parameters for the automation step' },
       ],
-      required: ['action','params'],
+      required: ['instruction'],
       handler: async (params: any) => {
-        const action = params?.action;
-        const actionParams = params?.params || {};
-        if (typeof action !== 'string') {
-          throw new Error('Invalid action');
-        }
-        return await this.executeTool(action, actionParams);
+        // Return raw delegation data for LLM to interpret
+        return {
+          action: 'delegation',
+          target: 'automation',
+          instruction: params.instruction,
+          parameters: params.params || {},
+          timestamp: Date.now()
+        };
       },
       category: 'system',
-      riskLevel: 'medium',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+      owner: 'orchestrator',
+    });
+
+    this.registerTool({
+      name: 'delegateToWeb3',
+      description: 'Delegate a step to the Web3 Agent (web3 tools only)',
+      parameters: [
+        { type: 'string', description: 'taskId' },
+        { type: 'string', description: 'stepId' },
+        { type: 'string', description: 'Instruction or action description' },
+        { type: 'object', description: 'Parameters for the web3 step' },
+      ],
+      required: ['instruction'],
+      handler: async (params: any) => {
+        // Return raw delegation data for LLM to interpret
+        return {
+          action: 'delegation',
+          target: 'web3',
+          instruction: params.instruction,
+          parameters: params.params || {},
+          timestamp: Date.now()
+        };
+      },
+      category: 'system',
+      riskLevel: 'low',
       requiresConfirmation: false,
       owner: 'orchestrator',
     });
@@ -1418,7 +1436,10 @@ export class ToolRegistry {
       parameters: [],
       required: [],
       handler: async () => {
+        // Return raw agent status data for LLM to interpret
         return {
+          action: 'status_check',
+          agent: 'orchestrator',
           status: 'ready',
           capabilities: [
             'Web3 transactions',
@@ -1460,7 +1481,17 @@ export class ToolRegistry {
         rec.steps.push({ id: String(stepId), status: String(status), result, owner: 'automation', timestamp: Date.now() });
         rec.updatedAt = Date.now();
         this.orchestratorTaskRegistry.set(taskId, rec);
-        return { success: true, taskId, stepId, status, message, timestamp: Date.now() };
+        // Return raw report data for LLM to interpret
+        return {
+          action: 'report',
+          agent: 'automation',
+          taskId,
+          stepId,
+          status,
+          message: message || '',
+          result: result || null,
+          timestamp: Date.now()
+        };
       },
       category: 'system',
       riskLevel: 'low',
@@ -1490,7 +1521,17 @@ export class ToolRegistry {
         rec.steps.push({ id: String(stepId), status: String(status), result, owner: 'web3', timestamp: Date.now() });
         rec.updatedAt = Date.now();
         this.orchestratorTaskRegistry.set(taskId, rec);
-        return { success: true, taskId, stepId, status, message, timestamp: Date.now() };
+        // Return raw report data for LLM to interpret
+        return {
+          action: 'report',
+          agent: 'web3',
+          taskId,
+          stepId,
+          status,
+          message: message || '',
+          result: result || null,
+          timestamp: Date.now()
+        };
       },
       category: 'system',
       riskLevel: 'low',
@@ -1504,10 +1545,9 @@ export class ToolRegistry {
       const startTime = Date.now();
       const executionId = `browser_${actionName}_${Date.now()}`;
 
-      // Prevent accidental duplicate executions (skip for highlightElement to allow rapid refresh)
-      if (actionName !== 'highlightElement') {
-        // Allow UI-triggered actions to bypass dedup to keep panel responsive
-        const bypassDedup = params?.noDedup === true || params?._source === 'ElementSelector' || params?._source === 'ui' || params?.__from === 'ui';
+      // Prevent accidental duplicate executions
+      // Allow UI-triggered actions to bypass dedup to keep panel responsive
+      const bypassDedup = params?.noDedup === true || params?._source === 'ElementSelector' || params?._source === 'ui' || params?.__from === 'ui';
         if (!bypassDedup) {
           const normalizedUrl = (params && typeof params.url === 'string') ? String(params.url).trim().toLowerCase() : '';
           const duplicateKey = actionName === 'navigateToUrl'
@@ -1533,7 +1573,6 @@ export class ToolRegistry {
           }
           this.executionTracker.set(duplicateKey, Date.now());
         }
-      }
 
       try {
         logger.info(`[${executionId}] Starting browser automation action: ${actionName}`, {
@@ -1733,16 +1772,8 @@ export class ToolRegistry {
           resultData: result.data ? JSON.stringify(result.data).substring(0, 200) : undefined,
         });
 
-        // Shape result for LLM ReAct friendliness (especially for highlightElement)
+        // Shape result for LLM ReAct friendliness
         let llmResult = result.data;
-        if (actionName === 'highlightElement') {
-          const elements = (result.data?.elements || []) as Array<{ selector: string; tag?: string; text?: string }>;
-          llmResult = {
-            elements,
-            count: elements.length,
-            note: 'Use clickElement with an element.selector to click, or input text with ELEMENT_INPUT_SELECTOR on a specific selector. Choose index by content/position.',
-          };
-        }
 
         return {
           action: actionName,
@@ -1759,14 +1790,11 @@ export class ToolRegistry {
       } catch (error) {
         // Remove from tracker on error to allow retries
         try {
-          // duplicateKey only exists when not highlightElement; guard
-          if (actionName !== 'highlightElement') {
-            const normalizedUrl = (params && typeof params.url === 'string') ? String(params.url).trim().toLowerCase() : '';
-            const duplicateKey = actionName === 'navigateToUrl'
-              ? `${actionName}_${normalizedUrl}`
-              : `${actionName}_${JSON.stringify(params)}`;
-            this.executionTracker.delete(duplicateKey);
-          }
+          const normalizedUrl = (params && typeof params.url === 'string') ? String(params.url).trim().toLowerCase() : '';
+          const duplicateKey = actionName === 'navigateToUrl'
+            ? `${actionName}_${normalizedUrl}`
+            : `${actionName}_${JSON.stringify(params)}`;
+          this.executionTracker.delete(duplicateKey);
         } catch {}
 
         const executionTime = Date.now() - startTime;
@@ -1916,9 +1944,6 @@ export class ToolRegistry {
           deactivateElementSelector: 'ELEMENT_SELECTOR_DEACTIVATE',
           getHighlightedElements: 'ELEMENT_SELECTOR_GET_HIGHLIGHTS',
           analyzeElement: 'ELEMENT_ANALYZE',
-          highlightElement: 'ELEMENT_HIGHLIGHT',
-          clearHighlights: 'ELEMENT_SELECTOR_CLEAR',
-          highlightElements: 'ELEMENT_HIGHLIGHT_ELEMENTS',
           // Use a dedicated message that content script actually handles
           getInteractiveElements: 'ELEMENT_GET_INTERACTIVE_ELEMENTS',
         };
@@ -1947,44 +1972,11 @@ export class ToolRegistry {
           throw new Error(errorDetails);
         }
 
-        // Store last highlighted candidates for the tab so agent can use them next
+        // Store elements data for LLM if provided
         let elementsData = response?.data;
-        try {
-          if (actionName === 'highlightElement') {
-            // If no elements returned, try to fetch current highlights
-            const elems = response?.data?.elements;
-            if (!elems || !Array.isArray(elems)) {
-              try {
-                const fetchResp = await chrome.tabs.sendMessage(targetTab.id!, {
-                  type: 'ELEMENT_SELECTOR_GET_HIGHLIGHTS',
-                  params: { includeAttributes: true }
-                });
-                if (fetchResp?.success) {
-                  elementsData = fetchResp.data;
-                }
-              } catch (e) {
-                logger.warn('Fallback fetch of highlights failed', e);
-              }
-            }
-
-            if (elementsData?.elements && targetTab.id) {
-              this.lastHighlightedByTabId.set(targetTab.id, elementsData.elements);
-            }
-          }
-        } catch (storeErr) {
-          logger.warn('Failed to store last highlighted candidates', storeErr);
-        }
 
         // Shape result for LLM
         let llmResult = elementsData;
-        if (actionName === 'highlightElement') {
-          const elements = (elementsData?.elements || []) as Array<any>;
-          llmResult = {
-            elements,
-            count: elements.length,
-            note: 'Choose the correct element by its text/aria/title/icon cues, then call clickElement with element.selector. For input, use inputElement with selector.',
-          };
-        }
 
         return {
           action: actionName,
@@ -2028,91 +2020,88 @@ export class ToolRegistry {
             const strategy: string = params?.strategy || params?.planningStrategy || 'adaptive';
             if (!instruction) throw new Error('instruction is required');
 
-            const { DynamicTaskPlanner } = await import('../agents/TaskPlanner');
-            const planner = new DynamicTaskPlanner(web3Agent?.getLLM?.() || (await import('../llm/factory')).Web3LLM);
-            const planningContext = {
-              instruction,
-              currentUrl: '',
-              previousSteps: [],
-              failedSteps: [],
-              currentStep: 0,
-              maxSteps: 10,
-              context: (web3Agent && (web3Agent as any).state?.currentContext) || ({} as any),
-              executionHistory: [],
-            } as any;
-            const planRes = await planner.createPlan(instruction, planningContext, strategy as any);
+            // Use LLM to generate a plan via prompt (lightweight fallback without legacy planner)
+            const context = (web3Agent && (web3Agent as any).state?.currentContext) || {};
+            const llm: any = web3Agent?.getLLM?.();
+            const prompt = [
+              { role: 'system', content: 'You are the Planner Agent. Produce a concise, reliable, ordered step plan. Do not execute. JSON only.' },
+              { role: 'user', content: `Instruction: ${instruction}\nStrategy: ${strategy}\nContext: ${JSON.stringify(context).slice(0, 2000)}` }
+            ];
+            let planJson: any = { steps: [] };
+            try {
+              const resp = llm?.generateResponse
+                ? await llm.generateResponse(prompt as any, {}, {} as any, [])
+                : { response: '' };
+              const text = (resp as any).response || (resp as any).content || '';
+              planJson = JSON.parse(text);
+            } catch {
+              planJson = { steps: [] };
+            }
+            const planRes = { plan: planJson, confidence: 0.7, reasoning: 'LLM-generated plan' } as any;
+            // Return raw planning data for LLM to interpret
             return {
-              action: actionName,
-              params,
-              result: {
-                plan: planRes.plan,
-                confidence: planRes.confidence,
-                reasoning: planRes.reasoning,
-                success: true,
-                message: 'Plan created successfully'
-              },
-              success: true,
+              action: 'planning',
+              agent: 'planner',
+              instruction: instruction,
+              strategy: strategy,
+              plan: planRes.plan,
+              confidence: planRes.confidence,
+              reasoning: planRes.reasoning,
               timestamp: Date.now(),
             };
           }
 
           case 'validateTaskCompletion':
-            // This would integrate with the ValidatorAgent
+            // Return raw validation data for LLM to interpret
             return {
-              action: actionName,
-              params,
-              result: {
-                validation: {
-                  isValid: true, // Simplified validation
-                  confidence: 0.85,
-                  reason: 'Task appears to be completed based on available context',
-                  details: {
-                    task: params.task,
-                    expectedOutcome: params.expectedOutcome,
-                    validationMethod: params.deepValidation ? 'deep' : 'basic'
-                  }
-                },
-                success: true,
-                message: 'Task validation completed'
+              action: 'validation',
+              agent: 'validator',
+              task: params.task,
+              expectedOutcome: params.expectedOutcome,
+              validationMethod: params.deepValidation ? 'deep' : 'basic',
+              validation: {
+                isValid: true, // Simplified validation
+                confidence: 0.85,
+                reason: 'Task appears to be completed based on available context',
+                details: {
+                  task: params.task,
+                  expectedOutcome: params.expectedOutcome,
+                  validationMethod: params.deepValidation ? 'deep' : 'basic'
+                }
               },
-              success: true,
               timestamp: Date.now(),
             };
 
           case 'getMultiAgentStatus':
-            // Get multi-agent system status
+            // Return raw system status data for LLM to interpret
             return {
-              action: actionName,
-              params,
-              result: {
-                agents: {
-                  planner: { available: true, status: 'ready' },
-                  navigator: { available: true, status: 'ready' },
-                  validator: { available: true, status: 'ready' }
-                },
-                coordination: {
-                  enabled: true,
-                  activeTasks: 0,
-                  totalExecutions: 0
-                },
-                system: {
-                  uptime: Date.now(),
-                  version: '1.0.0',
-                  capabilities: [
-                    'Web3 operations',
-                    'Browser automation',
-                    'Task planning',
-                    'Result validation'
-                  ]
-                },
-                success: true,
-                message: 'Multi-agent system status retrieved'
+              action: 'status_check',
+              agent: 'system',
+              agents: {
+                planner: { available: true, status: 'ready' },
+                navigator: { available: true, status: 'ready' },
+                validator: { available: true, status: 'ready' }
               },
-              success: true,
+              coordination: {
+                enabled: true,
+                activeTasks: 0,
+                totalExecutions: 0
+              },
+              system: {
+                uptime: Date.now(),
+                version: '1.0.0',
+                capabilities: [
+                  'Web3 operations',
+                  'Browser automation',
+                  'Task planning',
+                  'Result validation'
+                ]
+              },
               timestamp: Date.now(),
             };
 
           case 'orchestratePlan': {
+            // Register plan for orchestration and return directive to call specific agent tools per step
             const rawPlan = params?.plan;
             if (!rawPlan) throw new Error('plan is required');
             let plan: any = rawPlan;
@@ -2124,78 +2113,49 @@ export class ToolRegistry {
               throw new Error('Invalid plan: no steps found');
             }
 
-            const results: any[] = [];
-            for (const step of steps) {
-              const type = String(step.type || step.action || '').toLowerCase();
-              let toolName = '';
-              let toolParams: any = {};
-              switch (type) {
-                case 'navigate':
-                  toolName = 'navigateToUrl';
-                  toolParams = { url: step.parameters?.url || step.url };
-                  break;
-                case 'click':
-                  toolName = 'clickElement';
-                  toolParams = { selector: step.parameters?.selector, text: step.parameters?.text };
-                  break;
-                case 'input':
-                  toolName = 'fillForm';
-                  toolParams = { fields: [{ selector: step.parameters?.selector, name: step.parameters?.name, value: step.parameters?.value }] };
-                  break;
-                case 'wait':
-                  toolName = 'waitFor';
-                  toolParams = { waitFor: 'time', timeout: step.parameters?.duration || step.timeout || 1000 };
-                  break;
-                case 'extract':
-                  toolName = 'extractContent';
-                  toolParams = { selector: step.parameters?.selector, type: step.parameters?.format || 'text' };
-                  break;
-                case 'scroll':
-                  toolName = 'scrollPage';
-                  toolParams = { direction: step.parameters?.direction || 'down', selector: step.parameters?.selector, amount: step.parameters?.amount };
-                  break;
-                case 'validate':
-                  toolName = 'validateTaskCompletion';
-                  toolParams = { task: params?.task || '', expectedOutcome: step.parameters?.criteria || 'task_success', deepValidation: true };
-                  break;
-                default:
-                  toolName = 'clickElement';
-                  toolParams = { selector: step.parameters?.selector, text: step.parameters?.text };
-                  break;
-              }
-              const stepResult = await this.executeTool(toolName, toolParams);
-              results.push({ type, tool: toolName, params: toolParams, result: stepResult });
-            }
+            const taskId = String(plan?.id || `orch_${Date.now()}_${Math.random().toString(36).slice(2,6)}`);
+            const normalizedSteps = steps.map((s: any, idx: number) => {
+              const type = String(s.type || s.action || '').toLowerCase();
+              return {
+                id: String(s.id || `step_${idx + 1}`),
+                type,
+                parameters: s.parameters || s.params || s,
+                owner: ['navigate','click','input','wait','extract','scroll','screenshot','select','hover'].includes(type) ? 'automation' : 'web3',
+              };
+            });
 
+            // Initialize orchestration record
+            const record = {
+              planId: String(plan?.id || taskId),
+              steps: [],
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            } as { planId?: string; steps: Array<{ id: string; status: string; result?: any; owner: string; timestamp: number }>; createdAt: number; updatedAt: number };
+            this.orchestratorTaskRegistry.set(taskId, record);
+
+            // First pending step (for UI/model guidance)
+            const nextStep = normalizedSteps[0];
+
+            // Return raw orchestration data for LLM to interpret
             return {
-              action: actionName,
-              params,
-              result: {
-                stepsExecuted: steps.length,
-                results,
-                success: true,
-                message: 'Plan orchestrated successfully'
-              },
-              success: true,
+              action: 'orchestration',
+              agent: 'orchestrator',
+              taskId,
+              planId: record.planId,
+              steps: normalizedSteps,
+              nextStep,
+              directive: `Execute the next step by calling the appropriate tool with { taskId: "${taskId}", stepId: "${nextStep?.id}" } and then report via ${nextStep?.owner === 'automation' ? 'automationReport' : 'web3Report'}. Continue sequentially for all steps.`,
               timestamp: Date.now(),
             };
           }
 
           case 'enableMultiAgentCoordination':
-            // Enable/disable multi-agent coordination
+            // Return raw coordination data for LLM to interpret
             return {
-              action: actionName,
-              params,
-              result: {
-                coordination: {
-                  enabled: params.enabled,
-                  previousState: !params.enabled,
-                  timestamp: Date.now()
-                },
-                success: true,
-                message: `Multi-agent coordination ${params.enabled ? 'enabled' : 'disabled'}`
-              },
-              success: true,
+              action: 'coordination',
+              agent: 'system',
+              enabled: params.enabled,
+              previousState: !params.enabled,
               timestamp: Date.now(),
             };
 
@@ -2204,13 +2164,13 @@ export class ToolRegistry {
         }
       } catch (error) {
         logger.error(`Multi-agent action failed: ${actionName}`, error);
+        // Return raw error data for LLM to interpret
         return {
-          action: actionName,
-          params,
-          result: null,
-          success: false,
-          timestamp: Date.now(),
+          action: 'error',
+          agent: 'system',
+          actionName,
           error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: Date.now(),
         };
       }
     };
@@ -2380,7 +2340,6 @@ export class ToolRegistry {
       navigateToUrl: ['url', 'waitFor', 'timeout'],
       clickElement: ['selector', 'text', 'waitForNavigation', 'timeout'],
       fillForm: ['fields', 'submit'],
-      extractContent: ['selector', 'type', 'multiple', 'attribute'],
       waitFor: ['condition', 'timeout', 'selector'],
       takeScreenshot: ['selector', 'fullPage'],
       scrollPage: ['direction', 'selector', 'amount'],
@@ -2455,6 +2414,69 @@ export class ToolRegistry {
       throw new Error(`Tool not found: ${name}`);
     }
 
+    // Normalize legacy alias parameters (param1/param2...) to canonical names for system tools
+    const normalizeParams = (toolName: string, raw: any, def: ToolDefinition) => {
+      try {
+        const p = { ...(raw || {}) };
+        const alias = (key: string, mapped: string) => {
+          if (p[mapped] === undefined && p[key] !== undefined) p[mapped] = p[key];
+        };
+        switch (toolName) {
+          case 'planTask':
+            alias('param1', 'instruction');
+            alias('param2', 'strategy');
+            break;
+          case 'orchestratePlan':
+            alias('param1', 'plan');
+            alias('param2', 'validate');
+            break;
+          case 'delegateToAutomation':
+            alias('param1', 'taskId');
+            alias('param2', 'stepId');
+            alias('param3', 'instruction');
+            alias('param4', 'params');
+            break;
+          case 'delegateToWeb3':
+            alias('param1', 'taskId');
+            alias('param2', 'stepId');
+            alias('param3', 'instruction');
+            alias('param4', 'params');
+            break;
+          case 'automationReport':
+          case 'web3Report':
+            alias('param1', 'taskId');
+            alias('param2', 'stepId');
+            alias('param3', 'status');
+            alias('param4', 'message');
+            alias('param5', 'result');
+            break;
+          case 'createTodoList':
+            // Accept plan instead of steps by extracting steps
+            if (p.steps === undefined && p.plan !== undefined) {
+              try {
+                const rawPlan = p.plan;
+                let steps: any[] = [];
+                if (Array.isArray(rawPlan)) steps = rawPlan;
+                else if (typeof rawPlan === 'string') {
+                  const parsed = JSON.parse(rawPlan);
+                  steps = Array.isArray(parsed?.steps) ? parsed.steps : Array.isArray(parsed) ? parsed : [];
+                } else if (typeof rawPlan === 'object') {
+                  steps = Array.isArray(rawPlan?.steps) ? rawPlan.steps : [];
+                }
+                p.steps = steps;
+              } catch {}
+            }
+            break;
+          default:
+            break;
+        }
+        return p;
+      } catch {
+        return raw || {};
+      }
+    };
+    const normalizedParams = normalizeParams(name, params, tool);
+
     // Special validation for element selection tools
     if (this.isElementSelectionTool(name)) {
       const validation = await this.validateElementSelectionPrerequisites();
@@ -2472,8 +2494,8 @@ export class ToolRegistry {
     }
 
     try {
-      logger.info(`Executing tool: ${name}`, params);
-      const rawResult = await tool.handler(params);
+      logger.info(`Executing tool: ${name}`, normalizedParams);
+      const rawResult = await tool.handler(normalizedParams);
 
       // Normalize to ensure 'data' is always present
       const result = this.ensureStandardResult(name, params, rawResult);
@@ -2483,6 +2505,25 @@ export class ToolRegistry {
       logger.info(`Tool execution completed: ${name}`, {
         hasData: !!result?.data,
       });
+
+      // Orchestrator auto-callback: if this is an automation/web3 tool and taskId/stepId provided, call corresponding report tool
+      try {
+        const owner = tool.owner;
+        const taskId = normalizedParams?.taskId;
+        const stepId = normalizedParams?.stepId;
+        if ((owner === 'automation' || owner === 'web3') && taskId && stepId) {
+          const reportTool = owner === 'automation' ? 'automationReport' : 'web3Report';
+          await this.executeTool(reportTool, {
+            taskId,
+            stepId,
+            status: result.success ? 'completed' : 'failed',
+            message: result.success ? `${name} executed successfully` : (result.error || 'execution failed'),
+            result: result,
+          });
+        }
+      } catch (cbErr) {
+        logger.warn('Auto-callback to Orchestrator failed', cbErr);
+      }
 
       // Append tool result to chat history as a 'user' message (global guarantee)
       try {
@@ -2840,6 +2881,45 @@ export class ToolRegistry {
     name: string,
     params: any
   ): { valid: boolean; errors: string[] } {
+    // Normalize legacy alias parameters (param1/param2...) for validation
+    try {
+      const p: any = { ...(params || {}) };
+      const alias = (key: string, mapped: string) => {
+        if (p[mapped] === undefined && p[key] !== undefined) p[mapped] = p[key];
+      };
+      switch (name) {
+        case 'planTask':
+          alias('param1', 'instruction');
+          alias('param2', 'strategy');
+          params = p;
+          break;
+        case 'orchestratePlan':
+          alias('param1', 'plan');
+          alias('param2', 'validate');
+          params = p;
+          break;
+        case 'delegateToAutomation':
+        case 'delegateToWeb3':
+          alias('param1', 'taskId');
+          alias('param2', 'stepId');
+          alias('param3', 'instruction');
+          alias('param4', 'params');
+          params = p;
+          break;
+        case 'automationReport':
+        case 'web3Report':
+          alias('param1', 'taskId');
+          alias('param2', 'stepId');
+          alias('param3', 'status');
+          alias('param4', 'message');
+          alias('param5', 'result');
+          params = p;
+          break;
+        default:
+          break;
+      }
+    } catch {}
+
     const tool = this.tools.get(name);
     if (!tool) {
       return { valid: false, errors: [`Tool not found: ${name}`] };
@@ -2977,19 +3057,7 @@ export class ToolRegistry {
       // Prepare success message for LLM
       let successMessage = `Tool "${toolName}" executed successfully.`;
 
-      if (toolName === 'highlightElement' && result?.elements) {
-        const elements = result.elements;
-        successMessage += ` Found ${elements.length} interactive elements on the page:`;
-        elements.slice(0, 10).forEach((el: any, idx: number) => {
-          successMessage += `\n${idx + 1}. ${el.tag} - "${el.text.slice(0, 50)}${el.text.length > 50 ? '...' : ''}"`;
-        });
-        if (elements.length > 10) {
-          successMessage += `\n... and ${elements.length - 10} more elements.`;
-        }
-        if (elements.length < 5) {
-          successMessage += '\nNote: Few elements found. Consider using scrollPage tool to reveal more content.';
-        }
-      } else if (toolName === 'navigateToUrl' && result?.data?.url) {
+      if (toolName === 'navigateToUrl' && result?.data?.url) {
         successMessage += ` Successfully navigated to: ${result.data.url}`;
         if (result.data.title) {
           successMessage += ` (Page title: "${result.data.title}")`;

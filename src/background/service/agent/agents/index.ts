@@ -1,5 +1,5 @@
 // Core multi-agent system
-export { MultiAgentSystem } from './MultiAgentSystem';
+// Legacy MultiAgentSystem removed
 export type {
   Agent,
   AgentMessage,
@@ -9,8 +9,7 @@ export type {
   ValidationResult,
 } from './AgentTypes';
 
-// Individual agent implementations
-export { EnhancedNavigatorAgent } from './EnhancedNavigatorAgent';
+// Legacy EnhancedNavigatorAgent removed
 
 // Element selection system
 export { IndexBasedElementSelector } from './ElementSelector';
@@ -20,22 +19,9 @@ export type {
   SelectionResult,
 } from './ElementSelector';
 
-// Task planning system
-export { DynamicTaskPlanner } from './TaskPlanner';
-export type {
-  PlanningContext,
-  PlanningStrategy,
-  ReplanningTriggers,
-} from './TaskPlanner';
+// Legacy TaskPlanner removed
 
-// Validation system
-export { TaskValidator } from './TaskValidator';
-export type {
-  ValidationCriteria,
-  ValidationContext,
-  RetryStrategy,
-  ValidationResultWithRetry,
-} from './TaskValidator';
+// Legacy TaskValidator removed
 
 // Error handling system
 export { EnhancedErrorHandler } from './ErrorHandler';

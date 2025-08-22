@@ -570,67 +570,7 @@ class ElementSelectionSystem {
     }
   }
 
-  /**
-   * Highlight a specific element
-   */
-  public highlightElement(selector: string, options: any = {}): any {
-    try {
-      const element = document.querySelector(selector);
-      if (!element) {
-        return { error: 'Element not found' };
-      }
-
-      const { color = 'blue', duration = 0 } = options;
-      const htmlElement = element as HTMLElement;
-
-      // Create temporary highlight
-      const bounds = htmlElement.getBoundingClientRect();
-      const highlight = document.createElement('div');
-      const colorMap = {
-        red: '#ef4444',
-        blue: '#3b82f6',
-        green: '#10b981',
-        yellow: '#f59e0b',
-        purple: '#8b5cf6',
-      };
-
-      highlight.style.cssText = `
-        position: fixed;
-        top: ${bounds.top}px;
-        left: ${bounds.left}px;
-        width: ${bounds.width}px;
-        height: ${bounds.height}px;
-        border: 3px solid ${colorMap[color as keyof typeof colorMap] || colorMap.blue};
-        background: rgba(59, 130, 246, 0.1);
-        border-radius: 4px;
-        pointer-events: none;
-        z-index: 1000001;
-        transition: all 0.3s ease;
-      `;
-
-      document.body.appendChild(highlight);
-
-      // Auto-remove if duration is specified
-      if (duration > 0) {
-        setTimeout(() => {
-          highlight.remove();
-        }, duration);
-      }
-
-      return {
-        success: true,
-        highlightId: `highlight-${Date.now()}`,
-        bounds: {
-          top: bounds.top,
-          left: bounds.left,
-          width: bounds.width,
-          height: bounds.height,
-        },
-      };
-    } catch (error) {
-      return { error: error instanceof Error ? error.message : 'Unknown error' };
-    }
-  }
+  // Note: element highlighting implementation removed (deprecated).
 
   /**
    * Capture element screenshot (simplified implementation)

@@ -61,15 +61,7 @@ export const FillFormSchema = {
   required: ['fields'],
 };
 
-export const ExtractContentSchema = {
-  type: 'object',
-  properties: {
-    selector: { type: 'string' },
-    attribute: { type: 'string' },
-    multiple: { type: 'boolean', default: false },
-    type: { type: 'string', enum: ['text', 'html', 'attribute', 'value'] },
-  },
-};
+// NOTE: ExtractContentSchema removed (extractContent deprecated)
 
 export const ElementSelectionSchema = {
   type: 'object',
@@ -458,9 +450,7 @@ export class BrowserAutomationController {
             );
             break;
           case 'extract':
-            tasks.push(
-              ...this.createContentExtractionTasks(instruction, taskAnalysis)
-            );
+            // content extraction deprecated - skip adding extract tasks
             break;
         }
       });
@@ -555,14 +545,13 @@ export class BrowserAutomationController {
           return await this.fillForm(
             task.params as { fields: any[]; submit?: boolean }
           );
+        // 'extract_content' removed - skip if present
         case 'extract_content':
-          return await this.extractContent(
-            task.params as {
-              selector: string;
-              type?: string;
-              multiple?: boolean;
-            }
-          );
+          return {
+            success: false,
+            error: 'extract_content action has been removed',
+            timing: 0,
+          };
         case 'wait_for':
           return await this.waitFor(task.params);
         case 'scroll':
@@ -580,7 +569,11 @@ export class BrowserAutomationController {
         case 'find_elements':
           return await this.findElements(task.params);
         case 'highlight_element':
-          return await this.highlightElement(task.params);
+          return {
+            success: false,
+            error: 'highlight_element action has been removed',
+            timing: 0,
+          };
         default:
           throw new Error(`Unsupported task type: ${task.type}`);
       }
@@ -962,49 +955,7 @@ export class BrowserAutomationController {
     }
   }
 
-  private async extractContent(params: {
-    selector: string;
-    type?: string;
-    multiple?: boolean;
-  }): Promise<BrowserActionResult> {
-    try {
-      if (chrome.scripting && chrome.scripting.executeScript) {
-        const tab = await this.getOrCreateActiveTab();
-
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tab.id! },
-          func: this.extractContentFromPage,
-          args: [params],
-        });
-
-        return {
-          success: true,
-          data: results[0]?.result,
-          timing: 0,
-        };
-      } else {
-        // Simulation mode
-        logger.info('Simulating content extraction', params);
-        return {
-          success: true,
-          data: {
-            simulated: true,
-            content: 'Sample extracted content',
-            selector: params.selector,
-          },
-          timing: 300,
-        };
-      }
-    } catch (error) {
-      logger.error('Content extraction failed', error);
-      return {
-        success: false,
-        error:
-          error instanceof Error ? error.message : 'Content extraction failed',
-        timing: 0,
-      };
-    }
-  }
+  // extractContent removed (deprecated)
 
   private async waitFor(params: any): Promise<BrowserActionResult> {
     // Implementation for wait operations
@@ -1383,44 +1334,7 @@ export class BrowserAutomationController {
     }
   }
 
-  private extractContentFromPage(params: any): any {
-    try {
-      const elements = document.querySelectorAll(params.selector);
-      const results: any[] = [];
-
-      for (const element of Array.from(elements)) {
-        let content = '';
-
-        switch (params.type) {
-          case 'text':
-            content = element.textContent || '';
-            break;
-          case 'html':
-            content = element.innerHTML;
-            break;
-          case 'value':
-            content = (element as HTMLInputElement).value || '';
-            break;
-          default:
-            content = element.textContent || '';
-        }
-
-        results.push(content);
-
-        if (!params.multiple) {
-          break;
-        }
-      }
-
-      return { content: params.multiple ? results : results[0] };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof Error ? error.message : 'Content extraction failed',
-      };
-    }
-  }
+  // extractContentFromPage removed (deprecated)
 
   private async waitForTabLoad(tabId: number): Promise<void> {
     return new Promise((resolve) => {
@@ -1813,8 +1727,7 @@ export class BrowserAutomationController {
       clickElement: 'click',
       fill_form: 'fill_form',
       fillForm: 'fill_form',
-      extract_content: 'extract_content',
-      extractContent: 'extract_content',
+      // extract_content removed
       wait_for: 'wait_for',
       scroll: 'scroll',
       screenshot: 'screenshot',

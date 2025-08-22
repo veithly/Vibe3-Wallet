@@ -12,6 +12,7 @@ interface MessageListProps {
   isDarkMode?: boolean;
   onWalletConfirm?: (approvalId: string, data: any, addToWhitelist?: boolean) => void;
   onWalletReject?: (approvalId: string, data: any) => void;
+  onStopTask?: () => void;
 }
 
 export default memo(function MessageList({
@@ -19,6 +20,7 @@ export default memo(function MessageList({
   isDarkMode = false,
   onWalletConfirm,
   onWalletReject,
+  onStopTask,
 }: MessageListProps) {
   // Remove filtering: do not drop any LLM messages; normalize instead
   const validMessages = React.useMemo(() => {
@@ -42,9 +44,37 @@ export default memo(function MessageList({
   }, [validMessages]);
   // Auto-scroll to bottom whenever messages change
   const bottomRef = React.useRef<HTMLDivElement | null>(null);
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Enhanced auto-scroll with better detection of new messages
   React.useEffect(() => {
-    try { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); } catch {}
-  }, [sortedMessages.length]);
+    if (sortedMessages.length > 0) {
+      // Use requestAnimationFrame to ensure DOM is updated
+      requestAnimationFrame(() => {
+        try {
+          bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        } catch (error) {
+          logger.warn('MessageList', 'Failed to scroll to bottom', { error });
+        }
+      });
+    }
+  }, [sortedMessages.length, sortedMessages]);
+
+  // Scroll to bottom when new message content changes (for streaming messages)
+  React.useEffect(() => {
+    if (sortedMessages.length > 0) {
+      const lastMessage = sortedMessages[sortedMessages.length - 1];
+      if (lastMessage?.isStreaming || lastMessage?.messageType === 'streaming_chunk') {
+        requestAnimationFrame(() => {
+          try {
+            bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+          } catch (error) {
+            logger.warn('MessageList', 'Failed to scroll during streaming', { error });
+          }
+        });
+      }
+    }
+  }, [sortedMessages]);
 
 
   // Log message statistics for debugging
@@ -58,7 +88,7 @@ export default memo(function MessageList({
   }, [messages, validMessages]);
 
   return (
-    <div className="p-4 space-y-4 max-w-full">
+    <div ref={containerRef} className="p-4 space-y-4 max-w-full">
       {sortedMessages.length === 0 ? (
         <div className="flex flex-col justify-center items-center py-16 text-center">
           <div className="mb-4 text-4xl opacity-50">💬</div>
@@ -77,10 +107,11 @@ export default memo(function MessageList({
             totalMessages={sortedMessages.length}
             onWalletConfirm={onWalletConfirm}
             onWalletReject={onWalletReject}
+            onStopTask={onStopTask}
           />
         ))
       )}
-      <div ref={(el) => { try { (MessageList as any)._bottom = el; } catch {} }} />
+      <div ref={bottomRef} className="h-1" />
     </div>
   );
 });
@@ -93,6 +124,7 @@ interface MessageBlockProps {
   totalMessages?: number;
   onWalletConfirm?: (approvalId: string, data: any, addToWhitelist?: boolean) => void;
   onWalletReject?: (approvalId: string, data: any) => void;
+  onStopTask?: () => void;
 }
 
 function MessageBlock({
@@ -103,6 +135,7 @@ function MessageBlock({
   totalMessages = 0,
   onWalletConfirm,
   onWalletReject,
+  onStopTask,
 }: MessageBlockProps) {
   // Enhanced validation with error boundaries
   if (!message || !message.actor) {
@@ -150,7 +183,7 @@ function MessageBlock({
     if (name.includes('orchestrate')) return 'Orchestrator';
     // Automation/browser tools
     const automationTools = [
-      'navigatetoUrl','navigate','clickelement','fillform','extractcontent','waitfor','takescreenshot','scrollpage','highlightelement','getclickableelements','analyzeelement','gethighlightedelements','captureelementscreenshot','findelementsbytext'
+      'navigatetoUrl','navigate','clickelement','fillform','waitfor','takescreenshot','scrollpage','getclickableelements','analyzeelement','gethighlightedelements','captureelementscreenshot','findelementsbytext'
     ];
     if (automationTools.some((t) => name.includes(t.toLowerCase()))) return 'Automation';
     // Web3 tools/actions
@@ -531,6 +564,63 @@ function MessageBlock({
                     )}
                   </div>
                 )}
+                {/* TODO cards: render planning/todo/report actions inline for visibility */}
+                {(() => {
+                  try {
+                    const parsed = JSON.parse(content || '{}');
+                    if (parsed && typeof parsed === 'object') {
+                      // Planning → show steps summary
+                      if (parsed.action === 'planning' && Array.isArray(parsed.plan?.steps)) {
+                        const steps = parsed.plan.steps as any[];
+                        return (
+                          <div className="mt-2 ml-8 p-3 bg-white rounded border border-blue-200 dark:bg-gray-800 dark:border-blue-700">
+                            <div className="font-medium text-blue-700 dark:text-blue-300 mb-2">Planned TODOs</div>
+                            <ol className="list-decimal ml-5 space-y-1 text-sm text-gray-700 dark:text-gray-300">
+                              {steps.map((s, i) => (
+                                <li key={i}>
+                                  <span className="font-medium">{String(s.title || s.name || s.action || s.type || `Step ${i+1}`)}</span>
+                                </li>
+                              ))}
+                            </ol>
+                          </div>
+                        );
+                      }
+                      // TODO list
+                      if (parsed.action === 'todo' && Array.isArray(parsed.items)) {
+                        const items = parsed.items as any[];
+                        return (
+                          <div className="mt-2 ml-8 p-3 bg-white rounded border border-emerald-200 dark:bg-gray-800 dark:border-emerald-700">
+                            <div className="font-medium text-emerald-700 dark:text-emerald-300 mb-2">TODO List</div>
+                            <ul className="space-y-1 text-sm">
+                              {items.map((it, i) => (
+                                <li key={i} className="flex items-center gap-2">
+                                  <span className={`inline-block w-2 h-2 rounded-full ${it.status === 'completed' ? 'bg-emerald-500' : 'bg-gray-400'}`} />
+                                  <span className="font-medium">{it.title}</span>
+                                  <span className="text-xs text-gray-400">({it.owner})</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        );
+                      }
+                      // Report completion
+                      if (parsed.action === 'report' && parsed.status) {
+                        return (
+                          <div className="mt-2 ml-8 p-3 bg-white rounded border border-emerald-200 dark:bg-gray-800 dark:border-emerald-700">
+                            <div className="font-medium text-emerald-700 dark:text-emerald-300">Task Update</div>
+                            <div className="text-sm text-gray-700 dark:text-gray-300 mt-1">
+                              Step {parsed.stepId}: {parsed.status}
+                            </div>
+                            {parsed.message && (
+                              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{parsed.message}</div>
+                            )}
+                          </div>
+                        );
+                      }
+                    }
+                  } catch {}
+                  return null;
+                })()}
               </div>
             ) : isAssistantContent ? (
               <div className="flex gap-2 items-start">
@@ -544,6 +634,24 @@ function MessageBlock({
                   {message.finishReason && (
                     <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
                       Finish reason: {message.finishReason}
+                    </div>
+                  )}
+                  {/* Show stop button for streaming messages */}
+                  {(isStreaming || message.isStreaming) && onStopTask && (
+                    <div className="flex justify-end mt-2">
+                      <button
+                        type="button"
+                        className="px-3 py-1 text-xs text-red-600 bg-red-50 border border-red-200 rounded hover:bg-red-100 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30"
+                        onClick={() => {
+                          try {
+                            onStopTask();
+                          } catch (error) {
+                            logger.error('MessageList', 'Error calling onStopTask', error);
+                          }
+                        }}
+                      >
+                        ⏹️ Stop
+                      </button>
                     </div>
                   )}
                 </div>
