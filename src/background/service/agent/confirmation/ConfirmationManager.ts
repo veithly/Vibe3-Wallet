@@ -381,14 +381,6 @@ export class ConfirmationManager {
     if (!mainAction) return 'Execute plan';
 
     const actionDescriptions: Record<string, string> = {
-      swapTokens: 'Swap tokens',
-      bridgeTokens: 'Bridge tokens',
-      stakeTokens: 'Stake tokens',
-      sendTransaction: 'Send transaction',
-      approveToken: 'Approve token',
-      checkBalance: 'Check balance',
-      connectWallet: 'Connect wallet',
-      switchNetwork: 'Switch network',
     };
 
     return actionDescriptions[mainAction.type] || 'Execute action';
@@ -398,31 +390,7 @@ export class ConfirmationManager {
     const changes: TokenChange[] = [];
 
     for (const action of plan.actions) {
-      if (action.type === 'swapTokens') {
-        changes.push({
-          token: action.params.fromToken,
-          amount: action.params.amount,
-          change: 'OUT',
-          chain: action.params.chainId || 1,
-        });
 
-        // This is simplified - would need to calculate output amount
-        changes.push({
-          token: action.params.toToken,
-          amount: '0', // Would calculate from swap
-          change: 'IN',
-          chain: action.params.chainId || 1,
-        });
-      }
-
-      if (action.type === 'sendTransaction') {
-        changes.push({
-          token: 'ETH', // Assuming native token
-          amount: action.params.value,
-          change: 'OUT',
-          chain: action.params.chainId || 1,
-        });
-      }
     }
 
     return changes;

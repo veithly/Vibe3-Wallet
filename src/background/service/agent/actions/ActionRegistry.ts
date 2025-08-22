@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ActionStep, ActionDefinition } from '../types';
 import { createLogger } from '@/utils/logger';
 import { AssetQueryAction } from './asset-query-actions';
-import { 
+import {
   getAllAssetsActionSchema,
   getTokenBalancesActionSchema,
   getNativeBalanceActionSchema,
@@ -85,128 +85,7 @@ export class ActionRegistry {
    * Initialize default Web3 and browser actions
    */
   private initializeDefaultActions(): void {
-    // Web3 Actions
-    this.registerAction('checkBalance', {
-      name: 'checkBalance',
-      description: 'Check token balance for an address',
-      handler: this.executeCheckBalance.bind(this),
-      schema: {
-        type: 'object',
-        properties: {
-          address: { type: 'string' },
-          token: { type: 'string' },
-        },
-        required: ['address'],
-      },
-      riskLevel: 'low',
-      category: 'web3',
-      timeout: 10000,
-      dependencies: [],
-      retryable: true,
-    });
 
-    this.registerAction('sendTransaction', {
-      name: 'sendTransaction',
-      description: 'Send transaction to recipient',
-      handler: this.executeSendTransaction.bind(this),
-      schema: {
-        type: 'object',
-        properties: {
-          to: { type: 'string' },
-          amount: { type: 'string' },
-          token: { type: 'string' },
-          gasLimit: { type: 'string' },
-        },
-        required: ['to', 'amount', 'token'],
-      },
-      riskLevel: 'high',
-      category: 'web3',
-      timeout: 60000,
-      dependencies: [],
-      retryable: false,
-    });
-
-    this.registerAction('approveToken', {
-      name: 'approveToken',
-      description: 'Approve token spending',
-      handler: this.executeApproveToken.bind(this),
-      schema: {
-        type: 'object',
-        properties: {
-          token: { type: 'string' },
-          spender: { type: 'string' },
-          amount: { type: 'string' },
-        },
-        required: ['token', 'spender', 'amount'],
-      },
-      riskLevel: 'medium',
-      category: 'web3',
-      timeout: 45000,
-      dependencies: [],
-      retryable: true,
-    });
-
-    this.registerAction('swapTokens', {
-      name: 'swapTokens',
-      description: 'Swap tokens on DEX',
-      handler: this.executeSwapTokens.bind(this),
-      schema: {
-        type: 'object',
-        properties: {
-          fromToken: { type: 'string' },
-          toToken: { type: 'string' },
-          amount: { type: 'string' },
-          slippage: { type: 'number', default: 0.5 },
-        },
-        required: ['fromToken', 'toToken', 'amount'],
-      },
-      riskLevel: 'high',
-      category: 'web3',
-      timeout: 90000,
-      dependencies: [],
-      retryable: true,
-    });
-
-    this.registerAction('bridgeTokens', {
-      name: 'bridgeTokens',
-      description: 'Bridge tokens across chains',
-      handler: this.executeBridgeTokens.bind(this),
-      schema: {
-        type: 'object',
-        properties: {
-          token: { type: 'string' },
-          amount: { type: 'string' },
-          fromChain: { type: 'number' },
-          toChain: { type: 'number' },
-        },
-        required: ['token', 'amount', 'fromChain', 'toChain'],
-      },
-      riskLevel: 'high',
-      category: 'web3',
-      timeout: 120000,
-      dependencies: [],
-      retryable: true,
-    });
-
-    this.registerAction('stakeTokens', {
-      name: 'stakeTokens',
-      description: 'Stake tokens in DeFi protocol',
-      handler: this.executeStakeTokens.bind(this),
-      schema: {
-        type: 'object',
-        properties: {
-          token: { type: 'string' },
-          amount: { type: 'string' },
-          protocol: { type: 'string' },
-        },
-        required: ['token', 'amount'],
-      },
-      riskLevel: 'medium',
-      category: 'web3',
-      timeout: 60000,
-      dependencies: [],
-      retryable: true,
-    });
 
     // Browser Automation Actions
     this.registerAction('navigateToUrl', {
@@ -282,41 +161,7 @@ export class ActionRegistry {
 
 
 
-    // System Actions
-    this.registerAction('switchNetwork', {
-      name: 'switchNetwork',
-      description: 'Switch blockchain network',
-      handler: this.executeSwitchNetwork.bind(this),
-      schema: {
-        type: 'object',
-        properties: {
-          chainId: { type: 'number' },
-        },
-        required: ['chainId'],
-      },
-      riskLevel: 'low',
-      category: 'system',
-      timeout: 15000,
-      dependencies: [],
-      retryable: true,
-    });
 
-    this.registerAction('connectWallet', {
-      name: 'connectWallet',
-      description: 'Connect wallet to dApp',
-      handler: this.executeConnectWallet.bind(this),
-      schema: {
-        type: 'object',
-        properties: {
-          dappUrl: { type: 'string' },
-        },
-      },
-      riskLevel: 'medium',
-      category: 'system',
-      timeout: 30000,
-      dependencies: [],
-      retryable: true,
-    });
 
     // Asset Query Actions
     this.registerAction('getAllAssets', {
@@ -829,45 +674,7 @@ export class ActionRegistry {
     return results;
   }
 
-  /**
-   * Action implementation methods
-   */
-  private async executeCheckBalance(params: any, context?: any): Promise<any> {
-    // Implementation would interact with actual wallet
-    logger.info('Checking balance', params);
-    return { balance: '0', token: params.token || 'ETH' };
-  }
 
-  private async executeSendTransaction(
-    params: any,
-    context?: any
-  ): Promise<any> {
-    logger.info('Sending transaction', params);
-    return { txHash: '0x' + Math.random().toString(16).substr(2, 64) };
-  }
-
-  private async executeApproveToken(params: any, context?: any): Promise<any> {
-    logger.info('Approving token', params);
-    return { txHash: '0x' + Math.random().toString(16).substr(2, 64) };
-  }
-
-  private async executeSwapTokens(params: any, context?: any): Promise<any> {
-    logger.info('Swapping tokens', params);
-    return {
-      txHash: '0x' + Math.random().toString(16).substr(2, 64),
-      outputAmount: '0',
-    };
-  }
-
-  private async executeBridgeTokens(params: any, context?: any): Promise<any> {
-    logger.info('Bridging tokens', params);
-    return { txHash: '0x' + Math.random().toString(16).substr(2, 64) };
-  }
-
-  private async executeStakeTokens(params: any, context?: any): Promise<any> {
-    logger.info('Staking tokens', params);
-    return { txHash: '0x' + Math.random().toString(16).substr(2, 64) };
-  }
 
   private async executeNavigateToUrl(params: any, context?: any): Promise<any> {
     logger.info('Navigating to URL', params);
@@ -886,15 +693,7 @@ export class ActionRegistry {
 
 
 
-  private async executeSwitchNetwork(params: any, context?: any): Promise<any> {
-    logger.info('Switching network', params);
-    return { success: true, chainId: params.chainId };
-  }
 
-  private async executeConnectWallet(params: any, context?: any): Promise<any> {
-    logger.info('Connecting wallet', params);
-    return { success: true, connected: true };
-  }
 
   private async executeWaitFor(params: any, context?: any): Promise<any> {
     logger.info('Waiting for condition', params);

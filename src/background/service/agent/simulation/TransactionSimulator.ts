@@ -156,207 +156,14 @@ export class TransactionSimulator {
 
   private async simulateAction(action: ActionStep): Promise<ActionSimulation> {
     switch (action.type) {
-      case 'checkBalance':
-        return await this.simulateCheckBalance(action);
-      case 'sendTransaction':
-        return await this.simulateSendTransaction(action);
-      case 'approveToken':
-        return await this.simulateApproveToken(action);
-      case 'swapTokens':
-        return await this.simulateSwapTokens(action);
-      case 'bridgeTokens':
-        return await this.simulateBridgeTokens(action);
-      case 'stakeTokens':
-        return await this.simulateStakeTokens(action);
-      case 'connectWallet':
-        return await this.simulateConnectWallet(action);
-      case 'switchNetwork':
-        return await this.simulateSwitchNetwork(action);
       default:
         return await this.simulateGenericAction(action);
     }
   }
 
-  private async simulateCheckBalance(
-    action: ActionStep
-  ): Promise<ActionSimulation> {
-    const { params } = action;
 
-    // Simulate balance check
-    const balance = await this.mockBalanceCheck(
-      params.address,
-      params.tokenAddress,
-      params.chainId
-    );
 
-    return {
-      action,
-      success: true,
-      gasUsed: '0',
-      time: 1,
-      result: { balance },
-    };
-  }
 
-  private async simulateSendTransaction(
-    action: ActionStep
-  ): Promise<ActionSimulation> {
-    const { params } = action;
-
-    // Simulate transaction sending
-    const gasEstimate = await this.estimateGas(
-      params.to,
-      params.value,
-      params.data,
-      params.chainId
-    );
-    const success = await this.simulateTransactionSuccess(
-      params.to,
-      params.value,
-      params.chainId
-    );
-
-    return {
-      action,
-      success,
-      gasUsed: gasEstimate,
-      time: 30,
-      result: { txHash: '0x' + Math.random().toString(16).substr(2, 64) },
-    };
-  }
-
-  private async simulateApproveToken(
-    action: ActionStep
-  ): Promise<ActionSimulation> {
-    const { params } = action;
-
-    // Simulate token approval
-    const gasEstimate = '50000'; // Standard approval gas
-    const success = await this.simulateContractCall(
-      params.tokenAddress,
-      params.spender,
-      params.chainId
-    );
-
-    return {
-      action,
-      success,
-      gasUsed: gasEstimate,
-      time: 15,
-      result: { txHash: '0x' + Math.random().toString(16).substr(2, 64) },
-    };
-  }
-
-  private async simulateSwapTokens(
-    action: ActionStep
-  ): Promise<ActionSimulation> {
-    const { params } = action;
-
-    // Simulate token swap
-    const gasEstimate = await this.estimateSwapGas(
-      params.fromToken,
-      params.toToken,
-      params.chainId
-    );
-    const swapResult = await this.simulateSwapExecution(
-      params.fromToken,
-      params.toToken,
-      params.amount,
-      params.chainId
-    );
-
-    return {
-      action,
-      success: swapResult.success,
-      gasUsed: gasEstimate,
-      time: 30,
-      result: swapResult,
-    };
-  }
-
-  private async simulateBridgeTokens(
-    action: ActionStep
-  ): Promise<ActionSimulation> {
-    const { params } = action;
-
-    // Simulate token bridging
-    const gasEstimate = '150000'; // Standard bridge gas
-    const bridgeResult = await this.simulateBridgeExecution(
-      params.tokenAddress,
-      params.amount,
-      params.fromChainId,
-      params.toChainId
-    );
-
-    return {
-      action,
-      success: bridgeResult.success,
-      gasUsed: gasEstimate,
-      time: 300, // Bridges take longer
-      result: bridgeResult,
-    };
-  }
-
-  private async simulateStakeTokens(
-    action: ActionStep
-  ): Promise<ActionSimulation> {
-    const { params } = action;
-
-    // Simulate token staking
-    const gasEstimate = await this.estimateStakeGas(
-      params.tokenAddress,
-      params.stakingContract,
-      params.chainId
-    );
-    const success = await this.simulateContractCall(
-      params.tokenAddress,
-      params.stakingContract,
-      params.chainId
-    );
-
-    return {
-      action,
-      success,
-      gasUsed: gasEstimate,
-      time: 20,
-      result: { txHash: '0x' + Math.random().toString(16).substr(2, 64) },
-    };
-  }
-
-  private async simulateConnectWallet(
-    action: ActionStep
-  ): Promise<ActionSimulation> {
-    // Simulate wallet connection
-    const success = await this.simulateWalletConnection(
-      action.params.dappName,
-      action.params.dappUrl
-    );
-
-    return {
-      action,
-      success,
-      gasUsed: '0',
-      time: 10,
-      result: { connected: success },
-    };
-  }
-
-  private async simulateSwitchNetwork(
-    action: ActionStep
-  ): Promise<ActionSimulation> {
-    const { params } = action;
-
-    // Simulate network switching
-    const success = await this.simulateNetworkSwitch(params.chainId);
-
-    return {
-      action,
-      success,
-      gasUsed: '0',
-      time: 5,
-      result: { switched: success },
-    };
-  }
 
   private async simulateGenericAction(
     action: ActionStep
@@ -432,22 +239,7 @@ export class TransactionSimulator {
   ): Promise<RiskAssessment[]> {
     const risks: RiskAssessment[] = [];
 
-    // Check for high slippage in swap actions
-    const swapActions = plan.actions.filter((a) => a.type === 'swapTokens');
 
-    for (const action of swapActions) {
-      const slippage = action.params.slippage || 0.5;
-      if (slippage > 3.0) {
-        risks.push({
-          type: 'SLIPPAGE_RISK',
-          level: slippage > 5.0 ? 'HIGH' : 'MEDIUM',
-          description: `High slippage tolerance of ${slippage}% may result in unfavorable pricing`,
-          mitigation:
-            'Consider reducing slippage tolerance for better price protection',
-          impact: 'FINANCIAL',
-        });
-      }
-    }
 
     return risks;
   }
@@ -538,19 +330,7 @@ export class TransactionSimulator {
     // This is a simplified calculation - in reality, this would track token flows through the plan
     const lastAction = plan.actions[plan.actions.length - 1];
 
-    if (lastAction.type === 'swapTokens') {
-      return {
-        amount: lastAction.params.amount,
-        token: lastAction.params.toToken,
-      };
-    }
 
-    if (lastAction.type === 'bridgeTokens') {
-      return {
-        amount: lastAction.params.amount,
-        token: lastAction.params.tokenAddress,
-      };
-    }
 
     return {
       amount: '0',

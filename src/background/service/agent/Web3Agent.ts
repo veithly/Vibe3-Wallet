@@ -1501,113 +1501,7 @@ export class Web3Agent extends EventEmitter {
     }
   }
 
-  // Action execution methods
-  private async executeCheckBalance(action: ActionStep): Promise<ActionStep> {
-    const { params } = action;
 
-    // TODO: Implement actual balance checking
-    const balance = '0';
-
-    return {
-      ...action,
-      result: { success: true, balance },
-      status: 'completed' as const,
-    };
-  }
-
-  private async executeSendTransaction(
-    action: ActionStep
-  ): Promise<ActionStep> {
-    const { params } = action;
-
-    // TODO: Implement actual transaction sending
-    const txHash = '0x' + Math.random().toString(16).substr(2, 64);
-
-    return {
-      ...action,
-      result: { success: true, txHash },
-      status: 'completed' as const,
-    };
-  }
-
-  private async executeApproveToken(action: ActionStep): Promise<ActionStep> {
-    const { params } = action;
-
-    // TODO: Implement actual token approval
-    const txHash = '0x' + Math.random().toString(16).substr(2, 64);
-
-    return {
-      ...action,
-      result: { success: true, txHash },
-      status: 'completed' as const,
-    };
-  }
-
-  private async executeSwapTokens(action: ActionStep): Promise<ActionStep> {
-    const { params } = action;
-
-    // TODO: Implement actual token swap
-    const txHash = '0x' + Math.random().toString(16).substr(2, 64);
-    const outputAmount = '0';
-
-    return {
-      ...action,
-      result: { success: true, txHash, outputAmount },
-      status: 'completed' as const,
-    };
-  }
-
-  private async executeBridgeTokens(action: ActionStep): Promise<ActionStep> {
-    const { params } = action;
-
-    // TODO: Implement actual token bridging
-    const txHash = '0x' + Math.random().toString(16).substr(2, 64);
-
-    return {
-      ...action,
-      result: { success: true, txHash },
-      status: 'completed' as const,
-    };
-  }
-
-  private async executeStakeTokens(action: ActionStep): Promise<ActionStep> {
-    const { params } = action;
-
-    // TODO: Implement actual token staking
-    const txHash = '0x' + Math.random().toString(16).substr(2, 64);
-
-    return {
-      ...action,
-      result: { success: true, txHash },
-      status: 'completed' as const,
-    };
-  }
-
-  private async executeConnectWallet(action: ActionStep): Promise<ActionStep> {
-    const { params } = action;
-
-    // TODO: Implement actual wallet connection
-    const connected = true;
-
-    return {
-      ...action,
-      result: { success: true, connected },
-      status: 'completed' as const,
-    };
-  }
-
-  private async executeSwitchNetwork(action: ActionStep): Promise<ActionStep> {
-    const { params } = action;
-
-    // TODO: Implement actual network switching
-    const switched = true;
-
-    return {
-      ...action,
-      result: { success: true, switched },
-      status: 'completed' as const,
-    };
-  }
 
   private async generateFinalResponse(
     instruction: string,
@@ -3051,19 +2945,11 @@ export class Web3Agent extends EventEmitter {
 
     // Web3 tasks: consider done when the primary action succeeds
     const web3DoneNames = [
-      'sendTransaction',
-      'approveToken',
-      'swapTokens',
-      'stakeTokens',
-      'unstakeTokens',
-      'bridgeTokens',
       'addLiquidity',
       'removeLiquidity',
       'interactWithContract',
       'signMessage',
       'signTypedData',
-      'switchNetwork',
-      'connectWallet',
     ];
     if (successOf(web3DoneNames)) return true;
 

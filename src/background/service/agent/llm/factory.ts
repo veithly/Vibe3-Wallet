@@ -1811,17 +1811,8 @@ Key principles:
 4. **User Control**: Never proceed without user confirmation for significant operations
 
 Available Actions:
-- checkBalance: Query token balances
-- sendTransaction: Send native tokens or call contracts
-- approveToken: Grant spending allowance to contracts
-- swapTokens: Exchange tokens via DEX aggregators
-- bridgeTokens: Transfer tokens across blockchains
-- stakeTokens: Deposit tokens in staking contracts
-- unstakeTokens: Withdraw from staking contracts
 - addLiquidity: Provide liquidity to AMM pools
 - removeLiquidity: Withdraw liquidity from pools
-- connectWallet: Connect wallet to dApps
-- switchNetwork: Change blockchain networks
 - getNFTs: Query NFT holdings
 - getTransactionHistory: Get transaction history
 - getGasPrice: Get current gas prices
@@ -1938,7 +1929,7 @@ Protocols: ${Object.keys(context.protocols).join(', ')}
   ): FunctionCall[] {
     const functionCalls: FunctionCall[] = [];
 
-    // Look for patterns like "I'll call checkBalance with address 0x..."
+
     const toolNames = availableTools.map((tool) => tool.name);
 
     for (const toolName of toolNames) {
@@ -2024,20 +2015,11 @@ Protocols: ${Object.keys(context.protocols).join(', ')}
     const actions: LLMAction[] = [];
 
     const actionPatterns: Map<string, RegExp> = new Map([
-      ['checkBalance', /check.*balance|balance.*check|查询.*余额|余额.*查询/i],
-      ['sendTransaction', /send.*transaction|transfer.*funds|发送.*交易|转账/i],
-      ['approveToken', /approve.*token|授权.*代币|grant.*allowance/i],
-      ['swapTokens', /swap.*tokens|exchange.*tokens|兑换.*代币|交换.*代币/i],
-      ['bridgeTokens', /bridge.*tokens|cross.*chain|跨链.*转账|桥接/i],
-      ['stakeTokens', /stake.*tokens|deposit.*stake|质押.*代币|存入/i],
-      ['unstakeTokens', /unstake.*tokens|withdraw.*stake|解除质押|提取/i],
       ['addLiquidity', /add.*liquidity|provide.*liquidity|添加.*流动性/i],
       [
         'removeLiquidity',
         /remove.*liquidity|withdraw.*liquidity|移除.*流动性/i,
       ],
-      ['connectWallet', /connect.*wallet|连接.*钱包/i],
-      ['switchNetwork', /switch.*network|change.*chain|切换.*网络/i],
     ]);
 
     for (const [actionType, pattern] of actionPatterns) {
@@ -2059,38 +2041,7 @@ Protocols: ${Object.keys(context.protocols).join(', ')}
     const params: Record<string, any> = {};
 
     switch (actionType) {
-      case 'checkBalance': {
-        const addressMatch = text.match(/0x[a-fA-F0-9]{40}/);
-        if (addressMatch) {
-          params.address = addressMatch[0];
-        }
-        break;
-      }
 
-      case 'sendTransaction': {
-        const recipientMatch = text.match(/to\s+(0x[a-fA-F0-9]{40})/i);
-        const amountMatch = text.match(
-          /(\d+(?:\.\d+)?)\s*(?:eth|matic|bnb|usdc|usdt)/i
-        );
-        if (recipientMatch) params.to = recipientMatch[1];
-        if (amountMatch) params.value = amountMatch[1];
-        break;
-      }
-
-      case 'swapTokens': {
-        const fromTokenMatch = text.match(
-          /(\d+(?:\.\d+)?)\s*([A-Za-z0-9]+)\s*(?:to|for)/i
-        );
-        const toTokenMatch = text.match(/(?:to|for)\s*([A-Za-z0-9]+)/i);
-        if (fromTokenMatch) {
-          params.amount = fromTokenMatch[1];
-          params.fromToken = fromTokenMatch[2];
-        }
-        if (toTokenMatch) {
-          params.toToken = toTokenMatch[1];
-        }
-        break;
-      }
     }
 
     return params;

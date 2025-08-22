@@ -460,6 +460,16 @@ export const SidePanelApp = () => {
           data,
         });
       }
+
+      // If LLM signaled a normal stop, immediately revert UI to Send
+      if (data?.finish_reason === 'stop') {
+        try { setStreamingMessageId(null); } catch {}
+        setInputEnabled(true);
+        setShowStopButton(false);
+        setIsFollowUpMode(true);
+        resetReActStatus();
+        logger.info(COMPONENT_NAME, "finish_reason 'stop' received; UI reset to Send");
+      }
     },
     [appendMessage, resetReActStatus, streamingMessageId]
   );

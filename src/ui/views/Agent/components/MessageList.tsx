@@ -40,7 +40,7 @@ export default memo(function MessageList({
   const sortedMessages = React.useMemo(() => {
     return [...validMessages].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
   }, [validMessages]);
-  
+
   // Auto-scroll to bottom whenever messages change
   const bottomRef = React.useRef<HTMLDivElement | null>(null);
   React.useEffect(() => {
@@ -154,7 +154,7 @@ function MessageBlock({
 
   // Check if this is a user message
   const isUserMessage = message.actor === Actors.USER;
-  
+
   // Enhanced message type detection with fallbacks
   const isProgress = message.content === 'Showing progress...';
   const isThinking = message.messageType === 'thinking';
@@ -169,11 +169,11 @@ function MessageBlock({
   const isWalletAutoApprovedTx = message.messageType === 'wallet_auto_approved_tx';
   const isWalletConfirmationRequest = message.messageType === 'wallet_confirmation_request';
   const isFunctionCall = message.messageType === 'function_call';
-  
+
   // Special message types that should always be centered
-  const isCenteredMessage = isWalletAutoConnected || isWalletAutoSigned || 
+  const isCenteredMessage = isWalletAutoConnected || isWalletAutoSigned ||
                            isWalletAutoApprovedTx || isWalletConfirmationRequest;
-  
+
   // Local state for wallet confirmation checkbox within this message block
   const [addToWhitelist, setAddToWhitelist] = React.useState(false);
   const [toolCollapsed, setToolCollapsed] = React.useState(true);
@@ -202,20 +202,20 @@ function MessageBlock({
   // For special cards (wallet confirmations etc.), render centered
   if (isCenteredMessage) {
     return (
-      <div style={{ 
+      <div style={{
         marginBottom: '16px',
         animation: 'slideUp 0.3s ease-out'
       }}>
-        {renderSpecialMessageCard(message, isWalletAutoConnected, isWalletAutoSigned, 
+        {renderSpecialMessageCard(message, isWalletAutoConnected, isWalletAutoSigned,
                                  isWalletAutoApprovedTx, isWalletConfirmationRequest,
-                                 addToWhitelist, setAddToWhitelist, onWalletConfirm, 
+                                 addToWhitelist, setAddToWhitelist, onWalletConfirm,
                                  onWalletReject, isDarkMode)}
       </div>
     );
   }
 
   return (
-    <div 
+    <div
       className={`message-block ${isUserMessage ? 'user-message' : 'agent-message'}`}
       style={{
         display: 'flex',
@@ -223,8 +223,8 @@ function MessageBlock({
         gap: '12px',
         marginBottom: isSameActor ? '8px' : '20px',
         paddingTop: !isSameActor && messageIndex > 0 ? '16px' : '0',
-        borderTop: !isSameActor && messageIndex > 0 
-          ? `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)'}` 
+        borderTop: !isSameActor && messageIndex > 0
+          ? `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)'}`
           : 'none',
         alignItems: 'flex-start',
         animation: 'slideUp 0.3s ease-out',
@@ -370,7 +370,7 @@ function MessageBlock({
                     borderRadius: '12px',
                     fontSize: '11px',
                     fontWeight: '600',
-                    background: call.status === 'completed' ? '#10b981' 
+                    background: call.status === 'completed' ? '#10b981'
                              : call.status === 'failed' ? '#ef4444'
                              : '#f59e0b',
                     color: '#ffffff',
@@ -433,8 +433,8 @@ function MessageBlock({
                         borderRadius: '4px',
                         margin: '4px 0 0 0',
                       }}>
-                        {typeof result.result === 'object' 
-                          ? JSON.stringify(result.result, null, 2) 
+                        {typeof result.result === 'object'
+                          ? JSON.stringify(result.result, null, 2)
                           : String(result.result)}
                       </pre>
                     </div>
@@ -480,7 +480,7 @@ function renderSpecialMessageCard(
 ) {
   const wc: any = (message as any).walletConfirmation || {};
   const approvalId: string = (message as any).approvalId || '';
-  
+
   if (isWalletAutoConnected) {
     return (
       <div style={{
@@ -545,7 +545,7 @@ function renderSpecialMessageCard(
     return (
       <div style={{
         padding: '16px',
-        background: isDarkMode 
+        background: isDarkMode
           ? 'linear-gradient(135deg, #1e1e1e, #2a2a2a)'
           : 'linear-gradient(135deg, #ffffff, #f9fafb)',
         borderRadius: '12px',
@@ -563,7 +563,7 @@ function renderSpecialMessageCard(
             </div>
           </div>
         </div>
-        
+
         {/* Transaction details */}
         <div style={{
           padding: '12px',

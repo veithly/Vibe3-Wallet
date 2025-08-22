@@ -334,17 +334,7 @@ export class ParallelExecutor {
     // For function calls, determine dependencies based on parameter relationships
     const dependencies: string[] = [];
 
-    // Example: If a function call needs a transaction hash from a previous call
-    if ('name' in action && action.name === 'approveToken') {
-      // Look for previous checkBalance calls that might be needed
-      const checkBalanceNodes = this.graph.nodes.filter(
-        (node) =>
-          'action' in node &&
-          'type' in node.action &&
-          node.action.type === 'checkBalance'
-      );
-      dependencies.push(...checkBalanceNodes.map((n) => n.id));
-    }
+
 
     return dependencies;
   }
@@ -500,14 +490,7 @@ export function canExecuteInParallel(
   }
 
   // Check for actions that must be sequential
-  const sequentialPatterns = [
-    // Token approval must come before token swap
-    { before: 'approveToken', after: 'swapTokens' },
-    // Balance check should come before transactions
-    { before: 'checkBalance', after: 'sendTransaction' },
-    // Network switch should come before chain-specific operations
-    { before: 'switchNetwork', after: 'sendTransaction' },
-  ];
+  const sequentialPatterns: Array<{ before: string; after: string }> = [];
 
   for (const pattern of sequentialPatterns) {
     const beforeIndex = actions.findIndex(
@@ -538,7 +521,6 @@ export function optimizeExecutionOrder(
     (a) =>
       'type' in a &&
       [
-        'checkBalance',
         'getNFTs',
         'getTransactionHistory',
         'getGasPrice',
@@ -548,7 +530,7 @@ export function optimizeExecutionOrder(
   const writeActions = actions.filter(
     (a) =>
       'type' in a &&
-      ['sendTransaction', 'approveToken', 'swapTokens', 'stakeTokens'].includes(
+      [].includes(
         a.type
       )
   );

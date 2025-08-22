@@ -42,34 +42,18 @@ export function validateActionParams(actionName: string, params: any): boolean {
       return schemaImports.isWaitActionParams(params);
 
     // Web3 actions
-    case 'checkBalance':
-      return web3SchemaImports.isCheckBalanceActionParams(params);
-    case 'sendTransaction':
-      return web3SchemaImports.isSendTransactionActionParams(params);
-    case 'approveToken':
-      return web3SchemaImports.isApproveTokenActionParams(params);
-    case 'swapTokens':
-      return web3SchemaImports.isSwapTokensActionParams(params);
     case 'addLiquidity':
       return web3SchemaImports.isAddLiquidityActionParams(params);
     case 'removeLiquidity':
       return web3SchemaImports.isRemoveLiquidityActionParams(params);
-    case 'stakeTokens':
-      return web3SchemaImports.isStakeTokensActionParams(params);
-    case 'unstakeTokens':
-      return web3SchemaImports.isUnstakeTokensActionParams(params);
-    case 'bridgeTokens':
-      return web3SchemaImports.isBridgeTokensActionParams(params);
+
     case 'interactWithContract':
       return web3SchemaImports.isInteractWithContractActionParams(params);
     case 'signMessage':
       return web3SchemaImports.isSignMessageActionParams(params);
     case 'signTypedData':
       return web3SchemaImports.isSignTypedDataActionParams(params);
-    case 'connectWallet':
-      return web3SchemaImports.isConnectWalletActionParams(params);
-    case 'switchNetwork':
-      return web3SchemaImports.isSwitchNetworkActionParams(params);
+
     case 'getNFTs':
       return web3SchemaImports.isGetNFTsActionParams(params);
     case 'getTransactionHistory':
@@ -216,33 +200,6 @@ export class ActionBuilder {
         validate: (params: any) => validateActionParams('wait', params),
         handler: this.browserAction,
       },
-
-      // Web3 Actions
-      checkBalance: {
-        schema: web3SchemaImports.checkBalanceActionSchema,
-        description: 'Check token balance for a specific address',
-        validate: (params: any) => validateActionParams('checkBalance', params),
-        handler: this.web3Action,
-      },
-      sendTransaction: {
-        schema: web3SchemaImports.sendTransactionActionSchema,
-        description: 'Send a transaction on the blockchain',
-        validate: (params: any) =>
-          validateActionParams('sendTransaction', params),
-        handler: this.web3Action,
-      },
-      approveToken: {
-        schema: web3SchemaImports.approveTokenActionSchema,
-        description: 'Approve token spending for a contract',
-        validate: (params: any) => validateActionParams('approveToken', params),
-        handler: this.web3Action,
-      },
-      swapTokens: {
-        schema: web3SchemaImports.swapTokensActionSchema,
-        description: 'Swap tokens using a DEX',
-        validate: (params: any) => validateActionParams('swapTokens', params),
-        handler: this.web3Action,
-      },
       addLiquidity: {
         schema: web3SchemaImports.addLiquidityActionSchema,
         description: 'Add liquidity to a liquidity pool',
@@ -254,25 +211,6 @@ export class ActionBuilder {
         description: 'Remove liquidity from a liquidity pool',
         validate: (params: any) =>
           validateActionParams('removeLiquidity', params),
-        handler: this.web3Action,
-      },
-      stakeTokens: {
-        schema: web3SchemaImports.stakeTokensActionSchema,
-        description: 'Stake tokens in a staking contract',
-        validate: (params: any) => validateActionParams('stakeTokens', params),
-        handler: this.web3Action,
-      },
-      unstakeTokens: {
-        schema: web3SchemaImports.unstakeTokensActionSchema,
-        description: 'Unstake tokens from a staking contract',
-        validate: (params: any) =>
-          validateActionParams('unstakeTokens', params),
-        handler: this.web3Action,
-      },
-      bridgeTokens: {
-        schema: web3SchemaImports.bridgeTokensActionSchema,
-        description: 'Bridge tokens across different chains',
-        validate: (params: any) => validateActionParams('bridgeTokens', params),
         handler: this.web3Action,
       },
       interactWithContract: {
@@ -293,20 +231,6 @@ export class ActionBuilder {
         description: 'Sign typed data (EIP-712) with the wallet',
         validate: (params: any) =>
           validateActionParams('signTypedData', params),
-        handler: this.web3Action,
-      },
-      connectWallet: {
-        schema: web3SchemaImports.connectWalletActionSchema,
-        description: 'Connect wallet to a dApp',
-        validate: (params: any) =>
-          validateActionParams('connectWallet', params),
-        handler: this.web3Action,
-      },
-      switchNetwork: {
-        schema: web3SchemaImports.switchNetworkActionSchema,
-        description: 'Switch to a different blockchain network',
-        validate: (params: any) =>
-          validateActionParams('switchNetwork', params),
         handler: this.web3Action,
       },
       getNFTs: {
@@ -405,20 +329,11 @@ export class ActionBuilder {
 
   private isWeb3Action(actionName: string): boolean {
     const web3ActionPatterns = [
-      'checkBalance',
-      'sendTransaction',
-      'approveToken',
-      'swapTokens',
       'addLiquidity',
       'removeLiquidity',
-      'stakeTokens',
-      'unstakeTokens',
-      'bridgeTokens',
       'interactWithContract',
       'signMessage',
       'signTypedData',
-      'connectWallet',
-      'switchNetwork',
       'getNFTs',
       'getTransactionHistory',
       'getGasPrice',

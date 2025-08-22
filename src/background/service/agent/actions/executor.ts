@@ -216,20 +216,11 @@ export class EnhancedActionExecutor {
 
   private isWeb3Action(actionName: string): boolean {
     const web3ActionPatterns = [
-      'checkBalance',
-      'sendTransaction',
-      'approveToken',
-      'swapTokens',
       'addLiquidity',
       'removeLiquidity',
-      'stakeTokens',
-      'unstakeTokens',
-      'bridgeTokens',
       'interactWithContract',
       'signMessage',
       'signTypedData',
-      'connectWallet',
-      'switchNetwork',
       'getNFTs',
       'getTransactionHistory',
       'getGasPrice',

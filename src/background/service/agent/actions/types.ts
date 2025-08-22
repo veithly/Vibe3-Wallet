@@ -87,36 +87,6 @@ export interface WaitParams extends BaseActionParams {
 }
 
 // Web3 Actions
-export interface CheckBalanceParams extends BaseActionParams {
-  address: string;
-  tokenAddress?: string;
-  chainId?: number;
-}
-
-export interface SendTransactionParams extends BaseActionParams {
-  to: string;
-  value: string;
-  data?: string;
-  gasLimit?: string;
-  gasPrice?: string;
-  chainId?: number;
-}
-
-export interface ApproveTokenParams extends BaseActionParams {
-  tokenAddress: string;
-  spender: string;
-  amount: string;
-  chainId?: number;
-}
-
-export interface SwapTokensParams extends BaseActionParams {
-  fromToken: string;
-  toToken: string;
-  amount: string;
-  recipient?: string;
-  slippage?: number;
-  chainId?: number;
-}
 
 export interface AddLiquidityParams extends BaseActionParams {
   tokenA: string;
@@ -133,27 +103,7 @@ export interface RemoveLiquidityParams extends BaseActionParams {
   chainId?: number;
 }
 
-export interface StakeTokensParams extends BaseActionParams {
-  tokenAddress: string;
-  amount: string;
-  stakingContract: string;
-  chainId?: number;
-}
 
-export interface UnstakeTokensParams extends BaseActionParams {
-  tokenAddress: string;
-  amount: string;
-  stakingContract: string;
-  chainId?: number;
-}
-
-export interface BridgeTokensParams extends BaseActionParams {
-  tokenAddress: string;
-  amount: string;
-  fromChainId: number;
-  toChainId: number;
-  recipient?: string;
-}
 
 export interface InteractWithContractParams extends BaseActionParams {
   contractAddress: string;
@@ -182,17 +132,7 @@ export interface SignTypedDataParams extends BaseActionParams {
   address?: string;
 }
 
-export interface ConnectWalletParams extends BaseActionParams {
-  dappName: string;
-  dappUrl: string;
-  chainId?: number;
-}
 
-export interface SwitchNetworkParams extends BaseActionParams {
-  chainId: number;
-  chainName?: string;
-  rpcUrl?: string;
-}
 
 export interface GetNFTsParams extends BaseActionParams {
   address: string;
@@ -235,20 +175,12 @@ export type ActionParams =
   | GetDropdownOptionsParams
   | SelectDropdownOptionParams
   | WaitParams
-  | CheckBalanceParams
-  | SendTransactionParams
-  | ApproveTokenParams
-  | SwapTokensParams
   | AddLiquidityParams
   | RemoveLiquidityParams
-  | StakeTokensParams
-  | UnstakeTokensParams
-  | BridgeTokensParams
   | InteractWithContractParams
   | SignMessageParams
   | SignTypedDataParams
-  | ConnectWalletParams
-  | SwitchNetworkParams
+
   | GetNFTsParams
   | GetTransactionHistoryParams
   | GetGasPriceParams
@@ -272,20 +204,12 @@ export interface ActionParamsMap {
   get_dropdown_options: GetDropdownOptionsParams;
   select_dropdown_option: SelectDropdownOptionParams;
   wait: WaitParams;
-  check_balance: CheckBalanceParams;
-  send_transaction: SendTransactionParams;
-  approve_token: ApproveTokenParams;
-  swap_tokens: SwapTokensParams;
   add_liquidity: AddLiquidityParams;
   remove_liquidity: RemoveLiquidityParams;
-  stake_tokens: StakeTokensParams;
-  unstake_tokens: UnstakeTokensParams;
-  bridge_tokens: BridgeTokensParams;
   interact_with_contract: InteractWithContractParams;
   sign_message: SignMessageParams;
   sign_typed_data: SignTypedDataParams;
-  connect_wallet: ConnectWalletParams;
-  switch_network: SwitchNetworkParams;
+
   get_nfts: GetNFTsParams;
   get_transaction_history: GetTransactionHistoryParams;
   get_gas_price: GetGasPriceParams;
@@ -361,24 +285,7 @@ export function validateParams<T extends ActionName>(
 
   // Action-specific validations
   switch (actionName) {
-    case 'send_transaction': {
-      const txParams = params as SendTransactionParams;
-      if (!validateAddress(txParams.to)) {
-        errors.push('Invalid recipient address');
-      }
-      if (!txParams.value || parseFloat(txParams.value) <= 0) {
-        errors.push('Invalid transaction amount');
-      }
-      break;
-    }
 
-    case 'check_balance': {
-      const balanceParams = params as CheckBalanceParams;
-      if (!validateAddress(balanceParams.address)) {
-        errors.push('Invalid address for balance check');
-      }
-      break;
-    }
 
     case 'go_to_url': {
       const navParams = params as GoToUrlParams;
@@ -388,16 +295,7 @@ export function validateParams<T extends ActionName>(
       break;
     }
 
-    case 'swap_tokens': {
-      const swapParams = params as SwapTokensParams;
-      if (!swapParams.fromToken || !swapParams.toToken) {
-        errors.push('Token addresses required');
-      }
-      if (!swapParams.amount || parseFloat(swapParams.amount) <= 0) {
-        errors.push('Invalid swap amount');
-      }
-      break;
-    }
+
   }
 
   return { valid: errors.length === 0, errors };
@@ -406,20 +304,11 @@ export function validateParams<T extends ActionName>(
 // Type guards
 export function isWeb3Action(actionName: ActionName): boolean {
   const web3Actions: ActionName[] = [
-    'check_balance',
-    'send_transaction',
-    'approve_token',
-    'swap_tokens',
     'add_liquidity',
     'remove_liquidity',
-    'stake_tokens',
-    'unstake_tokens',
-    'bridge_tokens',
     'interact_with_contract',
     'sign_message',
     'sign_typed_data',
-    'connect_wallet',
-    'switch_network',
     'get_nfts',
     'get_transaction_history',
     'get_gas_price',

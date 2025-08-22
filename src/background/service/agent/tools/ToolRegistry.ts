@@ -5,8 +5,7 @@ import { createLogger } from '@/utils/logger';
 import { Web3Action } from '../actions/web3-actions';
 import { BrowserAutomationController } from '../automation/BrowserAutomationController';
 import type { AgentContext } from '../types';
-import preferenceService from '@/background/service/preference';
-import keyringService from '@/background/service/keyring';
+
 
 import { getClickableElements, removeHighlights as domRemoveHighlights, getScrollInfo as domGetScrollInfo } from '@/background/browser/dom/service';
 const logger = createLogger('ToolRegistry');
@@ -49,140 +48,8 @@ export class ToolRegistry {
 
   private initializeWeb3Tools(): void {
     // Core Web3 tools
-    this.registerTool({
-      name: 'checkBalance',
-      description:
-        'Check token balance for a specific address on any blockchain',
-      parameters: [
-        {
-          type: 'string',
-          description: 'The wallet address to check balance for',
-          pattern: '^0x[a-fA-F0-9]{40}$',
-        },
-        {
-          type: 'string',
-          description:
-            'Optional: Specific token contract address to check (leave empty for native token)',
-          pattern: '^0x[a-fA-F0-9]{40}$',
-        },
-        {
-          type: 'number',
-          description:
-            'Optional: Chain ID (1 for Ethereum, 56 for BSC, 137 for Polygon, etc.)',
-          minimum: 1,
-        },
-      ],
-      required: [],
-      handler: this.createWeb3Handler('checkBalance'),
-      category: 'web3',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
 
-    this.registerTool({
-      name: 'sendTransaction',
-      description: 'Send a transaction with ETH or tokens to another address',
-      parameters: [
-        {
-          type: 'string',
-          description: 'Recipient wallet address',
-          pattern: '^0x[a-fA-F0-9]{40}$',
-        },
-        {
-          type: 'string',
-          description:
-            'Amount to send in wei (e.g., "1000000000000000000" for 1 ETH)',
-        },
-        {
-          type: 'string',
-          description: 'Optional: Transaction data (hex string)',
-          pattern: '^0x[0-9a-fA-F]*$',
-        },
-        {
-          type: 'number',
-          description: 'Optional: Chain ID',
-          minimum: 1,
-        },
-      ],
-      required: ['to', 'value'],
-      handler: this.createWeb3Handler('sendTransaction'),
-      category: 'web3',
-      riskLevel: 'high',
-      requiresConfirmation: true,
-    });
 
-    this.registerTool({
-      name: 'approveToken',
-      description: 'Approve a smart contract to spend your tokens',
-      parameters: [
-        {
-          type: 'string',
-          description: 'Token contract address',
-          pattern: '^0x[a-fA-F0-9]{40}$',
-        },
-        {
-          type: 'string',
-          description: 'Spender contract address',
-          pattern: '^0x[a-fA-F0-9]{40}$',
-        },
-        {
-          type: 'string',
-          description: 'Amount to approve in token units (with decimals)',
-        },
-        {
-          type: 'number',
-          description: 'Optional: Chain ID',
-          minimum: 1,
-        },
-      ],
-      required: ['tokenAddress', 'spender', 'amount'],
-      handler: this.createWeb3Handler('approveToken'),
-      category: 'web3',
-      riskLevel: 'medium',
-      requiresConfirmation: true,
-    });
-
-    this.registerTool({
-      name: 'swapTokens',
-      description:
-        'Swap tokens using decentralized exchanges (DEX aggregators)',
-      parameters: [
-        {
-          type: 'string',
-          description:
-            'From token address or symbol (e.g., "ETH", "USDC", "0x...")',
-        },
-        {
-          type: 'string',
-          description: 'To token address or symbol',
-        },
-        {
-          type: 'string',
-          description: 'Amount to swap (with decimals)',
-        },
-        {
-          type: 'string',
-          description:
-            'Optional: Recipient address (defaults to current wallet)',
-        },
-        {
-          type: 'number',
-          description: 'Optional: Slippage tolerance percentage (default 0.5)',
-          minimum: 0.1,
-          maximum: 5,
-        },
-        {
-          type: 'number',
-          description: 'Optional: Chain ID',
-          minimum: 1,
-        },
-      ],
-      required: ['fromToken', 'toToken', 'amount'],
-      handler: this.createWeb3Handler('swapTokens'),
-      category: 'web3',
-      riskLevel: 'medium',
-      requiresConfirmation: true,
-    });
 
     this.registerTool({
       name: 'getNFTs',
@@ -290,22 +157,7 @@ export class ToolRegistry {
       requiresConfirmation: false,
     });
 
-    this.registerTool({
-      name: 'switchNetwork',
-      description: 'Switch to a different blockchain network',
-      parameters: [
-        {
-          type: 'number',
-          description: 'Chain ID to switch to',
-          minimum: 1,
-        },
-      ],
-      required: ['chainId'],
-      handler: this.createWeb3Handler('switchNetwork'),
-      category: 'web3',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
+
 
     this.registerTool({
       name: 'signMessage',
@@ -331,67 +183,9 @@ export class ToolRegistry {
 
     // Advanced DeFi tools (selected tools removed)
 
-    this.registerTool({
-      name: 'unstakeTokens',
-      description: 'Unstake tokens from a staking contract',
-      parameters: [
-        {
-          type: 'string',
-          description: 'Token address to unstake',
-        },
-        {
-          type: 'string',
-          description: 'Amount to unstake',
-        },
-        {
-          type: 'string',
-          description: 'Staking contract address',
-          pattern: '^0x[a-fA-F0-9]{40}$',
-        },
-        {
-          type: 'number',
-          description: 'Optional: Chain ID',
-          minimum: 1,
-        },
-      ],
-      required: ['tokenAddress', 'amount', 'stakingContract'],
-      handler: this.createWeb3Handler('unstakeTokens'),
-      category: 'web3',
-      riskLevel: 'medium',
-      requiresConfirmation: true,
-    });
 
-    this.registerTool({
-      name: 'bridgeTokens',
-      description: 'Bridge tokens across different blockchain networks',
-      parameters: [
-        {
-          type: 'string',
-          description: 'Token address to bridge',
-        },
-        {
-          type: 'string',
-          description: 'Amount to bridge',
-        },
-        {
-          type: 'number',
-          description: 'Source chain ID',
-        },
-        {
-          type: 'number',
-          description: 'Destination chain ID',
-        },
-        {
-          type: 'string',
-          description: 'Optional: Recipient address on destination chain',
-        },
-      ],
-      required: ['tokenAddress', 'amount', 'fromChainId', 'toChainId'],
-      handler: this.createWeb3Handler('bridgeTokens'),
-      category: 'web3',
-      riskLevel: 'high',
-      requiresConfirmation: true,
-    });
+
+
   }
 
   private initializeUtilityTools(): void {
@@ -1145,32 +939,6 @@ export class ToolRegistry {
       requiresConfirmation: false,
     });
 
-    // Multi-agent coordination tools
-    this.registerTool({
-      name: 'createExecutionPlan',
-      description: 'Create a detailed execution plan for complex tasks',
-      parameters: [
-        {
-          type: 'string',
-          description: 'Task description or instruction',
-        },
-        {
-          type: 'string',
-          description: 'Task complexity level',
-          enum: ['simple', 'medium', 'complex'],
-        },
-        {
-          type: 'boolean',
-          description: 'Optional: Enable risk assessment',
-        },
-      ],
-      required: ['task', 'complexity'],
-      handler: this.createMultiAgentHandler('createExecutionPlan'),
-      category: 'system',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
-
     // Enhanced scrollIntoView tool
     this.registerTool({
       name: 'scrollIntoView',
@@ -1219,142 +987,11 @@ export class ToolRegistry {
       riskLevel: 'low',
       requiresConfirmation: false,
     });
-
-    this.registerTool({
-      name: 'validateTaskCompletion',
-      description: 'Validate if a task was completed successfully',
-      parameters: [
-        {
-          type: 'string',
-          description: 'Original task instruction',
-        },
-        {
-          type: 'string',
-          description: 'Expected outcome or result',
-        },
-        {
-          type: 'boolean',
-          description: 'Optional: Perform deep validation',
-        },
-      ],
-      required: ['task', 'expectedOutcome'],
-      handler: this.createMultiAgentHandler('validateTaskCompletion'),
-      category: 'system',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
-
-    this.registerTool({
-      name: 'getMultiAgentStatus',
-      description: 'Get the status of all agents in the multi-agent system',
-      parameters: [],
-      required: [],
-      handler: this.createMultiAgentHandler('getMultiAgentStatus'),
-      category: 'system',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
-
-    this.registerTool({
-      name: 'enableMultiAgentCoordination',
-      description: 'Enable or disable multi-agent coordination',
-      parameters: [
-        {
-          type: 'boolean',
-          description: 'Enable (true) or disable (false) multi-agent coordination',
-        },
-      ],
-      required: ['enabled'],
-      handler: this.createMultiAgentHandler('enableMultiAgentCoordination'),
-      category: 'system',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
   }
 
   private initializeSystemTools(): void {
-    // System tools for wallet and agent management
-    this.registerTool({
-      name: 'getWalletInfo',
-      description:
-        'Get current wallet information including address and network',
-      parameters: [],
-      required: [],
-      handler: async () => {
-        try {
-          // Get real wallet information from Rabby services
-          const currentAccount = await preferenceService.getCurrentAccount();
-          const currentNetwork = (await (preferenceService as any).getCurrentNetwork?.()) || {
-            name: 'Unknown Network',
-            chainId: 1,
-          };
-
-          if (!currentAccount) {
-            return {
-              address: '',
-              network: 'Not Connected',
-              chainId: 0,
-              balance: '0 ETH',
-              connected: false,
-            };
-          }
-
-          // Get real balance using provider controller
-          const balanceResponse = await fetch(
-            'https://api.etherscan.io/api?module=account&action=balance&address=' +
-              currentAccount.address +
-              '&tag=latest&apikey=YourApiKey'
-          );
-          const balanceData = await balanceResponse.json();
-          const balanceWei = balanceData.result || '0';
-          const balanceEth = (parseInt(balanceWei) / 1e18).toFixed(6);
-
-          return {
-            address: currentAccount.address,
-            network: currentNetwork.name || 'Unknown Network',
-            chainId: currentNetwork.chainId || 1,
-            balance: `${balanceEth} ETH`,
-            connected: true,
-          };
-        } catch (error) {
-          logger.error('Failed to get wallet info:', error);
-          return {
-            address: '',
-            network: 'Error',
-            chainId: 0,
-            balance: '0 ETH',
-            connected: false,
-          };
-        }
-      },
-      category: 'system',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
-
-    this.registerTool({
-      name: 'getAgentStatus',
-      description: 'Get current agent status and capabilities',
-      parameters: [],
-      required: [],
-      handler: async () => {
-        return {
-          status: 'ready',
-          capabilities: [
-            'Web3 transactions',
-            'Token swaps',
-            'NFT management',
-            'DeFi operations',
-            'Cross-chain bridging',
-          ],
-          version: '1.0.0',
-          timestamp: Date.now(),
-        };
-      },
-      category: 'system',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
+    // System tools for wallet and agent management - REMOVED MOCK TOOLS
+    // getWalletInfo and getAgentStatus were removed as they returned mock data
   }
 
   private createBrowserHandler(actionName: string) {
@@ -1689,8 +1326,7 @@ export class ToolRegistry {
           sessionId: 'agent-session', // Required field
           eventHandler: (event: any) => {}, // Required field
           currentChain: '1', // Default to Ethereum
-          currentAddress:
-            (await preferenceService.getCurrentAccount())?.address || '',
+          currentAddress: '', // Removed preferenceService dependency
           riskLevel: 'medium',
           balances: {},
           gasPrices: {},
@@ -1862,134 +1498,7 @@ export class ToolRegistry {
     };
   }
 
-  private createMultiAgentHandler(actionName: string) {
-    return async (params: any) => {
-      try {
-        logger.info(`Executing multi-agent action: ${actionName}`, params);
 
-        // Import Web3Agent dynamically to avoid circular dependency
-        const { Web3Agent } = await import('../Web3Agent');
-
-        // Get or create Web3Agent instance
-        // This is a simplified approach - in production, you'd want to manage instances properly
-        let web3Agent: InstanceType<typeof Web3Agent> | null = null;
-
-        switch (actionName) {
-          case 'createExecutionPlan':
-            // This would integrate with the PlannerAgent
-            return {
-              action: actionName,
-              params,
-              result: {
-                plan: {
-                  id: `plan_${Date.now()}`,
-                  name: params.task,
-                  description: `Execution plan for: ${params.task}`,
-                  complexity: params.complexity,
-                  estimatedSteps: Math.ceil(params.task.length / 10), // Simple estimation
-                  riskAssessment: params.enableRiskAssessment ? {
-                    overallRisk: params.complexity === 'complex' ? 'MEDIUM' : 'LOW',
-                    factors: [],
-                    recommendations: []
-                  } : undefined
-                },
-                success: true,
-                message: `Created execution plan for task: ${params.task}`
-              },
-              success: true,
-              timestamp: Date.now(),
-            };
-
-          case 'validateTaskCompletion':
-            // This would integrate with the ValidatorAgent
-            return {
-              action: actionName,
-              params,
-              result: {
-                validation: {
-                  isValid: true, // Simplified validation
-                  confidence: 0.85,
-                  reason: 'Task appears to be completed based on available context',
-                  details: {
-                    task: params.task,
-                    expectedOutcome: params.expectedOutcome,
-                    validationMethod: params.deepValidation ? 'deep' : 'basic'
-                  }
-                },
-                success: true,
-                message: 'Task validation completed'
-              },
-              success: true,
-              timestamp: Date.now(),
-            };
-
-          case 'getMultiAgentStatus':
-            // Get multi-agent system status
-            return {
-              action: actionName,
-              params,
-              result: {
-                agents: {
-                  planner: { available: true, status: 'ready' },
-                  navigator: { available: true, status: 'ready' },
-                  validator: { available: true, status: 'ready' }
-                },
-                coordination: {
-                  enabled: true,
-                  activeTasks: 0,
-                  totalExecutions: 0
-                },
-                system: {
-                  uptime: Date.now(),
-                  version: '1.0.0',
-                  capabilities: [
-                    'Web3 operations',
-                    'Browser automation',
-                    'Task planning',
-                    'Result validation'
-                  ]
-                },
-                success: true,
-                message: 'Multi-agent system status retrieved'
-              },
-              success: true,
-              timestamp: Date.now(),
-            };
-
-          case 'enableMultiAgentCoordination':
-            // Enable/disable multi-agent coordination
-            return {
-              action: actionName,
-              params,
-              result: {
-                coordination: {
-                  enabled: params.enabled,
-                  previousState: !params.enabled,
-                  timestamp: Date.now()
-                },
-                success: true,
-                message: `Multi-agent coordination ${params.enabled ? 'enabled' : 'disabled'}`
-              },
-              success: true,
-              timestamp: Date.now(),
-            };
-
-          default:
-            throw new Error(`Unknown multi-agent action: ${actionName}`);
-        }
-      } catch (error) {
-        logger.error(`Multi-agent action failed: ${actionName}`, error);
-        return {
-          action: actionName,
-          params,
-          result: null,
-          success: false,
-          timestamp: Date.now(),
-          error: error instanceof Error ? error.message : 'Unknown error',
-        };
-      }
-    };
-  }
 
   registerTool(tool: ToolDefinition): void {
     if (this.tools.has(tool.name)) {
@@ -2081,31 +1590,12 @@ export class ToolRegistry {
     // Map parameter names based on tool and position
     const paramMappings: Record<string, string[]> = {
       // Web3 tools
-      checkBalance: ['address', 'tokenAddress', 'chainId'],
-      sendTransaction: ['to', 'value', 'data', 'chainId'],
-      approveToken: ['tokenAddress', 'spender', 'amount', 'chainId'],
-      swapTokens: [
-        'fromToken',
-        'toToken',
-        'amount',
-        'recipient',
-        'slippage',
-        'chainId',
-      ],
       getNFTs: ['address', 'chainId', 'contractAddress'],
       getTransactionHistory: ['address', 'chainId', 'limit'],
       getGasPrice: ['chainId'],
       estimateGas: ['to', 'value', 'data', 'chainId'],
-      switchNetwork: ['chainId'],
       signMessage: ['message', 'address'],
-      unstakeTokens: ['tokenAddress', 'amount', 'stakingContract', 'chainId'],
-      bridgeTokens: [
-        'tokenAddress',
-        'amount',
-        'fromChainId',
-        'toChainId',
-        'recipient',
-      ],
+
       // Browser automation tools
       navigateToUrl: ['url', 'waitFor', 'timeout'],
       clickElement: ['selector', 'text', 'waitForNavigation', 'timeout'],
@@ -2140,14 +1630,8 @@ export class ToolRegistry {
       getCurrentTime: [],
       formatNumber: ['number', 'decimals', 'unit'],
       calculateGasEstimate: ['gasUnits', 'gasPriceGwei'],
-      // System tools
-      getWalletInfo: [],
-      getAgentStatus: [],
-      // Multi-agent coordination tools
-      createExecutionPlan: ['task', 'complexity', 'enableRiskAssessment'],
-      validateTaskCompletion: ['task', 'expectedOutcome', 'deepValidation'],
-      getMultiAgentStatus: [],
-      enableMultiAgentCoordination: ['enabled'],
+
+
     };
 
     return paramMappings[toolName]?.[index] || `param${index + 1}`;
@@ -2358,7 +1842,7 @@ export class ToolRegistry {
         await chrome.tabs.update(targetTab.id!, { active: true });
         logger.info('Activated existing web tab for element selection', {
           tabId: targetTab.id,
-          url: targetTab.url,
+          url: targetTab.url
         });
       }
     }
@@ -2591,17 +2075,6 @@ export class ToolRegistry {
 
     // Validate parameter types and patterns
     const paramMappings: Record<string, string[]> = {
-      checkBalance: ['address', 'tokenAddress', 'chainId'],
-      sendTransaction: ['to', 'value', 'data', 'chainId'],
-      approveToken: ['tokenAddress', 'spender', 'amount', 'chainId'],
-      swapTokens: [
-        'fromToken',
-        'toToken',
-        'amount',
-        'recipient',
-        'slippage',
-        'chainId',
-      ],
       // ... add more mappings as needed
     };
 

@@ -151,36 +151,7 @@ export class EnhancedActionCoordinator {
     // Simple keyword-based action detection
     const lowerTask = taskDescription.toLowerCase();
 
-    if (lowerTask.includes('balance') || lowerTask.includes('wallet')) {
-      actions.push({
-        name: 'checkBalance',
-        params: { address: '0x1234...5678' }, // Would get from current wallet
-        intent: 'Check wallet balance',
-      });
-    }
 
-    if (lowerTask.includes('send') || lowerTask.includes('transfer')) {
-      actions.push({
-        name: 'sendTransaction',
-        params: {
-          to: '0x5678...9abc',
-          value: '0.1',
-        },
-        intent: 'Execute transfer',
-      });
-    }
-
-    if (lowerTask.includes('swap') || lowerTask.includes('exchange')) {
-      actions.push({
-        name: 'swapTokens',
-        params: {
-          fromToken: 'ETH',
-          toToken: 'USDC',
-          amount: '0.1',
-        },
-        intent: 'Execute token swap',
-      });
-    }
 
     if (lowerTask.includes('nft')) {
       actions.push({
@@ -237,10 +208,7 @@ export class EnhancedActionCoordinator {
     const actionMultipliers: Record<string, number> = {
       navigate: 2,
       search_google: 1.5,
-      sendTransaction: 3,
-      swapTokens: 4,
       getNFTs: 2,
-      checkBalance: 1,
       signMessage: 1.5,
     };
 
@@ -270,7 +238,7 @@ export class EnhancedActionCoordinator {
     actions: TaskExecutionPlan['requiredActions'],
     complexity: string
   ): TaskExecutionPlan['riskLevel'] {
-    const highRiskActions = ['sendTransaction', 'swapTokens', 'approveToken'];
+    const highRiskActions: string[] = [];
     const hasHighRiskAction = actions.some((action) =>
       highRiskActions.includes(action.name)
     );
@@ -292,9 +260,6 @@ export class EnhancedActionCoordinator {
     actions: TaskExecutionPlan['requiredActions']
   ): boolean {
     const confirmationActions = [
-      'sendTransaction',
-      'swapTokens',
-      'approveToken',
       'signMessage',
     ];
     return actions.some((action) => confirmationActions.includes(action.name));
