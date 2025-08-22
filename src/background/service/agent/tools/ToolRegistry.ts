@@ -582,33 +582,105 @@ export class ToolRegistry {
       requiresConfirmation: false,
     });
 
+    // Removed legacy extractContent tool. Add new nanobrowser-style parsing tools
+
     this.registerTool({
-      name: 'extractContent',
-      description: 'Extract content from web pages using CSS selectors',
-      parameters: [
-        {
-          type: 'string',
-          description: 'CSS selector to extract content from',
-        },
-        {
-          type: 'string',
-          description: 'Type of content to extract',
-          enum: ['text', 'html', 'value', 'attribute'],
-        },
-        {
-          type: 'boolean',
-          description: 'Optional: Extract multiple elements',
-        },
-        {
-          type: 'string',
-          description: 'Optional: Attribute name if type is "attribute"',
-        },
-      ],
-      required: ['selector'],
-      handler: this.createBrowserHandler('extractContent'),
-      category: 'web3',
+      name: 'getPageTextSnapshot',
+      description: 'Get a comprehensive visible-text snapshot of the current page (nanobrowser-style)',
+      parameters: [],
+      required: [],
+      handler: async (_params: any) => {
+        const start = Date.now();
+        const log = (level: 'info' | 'warn' | 'error', msg: string, data?: any) => {
+          try { (console as any)[level](`[ToolRegistry][getPageTextSnapshot] ${msg}`, data || {}); } catch {}
+        };
+        const { IndexBasedElementSelector } = await import('../agents/ElementSelector');
+        const selector = new IndexBasedElementSelector();
+        const activeTab = await this.getOrCreateActiveTab();
+        if (!activeTab.id) throw new Error('No active tab');
+        try { await this.ensureContentScriptAvailable(activeTab.id); } catch (e) { log('warn', 'ensureContentScriptAvailable failed', { error: (e as any)?.message }); }
+        log('info', 'Invoking selector.getPageTextSnapshot', { tabId: activeTab.id, url: activeTab.url });
+        const snapshot = await selector.getPageTextSnapshot(activeTab.id);
+        log('info', 'Snapshot received', { length: snapshot?.length, wordCount: snapshot?.wordCount });
+        return { success: true, data: snapshot, timing: Date.now() - start };
+      },
+      category: 'browser',
       riskLevel: 'low',
       requiresConfirmation: false,
+      requiredPermissions: ['scripting', 'activeTab']
+    });
+
+    this.registerTool({
+      name: 'getAllVisibleText',
+      description: 'Get normalized visible text from the current page',
+      parameters: [],
+      required: [],
+      handler: async (_params: any) => {
+        const start = Date.now();
+        const { IndexBasedElementSelector } = await import('../agents/ElementSelector');
+        const selector = new IndexBasedElementSelector();
+        const activeTab = await this.getOrCreateActiveTab();
+        if (!activeTab.id) throw new Error('No active tab');
+        try { await this.ensureContentScriptAvailable(activeTab.id); } catch {}
+        const text = await selector.getAllVisibleText(activeTab.id);
+        return {
+          success: true,
+          data: { text, length: text.length, wordCount: text.split(/\s+/).filter(Boolean).length },
+          timing: Date.now() - start,
+        };
+      },
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+      requiredPermissions: ['scripting', 'activeTab']
+    });
+
+    this.registerTool({
+      name: 'getPageElements',
+      description: 'Get interactive elements on the page with indices and metadata',
+      parameters: [],
+      required: [],
+      handler: async (_params: any) => {
+        const start = Date.now();
+        const { IndexBasedElementSelector } = await import('../agents/ElementSelector');
+        const selector = new IndexBasedElementSelector();
+        const activeTab = await this.getOrCreateActiveTab();
+        if (!activeTab.id) throw new Error('No active tab');
+        try { await this.ensureContentScriptAvailable(activeTab.id); } catch {}
+        const result = await selector.getPageElements(activeTab.id);
+        return { success: true, data: result, timing: Date.now() - start };
+      },
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+      requiredPermissions: ['scripting', 'activeTab']
+    });
+
+    this.registerTool({
+      name: 'evaluatePageCompletion',
+      description: 'Evaluate task completion based on include/exclude criteria against page text',
+      parameters: [
+        {
+          type: 'object',
+          description: 'Completion criteria: { includeAll?, includeAny?, excludeAny?, regexIncludeAll?, regexExcludeAny?, minWordCount? }'
+        }
+      ],
+      required: ['criteria'],
+      handler: async (params: any) => {
+        const start = Date.now();
+        if (!params || typeof params.criteria !== 'object') throw new Error('criteria object required');
+        const { IndexBasedElementSelector } = await import('../agents/ElementSelector');
+        const selector = new IndexBasedElementSelector();
+        const activeTab = await this.getOrCreateActiveTab();
+        if (!activeTab.id) throw new Error('No active tab');
+        try { await this.ensureContentScriptAvailable(activeTab.id); } catch {}
+        const result = await selector.evaluateCompletion(activeTab.id, params.criteria);
+        return { success: true, data: result, timing: Date.now() - start };
+      },
+      category: 'browser',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+      requiredPermissions: ['scripting', 'activeTab']
     });
 
     this.registerTool({
@@ -1327,9 +1399,9 @@ export class ToolRegistry {
           timestamp: startTime,
         });
 
-        // Validate input parameters
+        // Validate input parameters (allow defaults for certain actions)
         if (!params || typeof params !== 'object') {
-          throw new Error(`Invalid parameters received: ${JSON.stringify(params)}`);
+            throw new Error(`Invalid parameters received: ${JSON.stringify(params)}`);
         }
 
         // Create browser automation controller
@@ -1399,60 +1471,25 @@ export class ToolRegistry {
           };
         }
 
+        // no-op for removed extractContent
+
         // Validate required parameters for specific actions
         if (actionName === 'navigateToUrl') {
           console.log(`🚨🚨🚨 [${executionId}] VALIDATING navigateToUrl PARAMETERS`, {
             params,
             hasUrl: !!params.url,
-            urlValue: params.url,
             urlType: typeof params.url,
-            isUrlOf: params.url === 'of',
-            urlStartsWithHttp: params.url && params.url.startsWith('http'),
-            fullParams: JSON.stringify(params),
+            urlValue: params.url,
           });
 
-          if (!params.url) {
-            throw new Error('url parameter is required for navigateToUrl');
+          if (!params.url || typeof params.url !== 'string') {
+            throw new Error('navigateToUrl requires a valid URL string');
           }
-
-          // Normalize common issues (e.g., missing protocol, SSE/JSON corruption)
-          let normalizedUrl = String(params.url).trim();
-
-          // Case: corrupted to 'of' or quoted fragments — try to extract a URL from any param string
-          if (normalizedUrl === 'of') {
-            try {
-              const raw = JSON.stringify(params);
-              const m = raw.match(/https?:\/\/[^\s"']+/);
-              if (m) normalizedUrl = m[0];
-            } catch {}
-          }
-
-          // If still no protocol but looks like a domain, prefix https://
-          if (!/^https?:\/\//i.test(normalizedUrl)) {
-            const looksLikeDomain = /^(?:[\w-]+\.)+[a-z]{2,}(?:\/.*)?$/i.test(normalizedUrl);
-            if (looksLikeDomain) {
-              normalizedUrl = `https://${normalizedUrl}`;
-            }
-          }
-
-          // Final validation
-          if (!/^https?:\/\//i.test(normalizedUrl)) {
-            logger.warn(`[${executionId}] Invalid URL format detected`, {
-              url: params.url,
-              normalizedUrl,
-              urlType: typeof params.url,
-              executionId,
-            });
-            throw new Error(`Invalid URL format: ${params.url}. URL must start with http:// or https://`);
-          }
-
-          // Apply normalization to processed params for execution
-          processedParams = { ...params, url: normalizedUrl };
         }
 
-        // Create action step for compatibility
+        // Execute the action
         const actionStep = {
-          id: executionId,
+          id: `browser_${actionName}_${Date.now()}`,
           name: `Execute ${actionName}`,
           type: actionName,
           description: `Browser automation: ${actionName}`,
@@ -1461,103 +1498,180 @@ export class ToolRegistry {
           dependencies: [],
           riskLevel: 'MEDIUM' as const,
         };
-
-        // Enhanced debugging for navigateToUrl
-        if (actionName === 'navigateToUrl') {
-          logger.info(`[${executionId}] EXECUTING navigateToUrl - FINAL PARAMETER CHECK`, {
-            actionName,
-            processedParams,
-            urlValue: processedParams.url,
-            urlType: typeof processedParams.url,
-            isUrlOf: processedParams.url === 'of',
-            hasValidUrl: processedParams.url && processedParams.url !== 'of' && processedParams.url.startsWith('http'),
-            fullProcessedParams: JSON.stringify(processedParams),
-            actionStepId: actionStep.id,
-          });
-        }
-
-        // Execute browser action
         const result = await browserController.executeAction(actionStep);
 
-        // Ensure browser actions settle before LLM continues
-        if (
-          actionName === 'navigateToUrl' ||
-          actionName === 'openNewTab' ||
-          actionName === 'switchTab' ||
-          (actionName === 'clickElement' && (params?.waitForNavigation === true))
-        ) {
-          await new Promise((r) => setTimeout(r, 1000));
-        }
-
         const executionTime = Date.now() - startTime;
-
-        // Enhanced result debugging for navigateToUrl
-        if (actionName === 'navigateToUrl') {
-          logger.info(`[${executionId}] navigateToUrl COMPLETED - RESULT ANALYSIS`, {
+        logger.info(`[${executionId}] Browser automation action completed`, {
             actionName,
-            success: result.success,
-            hasData: !!result.data,
-            hasError: !!result.error,
-            executionTime,
-            resultData: result.data ? JSON.stringify(result.data) : null,
-            urlInResult: result.data?.url,
-            urlInResultType: typeof result.data?.url,
-            isUrlInResultOf: result.data?.url === 'of',
-            methodUsed: result.data?.method,
-            fullResult: JSON.stringify(result),
-          });
-        }
-
-        logger.info(`[${executionId}] Browser action completed`, {
-          actionName,
           success: result.success,
+          executionTime,
           hasData: !!result.data,
           hasError: !!result.error,
-          executionTime,
-          resultData: result.data ? JSON.stringify(result.data).substring(0, 200) : undefined,
         });
 
-        // Shape result for LLM ReAct friendliness
-        let llmResult = result.data;
+        // Monitor tab state after tool execution
+        await this.monitorTabStateAfterTool(actionName, result);
 
-        return {
-          action: actionName,
-          params: processedParams,
-          data: llmResult,
-          result: llmResult,
-          success: result.success,
-          timestamp: Date.now(),
-          error: result.error,
-          screenshot: result.screenshot,
-          timing: result.timing || executionTime,
-          executionId,
-        };
+        return this.ensureStandardResult(actionName, processedParams, result);
+
       } catch (error) {
-        // Remove from tracker on error to allow retries
-        try {
-          const normalizedUrl = (params && typeof params.url === 'string') ? String(params.url).trim().toLowerCase() : '';
-          const duplicateKey = actionName === 'navigateToUrl'
-            ? `${actionName}_${normalizedUrl}`
-            : `${actionName}_${JSON.stringify(params)}`;
-          this.executionTracker.delete(duplicateKey);
-        } catch {}
-
         const executionTime = Date.now() - startTime;
-        logger.error(`[${executionId}] Browser automation action failed: ${actionName}`, {
+        logger.error(`[${executionId}] Browser automation action failed`, {
+            actionName,
           error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
+            executionTime,
           params,
-          executionTime,
-          executionId,
         });
+
         return {
-          action: actionName,
-          params,
-          result: null,
           success: false,
-          timestamp: Date.now(),
-          error: error instanceof Error ? error.message : 'Unknown error',
+          error: error instanceof Error ? error.message : 'Browser automation failed',
+          data: null,
+          timing: executionTime,
+        };
+      }
+    };
+  }
+
+  private createDirectExtractContentHandler() {
+    return async (params: any) => {
+      const startTime = Date.now();
+      const executionId = `extract_${Date.now()}`;
+
+      try {
+        logger.info(`[${executionId}] Starting direct content extraction`, {
+          params,
           executionId,
+          timestamp: startTime,
+        });
+
+        // Validate input parameters
+        if (!params || typeof params !== 'object') {
+          params = {};
+        }
+
+        // Import ElementSelector for direct functionality
+        const { IndexBasedElementSelector } = await import('../agents/ElementSelector');
+        const elementSelector = new IndexBasedElementSelector();
+
+        // Get active tab
+        const activeTab = await this.getOrCreateActiveTab();
+        if (!activeTab.id) {
+          throw new Error('No active tab available for content extraction');
+        }
+
+        let result: any;
+
+        // Handle different extraction types directly
+        switch (params.type) {
+          case 'snapshot':
+            // Get comprehensive page snapshot
+            const snapshot = await elementSelector.getPageTextSnapshot(activeTab.id);
+            result = {
+              success: true,
+              data: {
+                type: 'snapshot',
+                snapshot,
+                url: snapshot.url,
+                title: snapshot.title,
+                textLength: snapshot.length,
+                wordCount: snapshot.wordCount,
+                headings: snapshot.headings,
+                links: snapshot.links,
+                inputs: snapshot.inputs,
+                meta: snapshot.meta,
+                timestamp: snapshot.timestamp,
+              },
+              timing: Date.now() - startTime,
+            };
+            break;
+
+          case 'elements':
+            // Get all interactive elements
+            const elementsResult = await elementSelector.getPageElements(activeTab.id);
+            result = {
+              success: true,
+              data: {
+                type: 'elements',
+                elements: elementsResult.elements,
+                count: elementsResult.elements.length,
+                confidence: elementsResult.confidence,
+                reasoning: elementsResult.reasoning,
+              },
+              timing: Date.now() - startTime,
+            };
+            break;
+
+          case 'completion':
+            // Evaluate completion criteria
+            if (!params.criteria) {
+              throw new Error('Completion criteria required for completion type');
+            }
+            const completionResult = await elementSelector.evaluateCompletion(
+              activeTab.id,
+              params.criteria
+            );
+            result = {
+              success: true,
+              data: {
+                type: 'completion',
+                completed: completionResult.completed,
+                score: completionResult.score,
+                matched: completionResult.matched,
+                missing: completionResult.missing,
+                excludedMatched: completionResult.excludedMatched,
+                reasoning: completionResult.reasoning,
+                snapshot: completionResult.snapshot,
+              },
+              timing: Date.now() - startTime,
+            };
+            break;
+
+          case 'text':
+          default:
+            // Get visible text using enhanced extraction (selector-specific extraction removed)
+            const text = await elementSelector.getAllVisibleText(activeTab.id);
+            result = {
+              success: true,
+              data: {
+                type: 'text',
+                content: text,
+                length: text.length,
+                wordCount: text.split(/\s+/).filter(Boolean).length,
+                selector: params.selector || 'body',
+              },
+              timing: Date.now() - startTime,
+            };
+            break;
+
+          case 'html':
+          case 'value':
+          case 'attribute':
+            // Legacy HTML/value/attribute extraction removed; not supported in new tool
+            throw new Error('html/value/attribute extraction is removed. Use snapshot/text/elements/completion instead.');
+            break;
+        }
+
+        logger.info(`[${executionId}] Direct content extraction completed`, {
+          success: result.success,
+          executionTime: Date.now() - startTime,
+          hasData: !!result.data,
+        });
+
+        return result;
+
+      } catch (error) {
+        const executionTime = Date.now() - startTime;
+        logger.error(`[${executionId}] Direct content extraction failed`, {
+          error: error instanceof Error ? error.message : String(error),
+          executionTime,
+          params,
+        });
+
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Content extraction failed',
+          data: null,
           timing: executionTime,
         };
       }
@@ -1996,7 +2110,11 @@ export class ToolRegistry {
       navigateToUrl: ['url', 'waitFor', 'timeout'],
       clickElement: ['selector', 'text', 'waitForNavigation', 'timeout'],
       fillForm: ['fields', 'submit'],
-      extractContent: ['selector', 'type', 'multiple', 'attribute'],
+      // extractContent removed
+      getPageTextSnapshot: [],
+      getAllVisibleText: [],
+      getPageElements: [],
+      evaluatePageCompletion: ['criteria'],
       waitFor: ['condition', 'timeout', 'selector'],
       takeScreenshot: ['selector', 'fullPage'],
       scrollPage: ['direction', 'selector', 'amount'],

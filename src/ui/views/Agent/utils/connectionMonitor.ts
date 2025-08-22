@@ -108,14 +108,6 @@ export class ConnectionMonitor {
         }
         break;
     }
-
-    // Log to structured logger
-    logger.debug('ConnectionMonitor', `Connection event: ${type}`, {
-      timestamp: new Date(timestamp).toISOString(),
-      type,
-      details,
-      currentMetrics: this.getMetrics(),
-    });
   }
 
   /**

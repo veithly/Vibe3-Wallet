@@ -200,7 +200,7 @@ Available automation tools:
 - navigate: Open URLs and navigate between pages
 - click: Click buttons, links, and interactive elements
 - fill_form: Fill out forms with provided data
-- extract_content: Extract text, data, or HTML from pages
+- parse_page: Parse page text and metadata (nanobrowser-style)
 - wait_for: Wait for elements or conditions
 - scroll: Scroll pages to reveal content
 - screenshot: Capture page screenshots`,
@@ -259,7 +259,7 @@ Execute the requested browser automation or provide guidance on how to accomplis
         'navigate',
         'click',
         'fill_form',
-        'extract_content',
+        'parse_page',
         'wait_for',
         'scroll',
         'screenshot',

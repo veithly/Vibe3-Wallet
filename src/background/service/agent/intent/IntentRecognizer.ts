@@ -36,7 +36,6 @@ export type Web3ActionType =
   | 'NAVIGATE'
   | 'CLICK'
   | 'FILL_FORM'
-  | 'EXTRACT_CONTENT'
   | 'SCROLL'
   | 'SCREENSHOT'
   | 'WAIT'
@@ -284,18 +283,6 @@ export class IntentRecognizer {
         requiredEntities: ['fields'],
         optionalEntities: ['submit'],
         weight: 0.85,
-      },
-      {
-        action: 'EXTRACT_CONTENT',
-        patterns: [
-          /extract\s+(?:the\s+)?(?:content|text)\s+(?:from\s+)?(.+)/i,
-          /get\s+(?:the\s+)?(?:content|text)\s+(?:from\s+)?(.+)/i,
-          /提取\s+(?:内容|文本)\s+(?:从\s+)?(.+)/i,
-          /获取\s+(?:内容|文本)\s+(?:从\s+)?(.+)/i,
-        ],
-        requiredEntities: ['selector'],
-        optionalEntities: ['type'],
-        weight: 0.8,
       },
       {
         action: 'SCREENSHOT',
@@ -555,8 +542,6 @@ export class IntentRecognizer {
       } catch (error) {
         entities.fields = [{ value: match[1], type: 'text' }];
       }
-    } else if (pattern.action === 'EXTRACT_CONTENT' && match.length >= 2) {
-      entities.selector = match[1];
     } else if (pattern.action === 'WAIT' && match.length >= 2) {
       entities.condition = match[1];
     } else if (pattern.action === 'SCROLL' && match.length >= 2) {
@@ -600,7 +585,7 @@ export class IntentRecognizer {
 
   private parseFormFields(fieldsText: string): Array<{name?: string; selector?: string; value: string; type?: string}> {
     const fields: Array<{name?: string; selector?: string; value: string; type?: string}> = [];
-    
+
     // Simple parsing for common patterns
     // This could be enhanced with more sophisticated NLP in the future
     const fieldPatterns = [
@@ -614,14 +599,12 @@ export class IntentRecognizer {
       while ((match = pattern.exec(fieldsText)) !== null) {
         const field = match[1]?.trim();
         const value = match[2]?.trim();
-        
         if (field && value) {
           // Try to determine field type
           let type = 'text';
           if (value.includes('@')) type = 'email';
           else if (/^\d+$/.test(value)) type = 'number';
           else if (value.toLowerCase().includes('password')) type = 'password';
-          
           fields.push({
             name: field,
             value: value,

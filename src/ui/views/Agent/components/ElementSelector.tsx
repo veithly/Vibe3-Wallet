@@ -101,6 +101,32 @@ export const ElementSelector: React.FC<ElementSelectorProps> = ({
 
   // New Debug Panel state
   const [elements, setElements] = useState<Array<ElementHighlight>>([]);
+  const [activeTab, setActiveTab] = useState<'selector' | 'scan'>('selector');
+  const [pageScanResults, setPageScanResults] = useState<{
+    snapshot?: any;
+    visibleText?: string;
+    elements?: any[];
+    completionResult?: any;
+  }>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggleExpand = useCallback((key: string) => {
+    setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+  const copyToClipboard = useCallback(async (value: any) => {
+    try {
+      const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+      await navigator.clipboard.writeText(text);
+      try { console.info('[ElementSelector][UI] Copied to clipboard'); } catch {}
+    } catch (e) {
+      logger.warn('Copy failed', e);
+      alert('Copy failed');
+    }
+  }, []);
+  const previewText = useCallback((text?: string, n: number = 200) => {
+    if (!text) return '';
+    return text.length > n ? text.slice(0, n) + '...' : text;
+  }, []);
+
   // Bridge logging: log in panel console and mirror to page console via content script
   const uiLog = useCallback((...args: any[]) => {
     try { console.info('[ElementSelector][UI]', ...args); } catch {}
@@ -167,6 +193,9 @@ export const ElementSelector: React.FC<ElementSelectorProps> = ({
       return res.result;
     } catch (e) {
       logger.error('Tool execution failed', name, params, e);
+      // Provide user-visible hint for permissions/content-script issues
+      // Replace alert with UI console log
+      try { console.warn('[ElementSelector][UI] Tool failed', { name, error: (e as any)?.message }); } catch {}
       throw e;
     }
   }, []);
@@ -340,168 +369,486 @@ export const ElementSelector: React.FC<ElementSelectorProps> = ({
     }
   }, []);
 
-  // Render the new full debug panel (no modal)
+  // Render the new full debug panel with tabs
   if (isActive) {
     return (
       <div className={`overflow-auto p-4 w-full h-full ${className}`}>
-        {/* Compact Header */}
-        <div className="flex flex-wrap gap-2 justify-between items-center mb-3">
-          <div className="flex gap-2 items-center">
-            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            <h3 className="text-base font-medium text-gray-900">Elements</h3>
-            {loading && <div className="w-3 h-3 rounded-full border-2 border-blue-600 animate-spin border-t-transparent"></div>}
-            <span className="text-xs text-gray-500">({elements.length})</span>
-            <CDPStatusIndicator />
-          </div>
-
-          <div className="flex gap-1 items-center">
-            {/* Scan Mode Toggle */}
-            <div className="inline-flex overflow-hidden mr-2 rounded border border-gray-300">
-              <button type="button"
-                className={`px-2 py-1 text-xs ${scanMode === 'interactive' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
-                onClick={() => setScanMode('interactive')}
-                title="Interactive elements only"
-              >
-                Interactive
-              </button>
-              <button type="button"
-                className={`px-2 py-1 text-xs border-l border-gray-300 ${scanMode === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
-                onClick={() => setScanMode('all')}
-                title="All visible elements"
-              >
-                All
-              </button>
+        {/* Tab Navigation */}
+        <div className="flex mb-4 border-b border-gray-200">
+          <button
+            type="button"
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'selector'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+            onClick={() => setActiveTab('selector')}
+          >
+            <div className="flex gap-2 items-center">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              Element Selector
             </div>
-
-            <button type="button" className="px-3 py-1 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700" onClick={scanInteractive} disabled={loading}>
-              {loading ? 'Scanning...' : 'Scan'}
-            </button>
-            <button type="button" className="px-2 py-1 text-xs text-white bg-emerald-600 rounded hover:bg-emerald-700" onClick={() => { highlightAll(); setHighlightedElements(elements); }} disabled={elements.length === 0} title="Highlight all elements">
-              All
-            </button>
-            <button type="button" className="px-2 py-1 text-xs text-gray-700 bg-gray-200 rounded hover:bg-gray-300" onClick={clearHighlights} title="Clear highlights">
-              Clear
-            </button>
-          </div>
+          </button>
+          <button
+            type="button"
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'scan'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+            onClick={() => setActiveTab('scan')}
+          >
+            <div className="flex gap-2 items-center">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Page Scan
+            </div>
+          </button>
         </div>
 
-        {/* Compact Filters */}
-        <div className="flex gap-2 mb-3">
-          <input value={elementType} onChange={(e) => setElementType(e.target.value)} placeholder="Type filter (e.g. button)" className="px-2 py-1 w-32 text-xs rounded border border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-          <input value={filterText} onChange={(e) => setFilterText(e.target.value)} placeholder="Text filter" className="flex-1 px-2 py-1 text-xs rounded border border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-        </div>
-
-        {/* Main content */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 min-h-0 h-[calc(100%-6rem)]">
-          {/* Left: list */}
-          <div className="flex flex-col min-h-0">
-            <div className="overflow-auto flex-1 rounded border border-gray-200">
-              <table className="min-w-full text-xs">
-                <thead className="sticky top-0 text-gray-600 bg-gray-50">
-                  <tr>
-                    <th className="px-1 py-1 w-8 text-left">#</th>
-                    <th className="px-1 py-1 w-16 text-left">Tag</th>
-                    <th className="px-1 py-1 text-left">Text</th>
-                    <th className="px-1 py-1 w-40 text-left">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {elements.map((el, idx) => (
-                    <tr key={el.id ?? el.selector + idx} className={`border-t hover:bg-gray-50 cursor-pointer ${selectedItem?.selector === el.selector ? 'bg-blue-50' : ''}`} onClick={() => setSelectedItem(el)}>
-                      <td className="px-1 py-1 text-xs text-gray-500 align-top">{idx + 1}</td>
-                      <td className="px-1 py-1 align-top">
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                          {el.element?.tagName || '?'}
-                        </span>
-                      </td>
-                      <td className="px-1 py-1 max-w-0 text-xs text-gray-700 truncate align-top" title={el.element?.textContent || el.selector}>
-                        {el.element?.textContent || el.selector}
-                      </td>
-                      <td className="px-1 py-1 align-top">
-                        <div className="flex flex-wrap gap-0.5">
-                          {getElementActions(el).map(action => (
-                            <button
-                              key={action.name}
-                              type="button"
-                              className={`px-1.5 py-0.5 text-xs text-white rounded hover:opacity-90 ${action.color}`}
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                setSelectedItem(el);
-                                await action.handler(el);
-                              }}
-                              title={`${action.name} this element`}
-                            >
-                              {action.name}
-                            </button>
-                          ))}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {elements.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="px-3 py-6 text-xs text-center text-gray-500">No elements. Click Scan to fetch interactive elements.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Right: details & actions */}
-          <div className="flex flex-col h-full">
-            <h4 className="mb-2 text-xs font-medium text-gray-900">Selected Element</h4>
-            {!selectedItem ? (
-              <div className="flex flex-1 justify-center items-center text-xs text-gray-400 rounded border border-gray-200 border-dashed">
-                Select an element from the list
+        {/* Tab Content */}
+        {activeTab === 'selector' && (
+          <div>
+            {/* Element Selector Tab */}
+            <div className="flex flex-wrap gap-2 justify-between items-center mb-3">
+              <div className="flex gap-2 items-center">
+                <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                <h3 className="text-base font-medium text-gray-900">Elements</h3>
+                {loading && <div className="w-3 h-3 rounded-full border-2 border-blue-600 animate-spin border-t-transparent"></div>}
+                <span className="text-xs text-gray-500">({elements.length})</span>
+                <CDPStatusIndicator />
               </div>
-            ) : (
-              <div className="overflow-auto flex-1 p-2 space-y-2 rounded border border-gray-200">
-                <div>
-                  <label className="block mb-1 text-xs font-medium text-gray-700">Selector</label>
-                  <code className="block px-2 py-1 font-mono text-xs text-gray-800 break-all bg-gray-100 rounded">{selectedItem.selector}</code>
+
+              <div className="flex gap-1 items-center">
+                {/* Scan Mode Toggle */}
+                <div className="inline-flex overflow-hidden mr-2 rounded border border-gray-300">
+                  <button type="button"
+                    className={`px-2 py-1 text-xs ${scanMode === 'interactive' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+                    onClick={() => setScanMode('interactive')}
+                    title="Interactive elements only"
+                  >
+                    Interactive
+                  </button>
+                  <button type="button"
+                    className={`px-2 py-1 text-xs border-l border-gray-300 ${scanMode === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+                    onClick={() => setScanMode('all')}
+                    title="All visible elements"
+                  >
+                    All
+                  </button>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block mb-1 text-xs font-medium text-gray-700">Tag</label>
-                    <div className="text-xs text-gray-900">{selectedItem.element?.tagName}</div>
-                  </div>
-                  <div>
-                    <label className="block mb-1 text-xs font-medium text-gray-700">Visible</label>
-                    <div className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${selectedItem.isVisible ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{selectedItem.isVisible ? 'Yes' : 'No'}</div>
-                  </div>
+
+                <button type="button" className="px-3 py-1 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700" onClick={scanInteractive} disabled={loading}>
+                  {loading ? 'Scanning...' : 'Scan'}
+                </button>
+                <button type="button" className="px-2 py-1 text-xs text-white bg-emerald-600 rounded hover:bg-emerald-700" onClick={() => { highlightAll(); setHighlightedElements(elements); }} disabled={elements.length === 0} title="Highlight all elements">
+                  All
+                </button>
+                <button type="button" className="px-2 py-1 text-xs text-gray-700 bg-gray-200 rounded hover:bg-gray-300" onClick={clearHighlights} title="Clear highlights">
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            {/* Compact Filters */}
+            <div className="flex gap-2 mb-3">
+              <input value={elementType} onChange={(e) => setElementType(e.target.value)} placeholder="Type filter (e.g. button)" className="px-2 py-1 w-32 text-xs rounded border border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              <input value={filterText} onChange={(e) => setFilterText(e.target.value)} placeholder="Text filter" className="flex-1 px-2 py-1 text-xs rounded border border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            </div>
+
+            {/* Main content */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 min-h-0 h-[calc(100%-8rem)]">
+              {/* Left: list */}
+              <div className="flex flex-col min-h-0">
+                <div className="overflow-auto flex-1 rounded border border-gray-200">
+                  <table className="min-w-full text-xs">
+                    <thead className="sticky top-0 text-gray-600 bg-gray-50">
+                      <tr>
+                        <th className="px-1 py-1 w-8 text-left">#</th>
+                        <th className="px-1 py-1 w-16 text-left">Tag</th>
+                        <th className="px-1 py-1 text-left">Text</th>
+                        <th className="px-1 py-1 w-40 text-left">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {elements.map((el, idx) => (
+                        <tr key={el.id ?? el.selector + idx} className={`border-t hover:bg-gray-50 cursor-pointer ${selectedItem?.selector === el.selector ? 'bg-blue-50' : ''}`} onClick={() => setSelectedItem(el)}>
+                          <td className="px-1 py-1 text-xs text-gray-500 align-top">{idx + 1}</td>
+                          <td className="px-1 py-1 align-top">
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                              {el.element?.tagName || '?'}
+                            </span>
+                          </td>
+                          <td className="px-1 py-1 max-w-0 text-xs text-gray-700 truncate align-top" title={el.element?.textContent || el.selector}>
+                            {el.element?.textContent || el.selector}
+                          </td>
+                          <td className="px-1 py-1 align-top">
+                            <div className="flex flex-wrap gap-0.5">
+                              {getElementActions(el).map(action => (
+                                <button
+                                  key={action.name}
+                                  type="button"
+                                  className={`px-1.5 py-0.5 text-xs text-white rounded hover:opacity-90 ${action.color}`}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    setSelectedItem(el);
+                                    await action.handler(el);
+                                  }}
+                                  title={`${action.name} this element`}
+                                >
+                                  {action.name}
+                                </button>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {elements.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="px-3 py-6 text-xs text-center text-gray-500">No elements. Click Scan to fetch interactive elements.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-                {selectedItem.element?.textContent && (
-                  <div>
-                    <label className="block mb-1 text-xs font-medium text-gray-700">Text</label>
-                    <div className="overflow-auto p-2 max-h-20 text-xs text-gray-700 bg-gray-50 rounded">{selectedItem.element?.textContent}</div>
+              </div>
+
+              {/* Right: details & actions */}
+              <div className="flex flex-col h-full">
+                <h4 className="mb-2 text-xs font-medium text-gray-900">Selected Element</h4>
+                {!selectedItem ? (
+                  <div className="flex flex-1 justify-center items-center text-xs text-gray-400 rounded border border-gray-200 border-dashed">
+                    Select an element from the list
+                  </div>
+                ) : (
+                  <div className="overflow-auto flex-1 p-2 space-y-2 rounded border border-gray-200">
+                    <div>
+                      <label className="block mb-1 text-xs font-medium text-gray-700">Selector</label>
+                      <code className="block px-2 py-1 font-mono text-xs text-gray-800 break-all bg-gray-100 rounded">{selectedItem.selector}</code>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block mb-1 text-xs font-medium text-gray-700">Tag</label>
+                        <div className="text-xs text-gray-900">{selectedItem.element?.tagName}</div>
+                      </div>
+                      <div>
+                        <label className="block mb-1 text-xs font-medium text-gray-700">Visible</label>
+                        <div className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${selectedItem.isVisible ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{selectedItem.isVisible ? 'Yes' : 'No'}</div>
+                      </div>
+                    </div>
+                    {selectedItem.element?.textContent && (
+                      <div>
+                        <label className="block mb-1 text-xs font-medium text-gray-700">Text</label>
+                        <div className="overflow-auto p-2 max-h-20 text-xs text-gray-700 bg-gray-50 rounded">{selectedItem.element?.textContent}</div>
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block mb-1 text-xs font-medium text-gray-700">Available Actions</label>
+                      <div className="flex flex-wrap gap-1">
+                        {getElementActions(selectedItem).map(action => (
+                          <button
+                            key={action.name}
+                            type="button"
+                            className={`px-2 py-1 text-xs text-white rounded hover:opacity-90 ${action.color}`}
+                            onClick={() => action.handler(selectedItem)}
+                            title={`${action.name} this element`}
+                          >
+                            {action.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
 
-                <div>
-                  <label className="block mb-1 text-xs font-medium text-gray-700">Available Actions</label>
-                  <div className="flex flex-wrap gap-1">
-                    {getElementActions(selectedItem).map(action => (
-                      <button
-                        key={action.name}
-                        type="button"
-                        className={`px-2 py-1 text-xs text-white rounded hover:opacity-90 ${action.color}`}
-                        onClick={() => action.handler(selectedItem)}
-                        title={`${action.name} this element`}
-                      >
-                        {action.name}
-                      </button>
-                    ))}
+        {activeTab === 'scan' && (
+          <div>
+            {/* Page Scan Tab */}
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h3 className="text-base font-medium text-gray-900">Page Analysis Tools</h3>
+                <div className="text-xs text-gray-500">Tab: {activeTabId ?? 'unknown'}</div>
+              </div>
+
+              {/* Scan Tools Grid */}
+              <div className="grid grid-cols-2 gap-4">
+                {/* Page Snapshot */}
+                <div className="p-4 rounded-lg border border-gray-200">
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-sm font-medium text-gray-900">Page Snapshot</h4>
+                    <button
+                      type="button"
+                      className="px-3 py-1 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700"
+                      onClick={async () => {
+                        try {
+                          const res = await executeTool('getPageTextSnapshot', {});
+                          const data = res?.data || res;
+                          setPageScanResults(prev => ({ ...prev, snapshot: data }));
+                          logger.info('Page Snapshot', data);
+                        } catch (e) {
+                          logger.error('getPageTextSnapshot failed', e);
+                        }
+                      }}
+                    >
+                      Capture
+                    </button>
                   </div>
+                  {pageScanResults.snapshot ? (
+                    <div className="space-y-1 text-xs">
+                      <div><strong>URL:</strong> {pageScanResults.snapshot.url}</div>
+                      <div><strong>Title:</strong> {pageScanResults.snapshot.title}</div>
+                      <div><strong>Word Count:</strong> {pageScanResults.snapshot.wordCount}</div>
+                      <div><strong>Length:</strong> {pageScanResults.snapshot.length}</div>
+                      <div className="mt-2">
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="font-medium">Text</span>
+                          <div className="flex gap-2">
+                            <button type="button" className="px-2 py-0.5 bg-gray-200 rounded hover:bg-gray-300" onClick={() => copyToClipboard(pageScanResults.snapshot)}>
+                              Copy JSON
+                            </button>
+                            <button type="button" className="px-2 py-0.5 bg-gray-200 rounded hover:bg-gray-300" onClick={() => toggleExpand('snapshotDetails')}>
+                              {expanded['snapshotDetails'] ? 'Hide Details' : 'Show Details'}
+                            </button>
+                            <button type="button" className="px-2 py-0.5 bg-gray-200 rounded hover:bg-gray-300" onClick={() => toggleExpand('snapshotText')}>
+                              {expanded['snapshotText'] ? 'Show Less' : 'Show More'}
+                            </button>
+                          </div>
+                        </div>
+                        {expanded['snapshotText'] ? (
+                          <div className="overflow-y-auto p-2 max-h-32 bg-gray-50 rounded">{pageScanResults.snapshot.text}</div>
+                        ) : (
+                          <div className="p-2 bg-gray-50 rounded">{previewText(pageScanResults.snapshot.text, 200)}</div>
+                        )}
+                        {expanded['snapshotDetails'] && (
+                          <div className="overflow-y-auto p-2 mt-2 max-h-40 bg-gray-50 rounded">
+                            <pre className="whitespace-pre-wrap">{JSON.stringify(pageScanResults.snapshot, null, 2)}</pre>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500">No snapshot captured</div>
+                  )}
                 </div>
 
+                {/* Visible Text */}
+                <div className="p-4 rounded-lg border border-gray-200">
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-sm font-medium text-gray-900">Visible Text</h4>
+                    <button
+                      type="button"
+                      className="px-3 py-1 text-xs font-medium text-white bg-indigo-600 rounded hover:bg-indigo-700"
+                      onClick={async () => {
+                        try {
+                          const res = await executeTool('getAllVisibleText', {});
+                          const text = res?.data?.text || res?.text || '';
+                          setPageScanResults(prev => ({ ...prev, visibleText: text }));
+                          logger.info('Visible Text', { length: text.length, sample: text.slice(0, 200) });
+                        } catch (e) {
+                          logger.error('getAllVisibleText failed', e);
+                        }
+                      }}
+                    >
+                      Extract
+                    </button>
+                  </div>
+                  {pageScanResults.visibleText ? (
+                    <div className="space-y-1 text-xs">
+                      <div><strong>Length:</strong> {pageScanResults.visibleText.length}</div>
+                      <div className="flex gap-2 mb-1">
+                        <button type="button" className="px-2 py-0.5 bg-gray-200 rounded hover:bg-gray-300" onClick={() => copyToClipboard(pageScanResults.visibleText!)}>
+                          Copy Text
+                        </button>
+                        <button type="button" className="px-2 py-0.5 bg-gray-200 rounded hover:bg-gray-300" onClick={() => toggleExpand('visibleText')}>
+                          {expanded['visibleText'] ? 'Show Less' : 'Show More'}
+                        </button>
+                      </div>
+                      {expanded['visibleText'] ? (
+                        <div className="overflow-y-auto p-2 max-h-40 bg-gray-50 rounded">
+                          {pageScanResults.visibleText}
+                        </div>
+                      ) : (
+                        <div className="p-2 bg-gray-50 rounded">{previewText(pageScanResults.visibleText, 200)}</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500">No text extracted</div>
+                  )}
+                </div>
 
+                {/* Page Elements */}
+                <div className="p-4 rounded-lg border border-gray-200">
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-sm font-medium text-gray-900">Page Elements</h4>
+                    <button
+                      type="button"
+                      className="px-3 py-1 text-xs font-medium text-white bg-violet-600 rounded hover:bg-violet-700"
+                      onClick={async () => {
+                        try {
+                          const res = await executeTool('getPageElements', {});
+                          const data = res?.data || res;
+                          const items = data?.elements || data?.items || [];
+                          setPageScanResults(prev => ({ ...prev, elements: items }));
+                          logger.info('Page Elements', { count: items.length, items });
+                        } catch (e) {
+                          logger.error('getPageElements failed', e);
+                        }
+                      }}
+                    >
+                      Scan
+                    </button>
+                  </div>
+                  {pageScanResults.elements ? (
+                    <div className="space-y-1 text-xs">
+                      <div><strong>Count:</strong> {pageScanResults.elements.length}</div>
+                      <div className="overflow-y-auto p-2 max-h-20 bg-gray-50 rounded">
+                        {pageScanResults.elements.slice(0, 5).map((el: any, idx: number) => (
+                          <div key={idx} className="mb-1">
+                            {el.tagName || el.element?.tagName}: {el.text || el.element?.textContent || 'No text'}
+                          </div>
+                        ))}
+                        {pageScanResults.elements.length > 5 && '...'}
+                      </div>
+                      <div className="flex gap-2 mt-1">
+                        <button type="button" className="px-2 py-0.5 bg-gray-200 rounded hover:bg-gray-300" onClick={() => copyToClipboard(pageScanResults.elements!)}>
+                          Copy JSON
+                        </button>
+                        <button type="button" className="px-2 py-0.5 bg-gray-200 rounded hover:bg-gray-300" onClick={() => toggleExpand('elementsDetails')}>
+                          {expanded['elementsDetails'] ? 'Hide Details' : 'Show Details'}
+                        </button>
+                      </div>
+                      {expanded['elementsDetails'] && (
+                        <div className="overflow-y-auto p-2 mt-2 max-h-40 bg-gray-50 rounded">
+                          <pre className="whitespace-pre-wrap">{JSON.stringify(pageScanResults.elements, null, 2)}</pre>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500">No elements scanned</div>
+                  )}
+                </div>
+
+                {/* Completion Evaluation */}
+                <div className="p-4 rounded-lg border border-gray-200">
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-sm font-medium text-gray-900">Completion Check</h4>
+                    <button
+                      type="button"
+                      className="px-3 py-1 text-xs font-medium text-white bg-amber-600 rounded hover:bg-amber-700"
+                      onClick={async () => {
+                        try {
+                          const raw = prompt('Completion criteria JSON (e.g. {"includeAll":["success"],"excludeAny":["error"]})') || '';
+                          if (!raw) return;
+                          const criteria = JSON.parse(raw);
+                          const res = await executeTool('evaluatePageCompletion', { criteria });
+                          const data = res?.data || res;
+                          setPageScanResults(prev => ({ ...prev, completionResult: { data } }));
+                          logger.info('Completion Result', data);
+                        } catch (e) {
+                          logger.error('evaluatePageCompletion failed', e);
+                          alert('Evaluate failed. Check console. Make sure JSON is valid.');
+                        }
+                      }}
+                    >
+                      Evaluate
+                    </button>
+                  </div>
+                  {pageScanResults.completionResult ? (
+                    <div className="space-y-2 text-xs">
+                      <div><strong>Completed:</strong> {pageScanResults.completionResult.data?.completed ? 'Yes' : 'No'}</div>
+                      <div><strong>Score:</strong> {pageScanResults.completionResult.data?.score ?? 'N/A'}</div>
+                      <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                        <div>
+                          <div className="font-medium">Matched includeAll</div>
+                          <div className="bg-gray-50 p-2 rounded min-h-[2rem]">
+                            {(pageScanResults.completionResult.data?.matched?.includeAll || []).slice(0,5).join(', ') || '—'}
+                            {(pageScanResults.completionResult.data?.matched?.includeAll || []).length > 5 && ' ...'}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="font-medium">Matched includeAny</div>
+                          <div className="bg-gray-50 p-2 rounded min-h-[2rem]">
+                            {(pageScanResults.completionResult.data?.matched?.includeAny || []).slice(0,5).join(', ') || '—'}
+                            {(pageScanResults.completionResult.data?.matched?.includeAny || []).length > 5 && ' ...'}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="font-medium">Missing includeAll</div>
+                          <div className="bg-gray-50 p-2 rounded min-h-[2rem]">
+                            {(pageScanResults.completionResult.data?.missing?.includeAll || []).slice(0,5).join(', ') || '—'}
+                            {(pageScanResults.completionResult.data?.missing?.includeAll || []).length > 5 && ' ...'}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                        <div>
+                          <div className="font-medium">Regex includeAll (matched)</div>
+                          <div className="bg-gray-50 p-2 rounded min-h-[2rem]">
+                            {(pageScanResults.completionResult.data?.matched?.regexIncludeAll || []).slice(0,5).join(', ') || '—'}
+                            {(pageScanResults.completionResult.data?.matched?.regexIncludeAll || []).length > 5 && ' ...'}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="font-medium">Excluded matched</div>
+                          <div className="bg-gray-50 p-2 rounded min-h-[2rem]">
+                            {[
+                              ...(pageScanResults.completionResult.data?.excludedMatched?.excludeAny || []),
+                              ...(pageScanResults.completionResult.data?.excludedMatched?.regexExcludeAny || []),
+                            ].slice(0,5).join(', ') || '—'}
+                            {([
+                              ...(pageScanResults.completionResult.data?.excludedMatched?.excludeAny || []),
+                              ...(pageScanResults.completionResult.data?.excludedMatched?.regexExcludeAny || []),
+                            ]).length > 5 && ' ...'}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button type="button" className="px-2 py-0.5 bg-gray-200 rounded hover:bg-gray-300" onClick={() => copyToClipboard(pageScanResults.completionResult.data)}>
+                          Copy JSON
+                        </button>
+                        <button type="button" className="px-2 py-0.5 bg-gray-200 rounded hover:bg-gray-300" onClick={() => toggleExpand('completionDetails')}>
+                          {expanded['completionDetails'] ? 'Hide Details' : 'Show Details'}
+                        </button>
+                      </div>
+                      {expanded['completionDetails'] && (
+                        <div className="overflow-y-auto p-2 mt-2 max-h-40 bg-gray-50 rounded">
+                          <pre className="whitespace-pre-wrap">{JSON.stringify(pageScanResults.completionResult.data, null, 2)}</pre>
+                        </div>
+                      )}
+                      <div className="overflow-y-auto p-2 max-h-20 bg-gray-50 rounded">
+                        {pageScanResults.completionResult.data?.reasoning || 'No reasoning available'}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500">No evaluation performed</div>
+                  )}
+                </div>
               </div>
-            )}
+
+              {/* Results Display */}
+              {(pageScanResults.snapshot || pageScanResults.visibleText || pageScanResults.elements || pageScanResults.completionResult) && (
+                <div className="p-4 mt-4 rounded-lg border border-gray-200">
+                  <h4 className="mb-3 text-sm font-medium text-gray-900">Raw Results</h4>
+                  <div className="overflow-y-auto max-h-40">
+                    <pre className="text-xs text-gray-600 whitespace-pre-wrap">
+                      {JSON.stringify(pageScanResults, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     );
   }

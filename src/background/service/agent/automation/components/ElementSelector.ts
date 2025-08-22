@@ -1,4 +1,5 @@
 import { ElementSelector, ElementInfo, InteractionResult, BoundingBox } from '../../types/BaseTypes';
+import { toolRegistry } from '../../tools/ToolRegistry';
 import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('ElementSelector');
@@ -15,7 +16,7 @@ export class ElementSelectorEngine {
     context?: Document | Element
   ): Promise<ElementInfo[]> {
     const cacheKey = this.generateCacheKey(selector, context);
-    
+
     // Check cache first
     const cached = this.cache.get(cacheKey);
     if (cached && !this.isCacheExpired(cached)) {
@@ -24,7 +25,7 @@ export class ElementSelectorEngine {
     }
 
     const results: ElementInfo[] = [];
-    
+
     // Try each strategy in order of preference
     for (const strategy of this.getStrategies(selector)) {
       try {
@@ -64,7 +65,7 @@ export class ElementSelectorEngine {
     context?: Document | Element
   ): Promise<ElementInfo | null> {
     const elements = await this.findElements(selector, context);
-    
+
     if (elements.length === 0) {
       return null;
     }
@@ -91,7 +92,7 @@ export class ElementSelectorEngine {
     context?: Document | Element
   ): Promise<InteractionResult> {
     const startTime = Date.now();
-    
+
     try {
       const element = await this.findBestElement(selector, context);
       if (!element) {
@@ -169,7 +170,7 @@ export class ElementSelectorEngine {
     context?: Document | Element
   ): Promise<InteractionResult> {
     const startTime = Date.now();
-    
+
     try {
       const element = await this.findBestElement(selector, context);
       if (!element) {
@@ -252,7 +253,7 @@ export class ElementSelectorEngine {
     context?: Document | Element
   ): Promise<InteractionResult> {
     const startTime = Date.now();
-    
+
     try {
       const element = await this.findBestElement(selector, context);
       if (!element) {
@@ -272,7 +273,7 @@ export class ElementSelectorEngine {
         }
 
         // Try to find option by value
-        let option = Array.from(targetElement.options).find(opt => 
+        let option = Array.from(targetElement.options).find(opt =>
           opt.value === value || opt.textContent?.trim() === value
         );
 
@@ -281,7 +282,7 @@ export class ElementSelectorEngine {
         }
 
         targetElement.value = option.value;
-        
+
         // Trigger change event
         const event = new Event('change', { bubbles: true });
         targetElement.dispatchEvent(event);
@@ -335,7 +336,7 @@ export class ElementSelectorEngine {
     context?: Document | Element
   ): Promise<InteractionResult> {
     const startTime = Date.now();
-    
+
     try {
       const elements = await this.findElements(selector, context);
       if (elements.length === 0) {
@@ -419,6 +420,126 @@ export class ElementSelectorEngine {
     }
   }
 
+  /**
+   * Get normalized visible text from current page (nanobrowser-like)
+   */
+  async getAllVisibleTextFromPage(): Promise<string> {
+    const text = await this.executeInBrowserContext((doc) => {
+      const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+      const isVisible = (el: Element | null): boolean => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+        const rect = (el as HTMLElement).getBoundingClientRect?.();
+        if (!rect) return true;
+        if ((rect.width === 0 && rect.height === 0)) return false;
+        return true;
+      };
+      const normalize = (s: string) => s.replace(/\s+/g, ' ').trim();
+      const parts: string[] = [];
+      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+        acceptNode(node: Node) {
+          const parent = (node as any).parentElement as Element | null;
+          if (!parent) return NodeFilter.FILTER_REJECT;
+          if (SKIP.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
+          const raw = (node.nodeValue || '').trim();
+          if (!raw) return NodeFilter.FILTER_REJECT;
+          if (!isVisible(parent)) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      } as any);
+      let n: Node | null;
+      while ((n = walker.nextNode())) {
+        const txt = normalize(n.nodeValue || '');
+        if (txt) parts.push(txt);
+      }
+      // include alt text of visible images
+      doc.querySelectorAll('img[alt]').forEach((img) => { if (isVisible(img)) parts.push(normalize((img as HTMLImageElement).alt || '')); });
+      return normalize(parts.join(' '));
+    });
+    return text;
+  }
+
+  /**
+   * Get comprehensive page text snapshot (url/title/text/wordCount/length/timestamp)
+   */
+  async getPageTextSnapshot(): Promise<{ url: string; title: string; text: string; wordCount: number; length: number; timestamp: number; }> {
+    const text = await this.getAllVisibleTextFromPage();
+    const meta = await this.executeInBrowserContext((doc) => ({ url: location.href, title: doc.title || '' }));
+    return {
+      url: meta.url,
+      title: meta.title,
+      text,
+      wordCount: text ? text.split(/\s+/).filter(Boolean).length : 0,
+      length: text.length,
+      timestamp: Date.now(),
+    };
+  }
+
+  /**
+   * Get interactive elements summary for the page
+   */
+  async getInteractiveElements(): Promise<ElementInfo[]> {
+    const elements = await this.executeInBrowserContext((doc) => {
+      const nodes = Array.from(doc.querySelectorAll('a, button, input, select, textarea, summary, [role="button"], [onclick], [href]'));
+      const isVisible = (el: Element): boolean => {
+        const rect = (el as HTMLElement).getBoundingClientRect?.();
+        const style = window.getComputedStyle(el);
+        return !!rect && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+      };
+      const toInfo = (el: Element): ElementInfo => {
+        const rect = (el as HTMLElement).getBoundingClientRect();
+        const bbox: BoundingBox = { x: rect.left + window.scrollX, y: rect.top + window.scrollY, width: rect.width, height: rect.height };
+        const attrs: Record<string, string> = {};
+        for (const a of el.attributes) attrs[a.name] = a.value;
+        const uniqueSelector = (() => {
+          if ((el as HTMLElement).id) return `#${(el as HTMLElement).id}`;
+          const parts: string[] = [];
+          let cur: Element | null = el;
+          while (cur && cur.nodeType === Node.ELEMENT_NODE) {
+            let sel = cur.tagName.toLowerCase();
+            const cls = (cur.getAttribute('class') || '').trim();
+            if (cls) sel += '.' + cls.split(/\s+/).join('.');
+            if (cur.parentElement) {
+              const siblings = Array.from(cur.parentElement.children);
+              const same = siblings.filter(s => (s as Element).tagName === cur!.tagName);
+              if (same.length > 1) sel += `:nth-of-type(${same.indexOf(cur) + 1})`;
+            }
+            parts.unshift(sel);
+            cur = cur.parentElement;
+          }
+          return parts.join(' > ');
+        })();
+        return {
+          selector: uniqueSelector,
+          tag: el.tagName,
+          text: (el.textContent || '').trim(),
+          visible: isVisible(el),
+          interactive: true,
+          attributes: attrs,
+          boundingBox: bbox,
+        } as ElementInfo;
+      };
+      return nodes.filter(isVisible).map(toInfo);
+    });
+    return elements;
+  }
+
+  /**
+   * Proxy: call new parsing tools via ToolRegistry (optional for UI integration)
+   */
+  async toolGetPageTextSnapshot(): Promise<any> {
+    return await toolRegistry.executeTool('getPageTextSnapshot', {});
+  }
+
+  async toolGetAllVisibleText(): Promise<any> {
+    return await toolRegistry.executeTool('getAllVisibleText', {});
+  }
+
+  async toolGetPageElements(): Promise<any> {
+    return await toolRegistry.executeTool('getPageElements', {});
+  }
+
   // Private helper methods
 
   private generateCacheKey(selector: ElementSelector, context?: Document | Element): string {
@@ -432,7 +553,7 @@ export class ElementSelectorEngine {
 
   private getStrategies(selector: ElementSelector): ElementSelector[] {
     const strategies: ElementSelector[] = [selector];
-    
+
     // Add fallback strategies
     if (selector.fallbackSelectors) {
       strategies.push(...selector.fallbackSelectors);
@@ -459,7 +580,7 @@ export class ElementSelectorEngine {
           });
         }
         break;
-      
+
       case 'text':
         // If text search fails, try partial text matches
         fallbacks.push({
@@ -485,11 +606,11 @@ export class ElementSelectorEngine {
         case 'css':
           elements = Array.from(searchContext.querySelectorAll(strategy.selector));
           break;
-        
+
         case 'text':
           elements = this.findElementsByText(searchContext, strategy.selector);
           break;
-        
+
         case 'xpath':
           // Note: XPath might not be available in all browser contexts
           try {
@@ -508,7 +629,7 @@ export class ElementSelectorEngine {
             logger.warn('XPath evaluation failed', { error });
           }
           break;
-        
+
         case 'attribute':
           elements = Array.from(searchContext.querySelectorAll(`[${strategy.selector}]`));
           break;
@@ -525,8 +646,8 @@ export class ElementSelectorEngine {
       NodeFilter.SHOW_TEXT,
       {
         acceptNode: (node: Node) => {
-          return node.textContent && node.textContent.includes(text) 
-            ? NodeFilter.FILTER_ACCEPT 
+          return node.textContent && node.textContent.includes(text)
+            ? NodeFilter.FILTER_ACCEPT
             : NodeFilter.FILTER_REJECT;
         }
       }
@@ -582,7 +703,7 @@ export class ElementSelectorEngine {
 
     while (current && current.nodeType === Node.ELEMENT_NODE) {
       let selector = current.tagName.toLowerCase();
-      
+
       if (current.className) {
         selector += '.' + current.className.trim().split(/\s+/).join('.');
       }
@@ -590,7 +711,7 @@ export class ElementSelectorEngine {
       if (current.parentElement) {
         const siblings = Array.from(current.parentElement.children);
         const sameTagSiblings = siblings.filter(el => el.tagName === current.tagName);
-        
+
         if (sameTagSiblings.length > 1) {
           const index = sameTagSiblings.indexOf(current) + 1;
           selector += `:nth-of-type(${index})`;
@@ -628,7 +749,7 @@ export class ElementSelectorEngine {
   private async executeInBrowserContext<T>(callback: (doc: Document) => T): Promise<T> {
     if (typeof chrome !== 'undefined' && chrome.scripting && chrome.scripting.executeScript) {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      
+
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id! },
         func: callback,
@@ -667,7 +788,7 @@ export class ElementSelectorEngine {
 
   private isElementInteractive(element: Element): boolean {
     const interactiveTags = ['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'OPTION'];
-    return interactiveTags.includes(element.tagName) || 
+    return interactiveTags.includes(element.tagName) ||
            element.hasAttribute('onclick') ||
            element.hasAttribute('href') ||
            element.getAttribute('role') === 'button' ||
@@ -696,14 +817,14 @@ export class ElementSelectorEngine {
 
   private simulateTyping(element: HTMLInputElement, value: string): void {
     element.value = '';
-    
+
     for (let i = 0; i < value.length; i++) {
       element.value += value[i];
-      
+
       // Trigger input event for each character
       const event = new Event('input', { bubbles: true });
       element.dispatchEvent(event);
-      
+
       // Small delay between keystrokes
       if (i < value.length - 1) {
         // This is a simplified simulation - in real implementation, use actual delays

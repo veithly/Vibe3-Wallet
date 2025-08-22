@@ -1683,7 +1683,7 @@ export class Web3Agent extends EventEmitter {
       NAVIGATE: 'navigate to URL',
       CLICK: 'click element',
       FILL_FORM: 'fill form',
-      EXTRACT_CONTENT: 'extract content',
+
       SCROLL: 'scroll page',
       SCREENSHOT: 'take screenshot',
       WAIT: 'wait for condition',
@@ -4625,7 +4625,7 @@ export class Web3Agent extends EventEmitter {
       'navigate',
       'click',
       'fill_form',
-      'extract_content',
+
       'wait_for',
       'scroll',
       'screenshot',
@@ -4634,7 +4634,7 @@ export class Web3Agent extends EventEmitter {
       'navigateToUrl',
       'clickElement',
       'fillForm',
-      'extractContent',
+
     ];
 
     return browserActions.includes(actionType);
