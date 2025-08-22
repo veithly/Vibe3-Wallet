@@ -33,7 +33,7 @@ interface AgentPort {
 
 class AgentService {
   // Cancellation flag for current streaming task
-  private currentStreamingTask: { id: string | number | null; cancelled: boolean } = { id: null, cancelled: false };
+  private currentStreamingTask: { id: string | number | null; cancelled: boolean; timeoutId?: NodeJS.Timeout } = { id: null, cancelled: false };
   // Track tool_call IDs within an active streaming task to emit strong-signal events once per call
   private currentStreamingToolCallIds: Set<string> = new Set();
     // Map function name -> last seen tool_call id for this task (non-streaming fallback)
@@ -1484,6 +1484,7 @@ class AgentService {
             // include function calls so UI can render all calls even if separate function_call events were missed
             functionCalls: (response as any)?.functionCalls || [],
             tool_calls: (response as any)?.tool_calls || [],
+            finish_reason: (response as any)?.metadata?.finish_reason,
           },
         }, port, 'web3_task_response');
       }
@@ -1753,6 +1754,7 @@ class AgentService {
           tool_calls: (response as any)?.tool_calls || [],
           chunkCount,
           streamingDuration: Date.now() - (typeof message.taskId === 'number' ? message.taskId : Date.now()),
+          finish_reason: (response as any)?.metadata?.finish_reason,
         },
         timestamp: Date.now(),
         state: 'COMPLETED',
@@ -1895,12 +1897,40 @@ class AgentService {
     // Propagate cancel into Web3Agent (stop ReAct/tool execution loops)
     try {
       this.web3Agent?.cancelCurrentTask?.();
-    } catch {}
-
-    if (this.executor) {
-      await this.executor.cancel();
-      this.executor = null;
+      logger.info('AgentService', 'Propagated cancel to Web3Agent');
+    } catch (e) {
+      logger.warn('AgentService', 'Failed to propagate cancel to Web3Agent', e);
     }
+
+
+
+    // Cancel executor if exists
+    if (this.executor) {
+      try {
+        await this.executor.cancel();
+        this.executor = null;
+        logger.info('AgentService', 'Cancelled executor');
+      } catch (e) {
+        logger.warn('AgentService', 'Failed to cancel executor', e);
+      }
+    }
+
+    // Clear any pending timeouts or intervals
+    try {
+      if (this.currentStreamingTask.timeoutId) {
+        clearTimeout(this.currentStreamingTask.timeoutId);
+        this.currentStreamingTask.timeoutId = undefined;
+      }
+    } catch (e) {
+      logger.warn('AgentService', 'Failed to clear streaming timeout', e);
+    }
+
+    // Reset streaming task state
+    this.currentStreamingTask = {
+      id: null,
+      cancelled: false,
+      timeoutId: undefined,
+    };
 
     port.postMessage({
       type: 'execution',
@@ -1909,6 +1939,8 @@ class AgentService {
       timestamp: Date.now(),
       data: { details: 'Task cancelled by user' },
     });
+
+    logger.info('AgentService', 'Task cancellation completed');
   }
 
   private async handleSpeechToText(

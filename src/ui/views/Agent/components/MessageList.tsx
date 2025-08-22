@@ -43,8 +43,22 @@ export default memo(function MessageList({
   // Auto-scroll to bottom whenever messages change
   const bottomRef = React.useRef<HTMLDivElement | null>(null);
   React.useEffect(() => {
-    try { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); } catch {}
-  }, [sortedMessages.length]);
+    // 使用 requestAnimationFrame 确保在DOM更新后执行滚动
+    const scrollToBottom = () => {
+      try {
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      } catch (e) {
+        logger.warn('MessageList', 'Failed to scroll to bottom', e);
+      }
+    };
+
+    // 延迟执行滚动，确保消息内容已经渲染完成
+    const timeoutId = setTimeout(() => {
+      requestAnimationFrame(scrollToBottom);
+    }, 150);
+
+    return () => clearTimeout(timeoutId);
+  }, [sortedMessages.length, sortedMessages]); // 添加 sortedMessages 作为依赖，确保每次消息变化都触发滚动
 
 
   // Log message statistics for debugging
@@ -80,7 +94,7 @@ export default memo(function MessageList({
           />
         ))
       )}
-      <div ref={(el) => { try { (MessageList as any)._bottom = el; } catch {} }} />
+      <div ref={bottomRef} />
     </div>
   );
 });

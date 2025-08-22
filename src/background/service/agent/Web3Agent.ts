@@ -157,14 +157,52 @@ export class Web3Agent extends EventEmitter {
   public cancelCurrentTask(): void {
     try {
       this._cancelled = true;
+
+      // 取消LLM流式处理
       try {
         (this.llm as any)?.cancelStreaming?.();
-      } catch {}
+        logger.info('Web3Agent', 'Cancelled LLM streaming');
+      } catch (e) {
+        logger.warn('Web3Agent', 'Failed to cancel LLM streaming', e);
+      }
+
+      // 取消上下文中的任务
+      try {
+        if (this.context && typeof (this.context as any).stop === 'function') {
+          (this.context as any).stop();
+          logger.info('Web3Agent', 'Cancelled context task');
+        }
+      } catch (e) {
+        logger.warn('Web3Agent', 'Failed to cancel context task', e);
+      }
+
+      // 取消浏览器自动化控制器
+      try {
+        if (this.browserAutomationController && typeof (this.browserAutomationController as any).cancelAllOperations === 'function') {
+          (this.browserAutomationController as any).cancelAllOperations();
+          logger.info('Web3Agent', 'Cancelled browser automation operations');
+        }
+      } catch (e) {
+        logger.warn('Web3Agent', 'Failed to cancel browser automation', e);
+      }
+
+      // 取消元素选择代理
+      try {
+        if (this.elementSelectionAgent && typeof (this.elementSelectionAgent as any).cancelCurrentTask === 'function') {
+          (this.elementSelectionAgent as any).cancelCurrentTask();
+          logger.info('Web3Agent', 'Cancelled element selection task');
+        }
+      } catch (e) {
+        logger.warn('Web3Agent', 'Failed to cancel element selection task', e);
+      }
+
       logger.info(
         'Web3Agent',
-        'cancelCurrentTask called: cancellation flag set'
+        'cancelCurrentTask called: cancellation flag set and all operations cancelled'
       );
-    } catch {}
+    } catch (e) {
+      logger.error('Web3Agent', 'Error in cancelCurrentTask', e);
+    }
   }
   private ensureNotCancelled(): void {
     if (this._cancelled) {
@@ -1898,6 +1936,7 @@ export class Web3Agent extends EventEmitter {
       // Reset cancellation flag for new instruction
       this._cancelled = false;
       const startTime = Date.now();
+      let finishReason: string | undefined;
 
       // Safety: remove any dangling tool_calls from previous turn to avoid provider schema errors
       try { this.sanitizeDanglingToolCalls(); } catch (e) {}
@@ -2333,73 +2372,107 @@ export class Web3Agent extends EventEmitter {
             onToolCalls({ content: '', functionCalls: updates as any });
           } catch {}
         }
+        // Decide whether to stop ReAct after first turn tool execution
+        const stopAfterFirst = this.shouldStopAfterActions(intent, firstTurnActions);
+        if (stopAfterFirst) {
+          finishReason = 'stop';
+        }
 
-        // Second turn: let the model incorporate results into a final answer
-        console.log('🔄 Preparing second turn prompt', {
-          conversationHistoryLength: this.state.conversationHistory.length,
-          lastMessages: this.state.conversationHistory.slice(-3).map((msg) => ({
-            type: msg.constructor.name,
-            content: msg.content.substring(0, 100),
-          })),
-        });
+        // Second turn: let the model incorporate results into a final answer (only if not finished)
+        if (!stopAfterFirst) {
+          console.log('🔄 Preparing second turn prompt', {
+            conversationHistoryLength: this.state.conversationHistory.length,
+            lastMessages: this.state.conversationHistory.slice(-3).map((msg) => ({
+              type: msg.constructor.name,
+              content: msg.content.substring(0, 100),
+            })),
+          });
 
-        const secondPrompt = await this.promptManager.createPrompt({
-          messages: this.buildPrunedMessages(),
-          context: {
-            ...this.state.currentContext,
-            reactConfig: this.reactConfig,
-            externalToolExecution: true,
-          },
-          intent,
-          tools: availableTools,
-          conversationHistory: this.state.conversationHistory,
-          availableActions: this.actionRegistry.getAvailableActions(),
-        });
-        (this.llm as any).attachToolsForProvider?.(availableTools);
+          const secondPrompt = await this.promptManager.createPrompt({
+            messages: this.buildPrunedMessages(),
+            context: {
+              ...this.state.currentContext,
+              reactConfig: this.reactConfig,
+              externalToolExecution: true,
+            },
+            intent,
+            tools: availableTools,
+            conversationHistory: this.state.conversationHistory,
+            availableActions: this.actionRegistry.getAvailableActions(),
+          });
+          (this.llm as any).attachToolsForProvider?.(availableTools);
 
-        // Generate second turn response with streaming support
-        logger.info('🔍 Web3Agent second turn LLM call decision', {
-          enableStreaming,
-          hasOnChunk: !!onChunk,
-          hasGenerateStreamingResponse: !!this.llm.generateStreamingResponse,
-        });
+          // Generate second turn response with streaming support
+          logger.info('🔍 Web3Agent second turn LLM call decision', {
+            enableStreaming,
+            hasOnChunk: !!onChunk,
+            hasGenerateStreamingResponse: !!this.llm.generateStreamingResponse,
+          });
 
-        if (enableStreaming && onChunk) {
-          logger.info(
-            '🚀 Web3Agent: FORCING streaming response generation for second turn'
-          );
-
-          // FORCE streaming by directly calling the method, even if it doesn't exist
-          if (this.llm.generateStreamingResponse) {
+          if (enableStreaming && onChunk) {
             logger.info(
-              '✅ Using existing generateStreamingResponse method for second turn'
+              '🚀 Web3Agent: FORCING streaming response generation for second turn'
             );
-            try {
-              llmResponse = await this.llm.generateStreamingResponse(
+
+            // FORCE streaming by directly calling the method, even if it doesn't exist
+            if (this.llm.generateStreamingResponse) {
+              logger.info(
+                '✅ Using existing generateStreamingResponse method for second turn'
+              );
+              try {
+                llmResponse = await this.llm.generateStreamingResponse(
+                  secondPrompt.messages,
+                  secondPrompt.context,
+                  secondPrompt.intent,
+                  secondPrompt.tools,
+                  onChunk
+                );
+                logger.info('✅ Second turn streaming completed successfully', {
+                  hasResponse: !!llmResponse.response,
+                  responseLength: llmResponse.response?.length || 0,
+                  hasFunctionCalls:
+                    !!llmResponse.functionCalls &&
+                    llmResponse.functionCalls.length > 0,
+                  functionCallsCount: llmResponse.functionCalls?.length || 0,
+                });
+              } catch (streamingError) {
+                logger.error('❌ Second turn streaming failed', streamingError);
+                throw streamingError;
+              }
+            } else {
+              logger.error(
+                '❌ generateStreamingResponse method not found for second turn!'
+              );
+
+              // Fallback to regular response but simulate streaming
+              llmResponse = await this.llm.generateResponse(
                 secondPrompt.messages,
                 secondPrompt.context,
                 secondPrompt.intent,
-                secondPrompt.tools,
-                onChunk
+                secondPrompt.tools
               );
-              logger.info('✅ Second turn streaming completed successfully', {
-                hasResponse: !!llmResponse.response,
-                responseLength: llmResponse.response?.length || 0,
-                hasFunctionCalls:
-                  !!llmResponse.functionCalls &&
-                  llmResponse.functionCalls.length > 0,
-                functionCallsCount: llmResponse.functionCalls?.length || 0,
-              });
-            } catch (streamingError) {
-              logger.error('❌ Second turn streaming failed', streamingError);
-              throw streamingError;
+
+              // Simulate streaming by sending the response as chunks
+              if (llmResponse.response) {
+                onChunk({
+                  id: `simulated_second_${Date.now()}`,
+                  type: 'content',
+                  content: llmResponse.response,
+                  timestamp: Date.now(),
+                });
+              }
             }
           } else {
-            logger.error(
-              '❌ generateStreamingResponse method not found for second turn!'
+            logger.warn(
+              '⚠️ Web3Agent: Using regular response generation for second turn',
+              {
+                enableStreaming,
+                hasOnChunk: !!onChunk,
+                hasGenerateStreamingResponse: !!this.llm
+                  .generateStreamingResponse,
+              }
             );
-
-            // Fallback to regular response but simulate streaming
+            // Use regular response generation for second turn
             llmResponse = await this.llm.generateResponse(
               secondPrompt.messages,
               secondPrompt.context,
@@ -2407,86 +2480,133 @@ export class Web3Agent extends EventEmitter {
               secondPrompt.tools
             );
 
-            // Simulate streaming by sending the response as chunks
-            if (llmResponse.response) {
+            // Send the second turn response content via streaming (for non-streaming fallback)
+            if (enableStreaming && onChunk && llmResponse.response) {
               onChunk({
-                id: `simulated_second_${Date.now()}`,
+                id: `second-turn-response-${Date.now()}`,
                 type: 'content',
                 content: llmResponse.response,
                 timestamp: Date.now(),
               });
             }
           }
-        } else {
-          logger.warn(
-            '⚠️ Web3Agent: Using regular response generation for second turn',
-            {
-              enableStreaming,
-              hasOnChunk: !!onChunk,
-              hasGenerateStreamingResponse: !!this.llm
-                .generateStreamingResponse,
+          // Emit non-streaming tool_calls for second-turn as well
+          if (onToolCalls) {
+            const openAIToolCalls2 = (llmResponse as any)?.tool_calls || [];
+            const internalCalls2 = (llmResponse as any)?.functionCalls || [];
+            const hasCalls2 =
+              (openAIToolCalls2 && openAIToolCalls2.length > 0) ||
+              (internalCalls2 && internalCalls2.length > 0);
+            if (hasCalls2) {
+              const nowTs2 = Date.now();
+              const normalized2 = (openAIToolCalls2.length > 0
+                ? openAIToolCalls2.map((tc: any, idx: number) => ({
+                    id:
+                      tc.id ||
+                      `call_${tc.function?.name || 'fn'}_${nowTs2}_${idx}`,
+                    name: tc.function?.name,
+                    arguments: (() => {
+                      try {
+                        return tc.function?.arguments
+                          ? JSON.parse(tc.function.arguments)
+                          : {};
+                      } catch {
+                        return { raw: tc.function?.arguments };
+                      }
+                    })(),
+                    status: 'executing',
+                    timestamp: nowTs2,
+                  }))
+                : internalCalls2.map((fc: any, idx: number) => ({
+                    id: fc.id || `call_${fc.name || 'fn'}_${nowTs2}_${idx}`,
+                    name: fc.name,
+                    arguments: fc.arguments || {},
+                    status: 'executing',
+                    timestamp: nowTs2,
+                  }))) as any[];
+
+              onToolCalls({
+                content:
+                  (llmResponse as any).response ||
+                  (llmResponse as any).content ||
+                  '',
+                functionCalls: normalized2 as any,
+              });
             }
-          );
-          // Use regular response generation for second turn
-          llmResponse = await this.llm.generateResponse(
-            secondPrompt.messages,
-            secondPrompt.context,
-            secondPrompt.intent,
-            secondPrompt.tools
-          );
-
-          // Send the second turn response content via streaming (for non-streaming fallback)
-          if (enableStreaming && onChunk && llmResponse.response) {
-            onChunk({
-              id: `second-turn-response-${Date.now()}`,
-              type: 'content',
-              content: llmResponse.response,
-              timestamp: Date.now(),
-            });
           }
-        }
-        // Emit non-streaming tool_calls for second-turn as well
-        if (onToolCalls) {
-          const openAIToolCalls2 = (llmResponse as any)?.tool_calls || [];
-          const internalCalls2 = (llmResponse as any)?.functionCalls || [];
-          const hasCalls2 =
-            (openAIToolCalls2 && openAIToolCalls2.length > 0) ||
-            (internalCalls2 && internalCalls2.length > 0);
-          if (hasCalls2) {
-            const nowTs2 = Date.now();
-            const normalized2 = (openAIToolCalls2.length > 0
-              ? openAIToolCalls2.map((tc: any, idx: number) => ({
-                  id:
-                    tc.id ||
-                    `call_${tc.function?.name || 'fn'}_${nowTs2}_${idx}`,
-                  name: tc.function?.name,
-                  arguments: (() => {
-                    try {
-                      return tc.function?.arguments
-                        ? JSON.parse(tc.function.arguments)
-                        : {};
-                    } catch {
-                      return { raw: tc.function?.arguments };
-                    }
-                  })(),
-                  status: 'executing',
-                  timestamp: nowTs2,
-                }))
-              : internalCalls2.map((fc: any, idx: number) => ({
-                  id: fc.id || `call_${fc.name || 'fn'}_${nowTs2}_${idx}`,
-                  name: fc.name,
-                  arguments: fc.arguments || {},
-                  status: 'executing',
-                  timestamp: nowTs2,
-                }))) as any[];
 
-            onToolCalls({
-              content:
-                (llmResponse as any).response ||
-                (llmResponse as any).content ||
-                '',
-              functionCalls: normalized2 as any,
-            });
+          // Step 5: Execute function calls if any (second turn)
+          const secondTurnFunctionCalls = this.extractFunctionCallsFromResponse(
+            llmResponse
+          );
+          if (secondTurnFunctionCalls && secondTurnFunctionCalls.length > 0) {
+            // Insert an assistant message with tool_calls to satisfy OpenAI schema
+            try {
+              const assistantToolCallMsg2 = new AIMessage('', {
+                tool_calls: secondTurnFunctionCalls.map((fc) => ({
+                  id: fc.id || `call_${fc.name}_${Date.now()}`,
+                  type: 'function',
+                  function: {
+                    name: fc.name,
+                    arguments: JSON.stringify(fc.arguments || {}),
+                  },
+                })),
+              });
+              this.state.conversationHistory.push(assistantToolCallMsg2);
+            } catch (e) {
+              logger.warn(
+                'Failed to append assistant tool_calls message for second turn',
+                { error: e instanceof Error ? e.message : String(e) }
+              );
+            }
+
+            const secondTurnActions = await this.executeFunctionCalls(
+              secondTurnFunctionCalls
+            );
+            accumulatedActions.push(...secondTurnActions);
+
+            // Append tool results as ToolMessages (second turn) so the LLM can use them in ReAct
+            try {
+              for (let i = 0; i < secondTurnActions.length; i++) {
+                const step = secondTurnActions[i];
+
+                // Notify UI: mark function_call cards as completed/failed with results (second turn)
+                if (onToolCalls) {
+                  try {
+                    const updates2 = secondTurnFunctionCalls.map((fc2, i) => ({
+                      id: fc2.id || `call_${fc2.name || 'fn'}_${Date.now()}_${i}`,
+                      name: fc2.name,
+                      arguments: fc2.arguments || {},
+                      status: secondTurnActions[i]?.status || 'completed',
+                      result: secondTurnActions[i]?.result,
+                      timestamp: Date.now(),
+                    }));
+                    onToolCalls({ content: '', functionCalls: updates2 as any });
+                  } catch {}
+                }
+
+                const fc2 = secondTurnFunctionCalls[i];
+                const toolMsg2 = new ToolMessage({
+                  content: JSON.stringify({
+                    success: step.status === 'completed',
+                    result: step.result,
+                    params: step.params,
+                  }),
+                  name: step.type || 'tool',
+                  tool_call_id: fc2?.id || `${step.type || 'tool'}_${i}`,
+                });
+                this.state.conversationHistory.push(toolMsg2);
+              }
+            } catch (e) {
+              logger.warn('Failed to append second turn tool results', {
+                error: e instanceof Error ? e.message : String(e),
+              });
+            }
+
+            // Decide whether to stop after second turn tool execution
+            if (this.shouldStopAfterActions(intent, secondTurnActions)) {
+              finishReason = 'stop';
+            }
           }
         }
       }
@@ -2669,6 +2789,12 @@ export class Web3Agent extends EventEmitter {
           );
           accumulatedActions.push(...loopTurnActions);
 
+          // Stop early if post-action completion criteria met (e.g., contract/click done)
+          if (this.shouldStopAfterActions(intent, loopTurnActions)) {
+            finishReason = 'stop';
+            break;
+          }
+
           try {
             for (let i = 0; i < loopTurnActions.length; i++) {
               const step = loopTurnActions[i];
@@ -2745,6 +2871,7 @@ export class Web3Agent extends EventEmitter {
         plan: reactPlan,
         sessionId: this.state.sessionId,
         timestamp: Date.now(),
+        metadata: finishReason ? { finish_reason: finishReason } : undefined,
       };
     } catch (error) {
       logger.error(
@@ -2771,6 +2898,50 @@ export class Web3Agent extends EventEmitter {
         timestamp: Date.now(),
       };
     }
+  }
+
+  /**
+   * Determine whether the agent should stop ReAct after executing the given actions.
+   * Heuristics:
+   * - For browser intents (CLICK/NAVIGATE/FILL_FORM): stop when corresponding action succeeds
+   * - For common Web3 intents: stop when a tx/sign/network/connect related tool reports success
+   */
+  private shouldStopAfterActions(intent: Web3Intent, actions: ActionStep[]): boolean {
+    if (!actions || actions.length === 0) return false;
+
+    const successOf = (names: string[]) =>
+      actions.some((a) => a.status === 'completed' && !!a.type && names.includes(a.type));
+
+    // Browser tasks
+    if (intent.action === 'CLICK') {
+      return successOf(['clickElement']);
+    }
+    if (intent.action === 'NAVIGATE') {
+      return successOf(['navigateToUrl']);
+    }
+    if (intent.action === 'FILL_FORM') {
+      return successOf(['fillForm']);
+    }
+
+    // Web3 tasks: consider done when the primary action succeeds
+    const web3DoneNames = [
+      'sendTransaction',
+      'approveToken',
+      'swapTokens',
+      'stakeTokens',
+      'unstakeTokens',
+      'bridgeTokens',
+      'addLiquidity',
+      'removeLiquidity',
+      'interactWithContract',
+      'signMessage',
+      'signTypedData',
+      'switchNetwork',
+      'connectWallet',
+    ];
+    if (successOf(web3DoneNames)) return true;
+
+    return false;
   }
 
   /**

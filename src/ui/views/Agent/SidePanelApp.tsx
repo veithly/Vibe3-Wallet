@@ -542,10 +542,20 @@ export const SidePanelApp = () => {
         logEvent('message_received', { type: message.type });
 
         // If user has pressed Stop, ignore subsequent stream/function/react messages until a new streaming_start
-        const ignorableTypes = new Set(['streaming_chunk', 'streaming_complete', 'function_call', 'react_status', EventType.EXECUTION]);
+        const ignorableTypes = new Set([
+          'streaming_chunk',
+          'streaming_complete',
+          'function_call',
+          'react_status',
+          'tool_result',
+          'thinking',
+          EventType.EXECUTION
+        ]);
         if (ignoreStreamingRef.current && message?.type && ignorableTypes.has(message.type)) {
           if (message.type === 'streaming_start') {
-            // allow new session to start
+            // 允许新会话开始，但重置忽略标志
+            try { ignoreStreamingRef.current = false; } catch {}
+            logger.debug(COMPONENT_NAME, 'New streaming session started, clearing ignore flag');
           } else {
             logger.debug(COMPONENT_NAME, 'Ignoring message due to Stop', { type: message.type });
             return;
@@ -1068,7 +1078,7 @@ export const SidePanelApp = () => {
                 ...fcFromEndToolCalls,
                 ...fcFromStream,
               ];
-              // 只按 id 去重；没有 id 的调用一律保留，避免误伤“相同参数的重复调用”
+              // 只按 id 去重；没有 id 的调用一律保留，避免误伤"相同参数的重复调用"
               const seenIds = new Set<string>();
               finalFunctionCalls = merged.filter((c) => {
                 const id = c?.id ? String(c.id) : '';
@@ -1598,31 +1608,55 @@ export const SidePanelApp = () => {
         // Check if initialization was cancelled during the delay
         if (initializationCancelled) {
           logger.debug(COMPONENT_NAME, 'Initialization cancelled');
-          logEvent('connect', { action: 'initialization_cancelled' });
           return;
         }
 
-        // Additional wait for extension context to be fully ready
-        await DelayUtil.wait(200, 'extension context ready');
-
+        // Setup connection
         setupConnection();
+
+        // Wait for connection to be established
+        await DelayUtil.waitUntil(
+          () => !!portRef.current,
+          TIMING_CONSTANTS.CONNECTION_TIMEOUT,
+          TIMING_CONSTANTS.CONNECTION_CHECK_INTERVAL,
+          'connection establishment'
+        );
+
+        // Check if initialization was cancelled during connection wait
+        if (initializationCancelled) {
+          logger.debug(COMPONENT_NAME, 'Initialization cancelled during connection wait');
+          return;
+        }
+
+        // Load favorite prompts
+        try {
+          const prompts = await favoritesStorage.getAllPrompts();
+          setFavoritePrompts(prompts);
+        } catch (error) {
+          logger.warn(COMPONENT_NAME, 'Failed to load favorite prompts', { error });
+          setFavoritePrompts([]);
+        }
+
+        // Mark as initialized
         setIsInitialized(true);
         logger.info(COMPONENT_NAME, 'Initialization completed successfully');
         logEvent('connect', { action: 'initialization_completed' });
+
+        // 添加一个测试消息来验证滚动功能
+        setTimeout(() => {
+          appendMessage({
+            actor: Actors.SYSTEM,
+            content: 'Agent initialized successfully. Ready to help you!',
+            timestamp: Date.now(),
+            messageType: 'standard',
+          });
+        }, 1000);
+
       } catch (error) {
-        if (!initializationCancelled) {
-          const errorMessage =
-            error instanceof Error ? error.message : 'Initialization failed';
-          logger.error(COMPONENT_NAME, 'Initialization error', {
-            error: errorMessage,
-          });
-          logEvent('error', {
-            error: `Initialization failed: ${errorMessage}`,
-          });
-          setHasError(errorMessage);
-          setConnectionStatus(ConnectionState.FAILED);
-          setIsInitialized(true);
-        }
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error(COMPONENT_NAME, 'Initialization failed', { error: errorMessage });
+        logEvent('error', { error: `Initialization failed: ${errorMessage}` });
+        setHasError(errorMessage);
       }
     };
 
@@ -1668,12 +1702,23 @@ export const SidePanelApp = () => {
   useEffect(() => {
     const el = contentAreaRef.current;
     if (!el) return;
-    try {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-    } catch {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [messages]);
+
+    // 使用 requestAnimationFrame 确保在DOM更新后执行滚动
+    const scrollToBottom = () => {
+      try {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+      } catch {
+        el.scrollTop = el.scrollHeight;
+      }
+    };
+
+    // 延迟执行滚动，确保消息内容已经渲染完成
+    const timeoutId = setTimeout(() => {
+      requestAnimationFrame(scrollToBottom);
+    }, 100);
+
+    return () => clearTimeout(timeoutId);
+  }, [messages, messages.length]); // 添加 messages.length 作为依赖，确保每次消息数量变化都触发滚动
 
   // ========== OPTIMIZED MESSAGE HANDLING ==========
   // The following functions break down the large handleSendMessage into smaller,
@@ -1969,9 +2014,23 @@ export const SidePanelApp = () => {
   const handleStopTask = useCallback(() => {
     logger.debug(COMPONENT_NAME, 'HandleStopTask called');
     try {
-      // Ignore any further streaming/tool/status messages until next user send
+      // 立即设置忽略标志，阻止所有后续的流式消息、工具调用和状态更新
       try { ignoreStreamingRef.current = true; } catch {}
 
+      // 清理所有定时器和引用
+      if (streamingTimeoutRef.current) {
+        clearTimeout(streamingTimeoutRef.current);
+        streamingTimeoutRef.current = null;
+      }
+
+      // 重置所有工具调用相关的引用
+      try { seenToolCallIdsRef.current = new Set(); } catch {}
+      try { toolCallIndexToIdRef.current = {}; } catch {}
+      try { toolCallArgsBufferRef.current = {}; } catch {}
+      try { toolCallNameByIdRef.current = {}; } catch {}
+      try { seenFunctionSigsRef.current = new Set(); } catch {}
+
+      // 发送停止任务消息到后端
       if (portRef.current) {
         portRef.current.postMessage({ type: 'cancel_task' });
         logger.info(COMPONENT_NAME, 'Stop task message sent');
@@ -1979,23 +2038,44 @@ export const SidePanelApp = () => {
         logger.warn(COMPONENT_NAME, 'No active connection to send stop task');
       }
 
-      // Mark current streaming message as stopped/cancelled in UI
+      // 立即标记当前流式消息为已停止
       if (streamingMessageId) {
         setMessages(prev => prev.map(msg =>
           msg.messageId === streamingMessageId
-            ? { ...msg, isStreaming: false, messageType: 'streaming_error' as const, content: (msg.content || '') || 'Task stopped by user' }
+            ? {
+                ...msg,
+                isStreaming: false,
+                messageType: 'streaming_error' as const,
+                content: (msg.content || '') || 'Task stopped by user'
+              }
             : msg
         ));
         setStreamingMessageId(null);
       }
 
-      // Reset UI state regardless
+      // 立即重置UI状态
       setInputEnabled(true);
       setShowStopButton(false);
       resetReActStatus();
+
+      // 清理任何正在进行的工具调用状态
+      setMessages(prev => prev.map(msg => {
+        if (msg.messageType === 'function_call' && msg.functionCalls) {
+          return {
+            ...msg,
+            functionCalls: msg.functionCalls.map(call => ({
+              ...call,
+              status: 'failed' as const
+            }))
+          };
+        }
+        return msg;
+      }));
+
+      logger.info(COMPONENT_NAME, 'Task stopped successfully');
     } catch (error) {
       logger.error(COMPONENT_NAME, 'Error stopping task', { error });
-      // Still reset UI state on error
+      // 即使出错也要重置UI状态
       setInputEnabled(true);
       setShowStopButton(false);
     }
@@ -2058,7 +2138,7 @@ export const SidePanelApp = () => {
   const confirmNewChat = useCallback(() => {
     logger.debug(COMPONENT_NAME, 'HandleNewChat called');
 
-    // Clear all messages and reset state
+    // 清理所有消息和重置状态
     setMessages([]);
     setCurrentSessionId(null);
     setIsHistoricalSession(false);
@@ -2069,8 +2149,24 @@ export const SidePanelApp = () => {
     setShowNewChatConfirm(false);
     resetReActStatus();
 
-    // Clear any streaming state
+    // 清理流式状态
     setStreamingMessageId(null);
+
+    // 清理忽略标志，允许新会话开始
+    try { ignoreStreamingRef.current = false; } catch {}
+
+    // 清理所有工具调用相关的引用
+    try { seenToolCallIdsRef.current = new Set(); } catch {}
+    try { toolCallIndexToIdRef.current = {}; } catch {}
+    try { toolCallArgsBufferRef.current = {}; } catch {}
+    try { toolCallNameByIdRef.current = {}; } catch {}
+    try { seenFunctionSigsRef.current = new Set(); } catch {}
+
+    // 清理定时器
+    if (streamingTimeoutRef.current) {
+      clearTimeout(streamingTimeoutRef.current);
+      streamingTimeoutRef.current = null;
+    }
 
     logger.info(COMPONENT_NAME, 'New chat initialized successfully');
   }, [resetReActStatus]);
@@ -2419,7 +2515,7 @@ export const SidePanelApp = () => {
 
           </div>
         </div>
-        <div className="content-area">
+        <div className="content-area" ref={contentAreaRef}>
           {showSettings ? (
             <div className="settings-overlay">
               <ErrorBoundary componentName="Settings">
