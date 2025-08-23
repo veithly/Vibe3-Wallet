@@ -250,7 +250,7 @@ const ChainSelectorModal = ({
           unmatteredList.length === 0 &&
           !search ? null : (
             <Input
-              prefix={<img src={IconSearch} />}
+              prefix={<img src={IconSearch} alt="Search" />}
               // Search chain
               placeholder={t('component.ChainSelectorModal.searchPlaceholder')}
               onChange={(e) => setSearch(e.target.value)}

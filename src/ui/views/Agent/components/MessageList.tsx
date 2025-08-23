@@ -168,11 +168,12 @@ function MessageBlock({
   const isWalletAutoSigned = message.messageType === 'wallet_auto_signed';
   const isWalletAutoApprovedTx = message.messageType === 'wallet_auto_approved_tx';
   const isWalletConfirmationRequest = message.messageType === 'wallet_confirmation_request';
+  const isWalletContractCallback = message.messageType === 'wallet_contract_callback';
   const isFunctionCall = message.messageType === 'function_call';
 
   // Special message types that should always be centered
   const isCenteredMessage = isWalletAutoConnected || isWalletAutoSigned ||
-                           isWalletAutoApprovedTx || isWalletConfirmationRequest;
+                           isWalletAutoApprovedTx || isWalletConfirmationRequest || isWalletContractCallback;
 
   // Local state for wallet confirmation checkbox within this message block
   const [addToWhitelist, setAddToWhitelist] = React.useState(false);
@@ -206,10 +207,10 @@ function MessageBlock({
         marginBottom: '16px',
         animation: 'slideUp 0.3s ease-out'
       }}>
-        {renderSpecialMessageCard(message, isWalletAutoConnected, isWalletAutoSigned,
-                                 isWalletAutoApprovedTx, isWalletConfirmationRequest,
-                                 addToWhitelist, setAddToWhitelist, onWalletConfirm,
-                                 onWalletReject, isDarkMode)}
+                 {renderSpecialMessageCard(message, isWalletAutoConnected, isWalletAutoSigned,
+                                  isWalletAutoApprovedTx, isWalletConfirmationRequest, isWalletContractCallback,
+                                  addToWhitelist, setAddToWhitelist, onWalletConfirm,
+                                  onWalletReject, isDarkMode)}
       </div>
     );
   }
@@ -472,6 +473,7 @@ function renderSpecialMessageCard(
   isWalletAutoSigned: boolean,
   isWalletAutoApprovedTx: boolean,
   isWalletConfirmationRequest: boolean,
+  isWalletContractCallback: boolean,
   addToWhitelist: boolean,
   setAddToWhitelist: (value: boolean) => void,
   onWalletConfirm?: (approvalId: string, data: any, addToWhitelist?: boolean) => void,
@@ -542,6 +544,40 @@ function renderSpecialMessageCard(
   }
 
   if (isWalletConfirmationRequest) {
+    // Helper functions for formatting
+    const formatAddress = (address: string) => {
+      if (!address) return '';
+      return `${address.slice(0, 6)}...${address.slice(-4)}`;
+    };
+
+    const formatValue = (value?: string) => {
+      if (!value || value === '0x0' || value === '0') return '0';
+      try {
+        const wei = BigInt(value);
+        const eth = Number(wei) / 1e18;
+        return eth.toFixed(6);
+      } catch {
+        return value;
+      }
+    };
+
+    const formatGas = (gas: string) => {
+      try {
+        return parseInt(gas, 16).toLocaleString();
+      } catch {
+        return gas;
+      }
+    };
+
+    // Extract transaction data
+    const txParams = wc.txParams || {};
+    const chain = wc.chain || { name: 'Unknown', nativeTokenSymbol: 'ETH' };
+    const account = wc.account || { address: 'Unknown' };
+    const preExecResult = wc.preExecResult || { pre_exec: { success: true } };
+
+    const isContractCall = txParams.data && txParams.data !== '0x';
+    const hasError = preExecResult.pre_exec && !preExecResult.pre_exec.success;
+
     return (
       <div style={{
         padding: '16px',
@@ -549,7 +585,7 @@ function renderSpecialMessageCard(
           ? 'linear-gradient(135deg, #1e1e1e, #2a2a2a)'
           : 'linear-gradient(135deg, #ffffff, #f9fafb)',
         borderRadius: '12px',
-        border: `2px solid ${isDarkMode ? '#468585' : '#468585'}`,
+        border: `2px solid ${hasError ? '#ff4d4f' : (isDarkMode ? '#468585' : '#468585')}`,
         boxShadow: '0 4px 16px rgba(70, 133, 133, 0.1)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
@@ -571,12 +607,95 @@ function renderSpecialMessageCard(
           borderRadius: '8px',
           fontSize: '13px',
           color: isDarkMode ? '#ffffff' : '#1a1a1a',
+          marginBottom: '12px',
         }}>
-          {/* Add transaction details here if needed */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ fontWeight: '600' }}>To:</span>
+              <span style={{ fontFamily: 'monospace' }}>{formatAddress(txParams.to || 'Unknown')}</span>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ fontWeight: '600' }}>Value:</span>
+              <span>{formatValue(txParams.value)} {chain.nativeTokenSymbol}</span>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ fontWeight: '600' }}>Gas Limit:</span>
+              <span>{formatGas(txParams.gas || '0x0')}</span>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ fontWeight: '600' }}>Network:</span>
+              <span>{chain.name}</span>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ fontWeight: '600' }}>Account:</span>
+              <span style={{ fontFamily: 'monospace' }}>{formatAddress(account.address)}</span>
+            </div>
+
+            {isContractCall && (
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ fontWeight: '600' }}>Type:</span>
+                <span>Contract Interaction</span>
+              </div>
+            )}
+          </div>
         </div>
 
+        {/* Error message if simulation failed */}
+        {hasError && (
+          <div style={{
+            marginBottom: '12px',
+            padding: '8px 12px',
+            backgroundColor: isDarkMode ? 'rgba(255, 77, 79, 0.1)' : '#fff2f0',
+            border: '1px solid #ffccc7',
+            borderRadius: '6px',
+          }}>
+            <div style={{
+              fontSize: '12px',
+              color: '#ff4d4f',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}>
+              ⚠️ Transaction simulation failed: {preExecResult.pre_exec?.error || 'Unknown error'}
+            </div>
+          </div>
+        )}
+
+        {/* Whitelist checkbox for contract calls */}
+        {isContractCall && (
+          <div style={{ marginBottom: '12px' }}>
+            <label style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              color: isDarkMode ? '#ffffff' : '#1a1a1a',
+            }}>
+              <input
+                type="checkbox"
+                checked={addToWhitelist}
+                onChange={(e) => setAddToWhitelist(e.target.checked)}
+                style={{
+                  width: '16px',
+                  height: '16px',
+                  cursor: 'pointer',
+                }}
+              />
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ color: '#faad14' }}>⭐</span>
+                Add this contract to whitelist for future auto-approval
+              </span>
+            </label>
+          </div>
+        )}
+
         {/* Actions */}
-        <div style={{ display: 'flex', gap: '8px', marginTop: '16px', justifyContent: 'flex-end' }}>
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
           <button
             onClick={() => onWalletReject && onWalletReject(approvalId, wc)}
             style={{
@@ -607,6 +726,75 @@ function renderSpecialMessageCard(
           >
             Confirm
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (isWalletContractCallback) {
+    return (
+      <div style={{
+        padding: '16px',
+        background: isDarkMode
+          ? 'linear-gradient(135deg, #1e3a8a, #1e40af)'
+          : 'linear-gradient(135deg, #dbeafe, #bfdbfe)',
+        borderRadius: '12px',
+        border: `2px solid ${isDarkMode ? '#3b82f6' : '#3b82f6'}`,
+        boxShadow: '0 4px 16px rgba(59, 130, 246, 0.1)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+          <div style={{ fontSize: '24px' }}>🔍</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: '600', fontSize: '16px', color: isDarkMode ? '#ffffff' : '#1e40af' }}>
+              Checking Contract Interaction
+            </div>
+            <div style={{ fontSize: '14px', color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(30, 64, 175, 0.7)' }}>
+              AI is analyzing the webpage to verify transaction completion
+            </div>
+          </div>
+        </div>
+
+        <div style={{
+          padding: '12px',
+          background: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(59, 130, 246, 0.05)',
+          borderRadius: '8px',
+          fontSize: '13px',
+          color: isDarkMode ? '#ffffff' : '#1e40af',
+        }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: '#10b981',
+                animation: 'pulse 2s infinite'
+              }} />
+              <span>Scanning page for success indicators...</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: '#10b981',
+                animation: 'pulse 2s infinite',
+                animationDelay: '0.5s'
+              }} />
+              <span>Looking for confirmation messages...</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: '#10b981',
+                animation: 'pulse 2s infinite',
+                animationDelay: '1s'
+              }} />
+              <span>Verifying transaction status...</span>
+            </div>
+          </div>
         </div>
       </div>
     );

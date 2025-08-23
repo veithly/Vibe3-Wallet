@@ -28,6 +28,8 @@ import permissionService from '@/background/service/permission';
 import { CHAINS_ENUM } from '@/constant';
 import { createLogger } from '@/utils/logger';
 import * as crypto from 'crypto';
+import transactionHistoryService from '@/background/service/transactionHistory';
+import { findChain } from '@/utils/chain';
 
 const logger = createLogger('Web3Action');
 
@@ -86,37 +88,61 @@ export class Web3Action {
       const address =
         params.address ||
         (await preferenceService.getCurrentAccount())?.address;
-      const chainId = params.chainId || '1'; // Default to Ethereum mainnet
+
+      if (!address) {
+        return {
+          success: false,
+          error: 'No address provided and no current account found',
+        };
+      }
+
+      // Use wallet's built-in transaction history service to get all networks' transaction history
+      const { pendings, completeds } = await transactionHistoryService.getList(address);
+
+      // Combine pending and completed transactions from all networks
+      const allTransactions = [
+        ...pendings.map(tx => ({
+          ...tx,
+          status: 'pending',
+          network: findChain({ id: tx.chainId })?.name || `Chain ${tx.chainId}`,
+        })),
+        ...completeds.map(tx => ({
+          ...tx,
+          status: 'completed',
+          network: findChain({ id: tx.chainId })?.name || `Chain ${tx.chainId}`,
+        }))
+      ];
+
+      // Sort by creation time (newest first)
+      const sortedTransactions = allTransactions.sort((a, b) => b.createdAt - a.createdAt);
+
+      // Apply limit if specified
       const limit = params.limit || 50;
-
-      // Use Rabby's openapi service to get real transaction history
-      const txResponse = (await (openapiService as any).getTransactionHistory?.(
-        address,
-        String(chainId),
-        limit
-      )) || { data: [] };
-
-      const transactions = txResponse?.data || [];
+      const limitedTransactions = sortedTransactions.slice(0, limit);
 
       return {
         success: true,
         data: {
           address,
-          chainId,
-          transactions,
+          totalTransactions: allTransactions.length,
+          pendingCount: pendings.length,
+          completedCount: completeds.length,
+          transactions: limitedTransactions,
+          networks: [...new Set(allTransactions.map(tx => tx.network))],
         },
       };
     } catch (error) {
-      // Fallback to empty array if service fails
+      console.error('Error getting transaction history:', error);
       return {
-        success: true,
+        success: false,
+        error: `Failed to get transaction history: ${error.message}`,
         data: {
-          address:
-            params.address ||
-            (await preferenceService.getCurrentAccount())?.address ||
-            '',
-          chainId: params.chainId || '1',
+          address: params.address || '',
+          totalTransactions: 0,
+          pendingCount: 0,
+          completedCount: 0,
           transactions: [],
+          networks: [],
         },
       };
     }

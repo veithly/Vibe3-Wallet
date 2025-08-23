@@ -15,10 +15,20 @@ import IconChainBalance, {
   ReactComponent as RcIconChainBalance,
 } from '@/ui/assets/chain-select/chain-balance.svg';
 import { ReactComponent as RcIconWarningCC } from '@/ui/assets/riskWarning-cc.svg';
+// Add edit and delete icons
+import { ReactComponent as RcIconEdit } from '@/ui/assets/custom-rpc/edit.svg';
+import { ReactComponent as RcIconDelete } from '@/ui/assets/custom-rpc/delete.svg';
 
 import { formatUsdValue } from '@/ui/utils';
 import ThemeIcon from '../../ThemeMode/ThemeIcon';
 import { TestnetChainLogo } from '../../TestnetChainLogo';
+import { useHistory } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { message } from 'antd';
+import IconSuccess from '@/ui/assets/success.svg';
+import { matomoRequestEvent } from '@/utils/matomo-request';
+import { useWallet } from '@/ui/utils';
+import { updateChainStore } from '@/utils/chain';
 
 export type TDisableCheckChainFn = (
   chain: string
@@ -65,6 +75,9 @@ export const SelectChainItem = forwardRef(
       },
     }));
     const dispatch = useVibe3Dispatch();
+    const history = useHistory();
+    const { t } = useTranslation();
+    const wallet = useWallet();
 
     useEffect(() => {
       dispatch.customRPC.getAllRPC();
@@ -95,6 +108,93 @@ export const SelectChainItem = forwardRef(
       );
     }, [data.serverId, disableChainCheck]);
 
+    // Check if this is a custom network (custom testnet or custom RPC)
+    const isCustomNetwork = useMemo(() => {
+      // Custom testnet networks have enum starting with 'CUSTOM_'
+      if (data.enum.startsWith('CUSTOM_')) {
+        return true;
+      }
+      // Custom RPC networks exist in the customRPC store
+      if (customRPC[data.enum]) {
+        return true;
+      }
+      return false;
+    }, [data.enum, customRPC]);
+
+    const handleEdit = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (data.enum.startsWith('CUSTOM_')) {
+        // Navigate to custom testnet page for editing
+        history.push('/custom-testnet', {
+          chainId: data.id
+        });
+      } else if (customRPC[data.enum]) {
+        // Navigate to custom RPC page for editing
+        history.push('/custom-rpc', {
+          chainId: data.id,
+          rpcUrl: customRPC[data.enum].url
+        });
+      }
+    };
+
+    const handleDelete = async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (data.enum.startsWith('CUSTOM_')) {
+        // Delete custom testnet
+        try {
+          await wallet.removeCustomTestnet(data.id);
+          // Update the chain store after deletion
+          const list = await wallet.getCustomTestnetList();
+          updateChainStore({
+            testnetList: list,
+          });
+          message.success({
+            duration: 0.5,
+            icon: <i />,
+            content: (
+              <div>
+                <div className="flex gap-4 mb-4">
+                  <img src={IconSuccess} alt="" />
+                  {t('global.Deleted')}
+                </div>
+              </div>
+            ),
+          });
+          matomoRequestEvent({
+            category: 'Custom Network',
+            action: 'delete',
+            label: data.enum,
+          });
+        } catch (error) {
+          console.error('Failed to delete custom testnet:', error);
+        }
+      } else if (customRPC[data.enum]) {
+        // Delete custom RPC
+        try {
+          await dispatch.customRPC.deleteCustomRPC(data.enum);
+          message.success({
+            duration: 0.5,
+            icon: <i />,
+            content: (
+              <div>
+                <div className="flex gap-4 mb-4">
+                  <img src={IconSuccess} alt="" />
+                  {t('global.Deleted')}
+                </div>
+              </div>
+            ),
+          });
+          matomoRequestEvent({
+            category: 'CustomRPC',
+            action: 'delete',
+            label: data.enum,
+          });
+        } catch (error) {
+          console.error('Failed to delete custom RPC:', error);
+        }
+      }
+    };
+
     return (
       <Tooltip
         trigger={['click', 'hover']}
@@ -107,7 +207,7 @@ export const SelectChainItem = forwardRef(
       >
         <div
           className={clsx(
-            'select-chain-item',
+            'select-chain-item group',
             disabled && 'opacity-50 select-chain-item-disabled cursor-default',
             {
               'opacity-80': disableFromToAddress,
@@ -119,7 +219,7 @@ export const SelectChainItem = forwardRef(
           onClick={() => !disabled && onChange?.(data.enum)}
         >
           <div className="w-full h-[60px] flex items-center">
-            <div className="flex items-center flex-1">
+            <div className="flex flex-1 items-center">
               {data.isTestnet ? (
                 data.logo ? (
                   <img
@@ -148,7 +248,7 @@ export const SelectChainItem = forwardRef(
                   ) : (
                     <img
                       src={data.logo}
-                      alt=""
+                      alt={`${data.name} chain icon`}
                       className="select-chain-item-icon"
                     />
                   )}
@@ -170,9 +270,36 @@ export const SelectChainItem = forwardRef(
                 )}
               </div>
             </div>
+
+            {/* Edit and Delete buttons for custom networks */}
+            {isCustomNetwork && (
+              <div className="flex items-center gap-[8px] mr-[8px] opacity-0 group-hover:opacity-100 transition-opacity">
+                <div
+                  className="cursor-pointer hover:opacity-80"
+                  onClick={handleEdit}
+                  aria-label={t('global.Edit')}
+                >
+                  <ThemeIcon
+                    src={RcIconEdit}
+                    className="w-[16px] h-[16px]"
+                  />
+                </div>
+                <div
+                  className="cursor-pointer hover:opacity-80 text-r-red-default"
+                  onClick={handleDelete}
+                  aria-label={t('global.Delete')}
+                >
+                  <ThemeIcon
+                    src={RcIconDelete}
+                    className="w-[16px] h-[16px]"
+                  />
+                </div>
+              </div>
+            )}
+
             <ThemeIcon
               className={clsx(
-                'select-chain-item-star w-16 h-16',
+                'w-16 h-16 select-chain-item-star',
                 stared ? 'is-active' : ''
               )}
               src={stared ? RcIconPinnedFill : RcIconPinned}
@@ -182,15 +309,12 @@ export const SelectChainItem = forwardRef(
               }}
             />
             {value === data.enum ? (
-              <img className="select-chain-item-checked" src={IconCheck}></img>
+              <img className="select-chain-item-checked" src={IconCheck} alt="Selected" />
             ) : null}
           </div>
           {!!shortReason && (
             <div
-              className={`
-                      gap-2 rounded-[4px] bg-r-red-light
-                      h-[31px] mt-[-2px] mb-14 w-full
-                      flex justify-center items-center`}
+              className={`flex gap-2 justify-center items-center mb-14 w-full rounded-[4px] bg-r-red-light h-[31px] mt-[-2px]`}
             >
               <div className="text-r-red-default">
                 <RcIconWarningCC />

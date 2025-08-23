@@ -71,7 +71,6 @@ export interface GetNFTsActionParams {
 export interface GetTransactionHistoryActionParams {
   intent?: string;
   address: string;
-  chainId?: number;
   limit?: number;
 }
 
@@ -126,7 +125,7 @@ export const getNFTsActionSchema: ActionSchema = {
 
 export const getTransactionHistoryActionSchema: ActionSchema = {
   name: 'get_transaction_history',
-  description: 'Get transaction history for an address',
+  description: 'Get transaction history for an address across all networks using wallet built-in storage',
 };
 
 export const getGasPriceActionSchema: ActionSchema = {

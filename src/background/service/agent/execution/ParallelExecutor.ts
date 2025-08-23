@@ -522,7 +522,6 @@ export function optimizeExecutionOrder(
       'type' in a &&
       [
         'getNFTs',
-        'getTransactionHistory',
         'getGasPrice',
       ].includes(a.type)
   );
@@ -530,7 +529,10 @@ export function optimizeExecutionOrder(
   const writeActions = actions.filter(
     (a) =>
       'type' in a &&
-      [].includes(
+      [
+        'getNFTs',
+        'getGasPrice',
+      ].includes(
         a.type
       )
   );

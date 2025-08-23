@@ -78,34 +78,35 @@ export class ToolRegistry {
       requiresConfirmation: false,
     });
 
-    this.registerTool({
-      name: 'getTransactionHistory',
-      description: 'Get transaction history for a wallet address',
-      parameters: [
-        {
-          type: 'string',
-          description: 'Wallet address',
-          pattern: '^0x[a-fA-F0-9]{40}$',
-        },
-        {
-          type: 'number',
-          description: 'Optional: Chain ID',
-          minimum: 1,
-        },
-        {
-          type: 'number',
-          description:
-            'Optional: Number of transactions to return (default 50)',
-          minimum: 1,
-          maximum: 200,
-        },
-      ],
-      required: ['address'],
-      handler: this.createWeb3Handler('getTransactionHistory'),
-      category: 'web3',
-      riskLevel: 'low',
-      requiresConfirmation: false,
-    });
+    // Temporarily disabled getTransactionHistory tool
+    // this.registerTool({
+    //   name: 'getTransactionHistory',
+    //   description: 'Get transaction history for a wallet address',
+    //   parameters: [
+    //     {
+    //       type: 'string',
+    //       description: 'Wallet address',
+    //       pattern: '^0x[a-fA-F0-9]{40}$',
+    //     },
+    //     {
+    //       type: 'number',
+    //       description: 'Optional: Chain ID',
+    //       minimum: 1,
+    //     },
+    //     {
+    //       type: 'number',
+    //       description:
+    //         'Optional: Number of transactions to return (default 50)',
+    //       minimum: 1,
+    //       maximum: 200,
+    //     },
+    //   ],
+    //   required: ['address'],
+    //   handler: this.createWeb3Handler('getTransactionHistory'),
+    //   category: 'web3',
+    //   riskLevel: 'low',
+    //   requiresConfirmation: false,
+    // });
 
     this.registerTool({
       name: 'getGasPrice',
@@ -1146,9 +1147,28 @@ export class ToolRegistry {
           hasError: !!result.error,
         });
 
-        // Monitor tab state after tool execution
-        await this.monitorTabStateAfterTool(actionName, result);
+        // Special handling for navigateToUrl when already on target page
+        if (actionName === 'navigateToUrl' && result.success && result.data?.method === 'already_on_page') {
+          logger.info(`[${executionId}] Already on target page, no navigation needed`, {
+            url: processedParams.url,
+            currentUrl: result.data.finalUrl,
+          });
 
+          // Create a modified result for already_on_page case
+          const alreadyOnPageResult = {
+            ...result,
+            data: {
+              ...result.data,
+              message: 'Already on target page',
+              navigationSkipped: true,
+            }
+          };
+
+          // Use ensureStandardResult to maintain consistent format
+          return this.ensureStandardResult(actionName, processedParams, alreadyOnPageResult);
+        }
+
+        // Use ensureStandardResult to maintain consistent format
         return this.ensureStandardResult(actionName, processedParams, result);
 
       } catch (error) {
@@ -1591,7 +1611,7 @@ export class ToolRegistry {
     const paramMappings: Record<string, string[]> = {
       // Web3 tools
       getNFTs: ['address', 'chainId', 'contractAddress'],
-      getTransactionHistory: ['address', 'chainId', 'limit'],
+      // getTransactionHistory: ['address', 'chainId', 'limit'],
       getGasPrice: ['chainId'],
       estimateGas: ['to', 'value', 'data', 'chainId'],
       signMessage: ['message', 'address'],
@@ -2157,8 +2177,14 @@ export class ToolRegistry {
    */
   private async monitorTabStateAfterTool(toolName: string, result: any): Promise<void> {
     try {
-      // Wait for tab to stabilize
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // For already_on_page navigation, skip waiting since we're not actually navigating
+      const isAlreadyOnPage = toolName === 'navigateToUrl' &&
+        (result?.data?.method === 'already_on_page' || result?.data?.navigationSkipped);
+
+      if (!isAlreadyOnPage) {
+        // Wait for tab to stabilize only for actual navigation
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
 
       // Get current active tab
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -2166,25 +2192,35 @@ export class ToolRegistry {
 
       if (!activeTab?.id) return;
 
-      // Check if tab is still loading
-      let isLoading = activeTab.status === 'loading';
-      let attempts = 0;
-      const maxAttempts = 10;
+      // Check if tab is still loading (skip for already_on_page)
+      if (!isAlreadyOnPage) {
+        let isLoading = activeTab.status === 'loading';
+        let attempts = 0;
+        const maxAttempts = 10;
 
-      while (isLoading && attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        const updatedTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        isLoading = updatedTabs[0]?.status === 'loading';
-        attempts++;
+        while (isLoading && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          const updatedTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+          isLoading = updatedTabs[0]?.status === 'loading';
+          attempts++;
+        }
       }
 
       // Prepare success message for LLM
       let successMessage = `Tool "${toolName}" executed successfully.`;
 
       if (toolName === 'navigateToUrl' && result?.data?.url) {
-        successMessage += ` Successfully navigated to: ${result.data.url}`;
-        if (result.data.title) {
-          successMessage += ` (Page title: "${result.data.title}")`;
+        // Check if we're already on the target page
+        if (result.data.method === 'already_on_page' || result.data.navigationSkipped) {
+          successMessage = `Already on target page: ${result.data.url}`;
+          if (result.data.title) {
+            successMessage += ` (Page title: "${result.data.title}")`;
+          }
+        } else {
+          successMessage += ` Successfully navigated to: ${result.data.url}`;
+          if (result.data.title) {
+            successMessage += ` (Page title: "${result.data.title}")`;
+          }
         }
       } else if (toolName === 'clickElement') {
         successMessage += ` Element clicked successfully.`;

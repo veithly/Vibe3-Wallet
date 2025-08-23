@@ -56,8 +56,8 @@ export function validateActionParams(actionName: string, params: any): boolean {
 
     case 'getNFTs':
       return web3SchemaImports.isGetNFTsActionParams(params);
-    case 'getTransactionHistory':
-      return web3SchemaImports.isGetTransactionHistoryActionParams(params);
+    // case 'getTransactionHistory':
+    //   return web3SchemaImports.isGetTransactionHistoryActionParams(params);
     case 'getGasPrice':
       return web3SchemaImports.isGetGasPriceActionParams(params);
     case 'estimateGas':
@@ -239,13 +239,13 @@ export class ActionBuilder {
         validate: (params: any) => validateActionParams('getNFTs', params),
         handler: this.web3Action,
       },
-      getTransactionHistory: {
-        schema: web3SchemaImports.getTransactionHistoryActionSchema,
-        description: 'Get transaction history for an address',
-        validate: (params: any) =>
-          validateActionParams('getTransactionHistory', params),
-        handler: this.web3Action,
-      },
+      // getTransactionHistory: {
+      //   schema: web3SchemaImports.getTransactionHistoryActionSchema,
+      //   description: 'Get transaction history for an address',
+      //   validate: (params: any) =>
+      //     validateActionParams('getTransactionHistory', params),
+      //   handler: this.web3Action,
+      // },
       getGasPrice: {
         schema: web3SchemaImports.getGasPriceActionSchema,
         description: 'Get current gas price for a network',
@@ -335,7 +335,6 @@ export class ActionBuilder {
       'signMessage',
       'signTypedData',
       'getNFTs',
-      'getTransactionHistory',
       'getGasPrice',
       'estimateGas',
     ];

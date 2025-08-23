@@ -1932,13 +1932,13 @@ class AgentService {
       timeoutId: undefined,
     };
 
-    port.postMessage({
-      type: 'execution',
-      actor: Actors.SYSTEM,
-      state: 'TASK_CANCEL',
-      timestamp: Date.now(),
-      data: { details: 'Task cancelled by user' },
-    });
+    // port.postMessage({
+    //   type: 'execution',
+    //   actor: Actors.SYSTEM,
+    //   state: 'TASK_CANCEL',
+    //   timestamp: Date.now(),
+    //   data: { details: 'Task cancelled by user' },
+    // });
 
     logger.info('AgentService', 'Task cancellation completed');
   }

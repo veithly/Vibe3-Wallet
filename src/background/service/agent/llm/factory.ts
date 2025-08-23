@@ -1814,7 +1814,6 @@ Available Actions:
 - addLiquidity: Provide liquidity to AMM pools
 - removeLiquidity: Withdraw liquidity from pools
 - getNFTs: Query NFT holdings
-- getTransactionHistory: Get transaction history
 - getGasPrice: Get current gas prices
 - estimateGas: Estimate gas costs
 - signMessage: Sign messages with wallet

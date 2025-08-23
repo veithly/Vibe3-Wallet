@@ -53,7 +53,7 @@ export interface Message {
   reactStatus?: ReActStatusMessage;
   toolResults?: ToolResult[];
   finishReason?: string;
-  messageType?: 'standard' | 'thinking' | 'function_call' | 'reasoning' | 'react_status' | 'execution' | 'error' | 'streaming_start' | 'streaming_chunk' | 'streaming_complete' | 'streaming_error' | 'speech_to_text_error' | 'fallback' | 'fallback_complete' | 'tool_result' | 'assistant_content' | 'wallet_auto_connected' | 'wallet_auto_signed' | 'wallet_auto_approved_tx' | 'wallet_confirmation_request';
+  messageType?: 'standard' | 'thinking' | 'function_call' | 'reasoning' | 'react_status' | 'execution' | 'error' | 'streaming_start' | 'streaming_chunk' | 'streaming_complete' | 'streaming_error' | 'speech_to_text_error' | 'fallback' | 'fallback_complete' | 'tool_result' | 'assistant_content' | 'wallet_auto_connected' | 'wallet_auto_signed' | 'wallet_auto_approved_tx' | 'wallet_confirmation_request' | 'wallet_contract_callback';
 }
 
 export interface ActorProfile {

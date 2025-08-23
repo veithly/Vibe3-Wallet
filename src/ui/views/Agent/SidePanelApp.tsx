@@ -2592,11 +2592,27 @@ export const SidePanelApp = () => {
                       }
                       // Stop any stream just in case
                       try { handleStopTask(); } catch {}
-                      // Send a user content to LLM summarizing the tx
-                      try {
-                        const text = `User confirmed a transaction\nOrigin: ${data?.origin}\nChain: ${data?.chain?.name} (id=${data?.chain?.id})\nFrom: ${data?.txParams?.from}\nTo (contract): ${data?.txParams?.to}\nValue: ${data?.txParams?.value || '0x0'}\nGas Limit: ${data?.txParams?.gas || data?.estimatedGas || '0x0'}\n${data?.txParams?.data ? `Calldata: ${data.txParams.data}` : 'Type: Native transfer'}\nAddToWhitelist: ${!!addToWhitelist}`;
-                        (async () => { await handleSendMessage(text); })();
-                      } catch {}
+
+                      // Check if this is a contract interaction
+                      const isContractCall = data?.txParams?.data && data.txParams.data !== '0x';
+
+                      if (isContractCall) {
+                        // For contract interactions, ask LLM to check page completion
+                        try {
+                          const text = `User confirmed a contract transaction. Please check if the interaction is complete on the current webpage.\n\nTransaction Details:\nOrigin: ${data?.origin}\nChain: ${data?.chain?.name} (id=${data?.chain?.id})\nFrom: ${data?.txParams?.from}\nTo (contract): ${data?.txParams?.to}\nValue: ${data?.txParams?.value || '0x0'}\nGas Limit: ${data?.txParams?.gas || data?.estimatedGas || '0x0'}\nCalldata: ${data.txParams.data}\nAddToWhitelist: ${!!addToWhitelist}\n\nPlease use the evaluatePageCompletion tool to check if the contract interaction has been completed successfully. Look for success messages, confirmation dialogs, or any indicators that the transaction was processed.`;
+                          (async () => { await handleSendMessage(text); })();
+                        } catch (e) {
+                          logger.warn(COMPONENT_NAME, 'Failed to send contract completion check', e);
+                        }
+                      } else {
+                        // For native transfers, just summarize the transaction
+                        try {
+                          const text = `User confirmed a transaction\nOrigin: ${data?.origin}\nChain: ${data?.chain?.name} (id=${data?.chain?.id})\nFrom: ${data?.txParams?.from}\nTo: ${data?.txParams?.to}\nValue: ${data?.txParams?.value || '0x0'}\nGas Limit: ${data?.txParams?.gas || data?.estimatedGas || '0x0'}\nType: Native transfer\nAddToWhitelist: ${!!addToWhitelist}`;
+                          (async () => { await handleSendMessage(text); })();
+                        } catch (e) {
+                          logger.warn(COMPONENT_NAME, 'Failed to send transaction summary', e);
+                        }
+                      }
                     }}
                     onWalletReject={(approvalId, data) => {
                       try {

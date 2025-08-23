@@ -222,7 +222,6 @@ export class EnhancedActionExecutor {
       'signMessage',
       'signTypedData',
       'getNFTs',
-      'getTransactionHistory',
       'getGasPrice',
       'estimateGas',
     ];

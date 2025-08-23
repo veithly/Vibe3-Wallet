@@ -8,6 +8,7 @@ import {
   getNativeBalanceActionSchema,
   getAssetPricesActionSchema
 } from './asset-query-schemas';
+import { BrowserAutomationController } from '../automation/BrowserAutomationController';
 
 const logger = createLogger('ActionRegistry');
 
@@ -63,6 +64,7 @@ export class ActionRegistry {
   private metrics: Map<string, any> = new Map();
   private config: ActionRegistryConfig;
   private assetQueryAction: AssetQueryAction;
+  private browserController: BrowserAutomationController;
 
   constructor(config?: Partial<ActionRegistryConfig>) {
     this.config = {
@@ -76,6 +78,9 @@ export class ActionRegistry {
 
     // Initialize asset query action
     this.assetQueryAction = new AssetQueryAction({} as any); // Context will be provided during execution
+
+    // Initialize browser automation controller
+    this.browserController = new BrowserAutomationController();
 
     this.initializeDefaultActions();
     this.initializeCategories();
@@ -678,7 +683,58 @@ export class ActionRegistry {
 
   private async executeNavigateToUrl(params: any, context?: any): Promise<any> {
     logger.info('Navigating to URL', params);
-    return { success: true, url: params.url };
+
+    try {
+      // Create an ActionStep for navigation
+      const actionStep: ActionStep = {
+        id: `navigate_${Date.now()}`,
+        name: 'Navigate to URL',
+        type: 'navigateToUrl',
+        description: `Navigate to ${params.url}`,
+        params: {
+          url: params.url,
+          waitFor: params.waitFor,
+          timeout: params.timeout,
+          tabId: params.tabId,
+        },
+        status: 'pending',
+        dependencies: [],
+        riskLevel: 'MEDIUM',
+      };
+
+      // Call BrowserAutomationController's executeAction method
+      const result = await this.browserController.executeAction(actionStep);
+
+      // Check if we're already on the target page
+      if (result.success && result.data?.method === 'already_on_page') {
+        logger.info('Already on target page, no navigation needed', {
+          url: params.url,
+          currentUrl: result.data.finalUrl,
+        });
+        return {
+          success: true,
+          url: params.url,
+          method: 'already_on_page',
+          message: 'Already on target page',
+          data: result.data,
+        };
+      }
+
+      return {
+        success: result.success,
+        url: params.url,
+        method: result.data?.method || 'navigate',
+        data: result.data,
+        error: result.error,
+      };
+    } catch (error) {
+      logger.error('Navigation failed', error);
+      return {
+        success: false,
+        url: params.url,
+        error: error instanceof Error ? error.message : 'Navigation failed',
+      };
+    }
   }
 
   private async executeClickElement(params: any, context?: any): Promise<any> {

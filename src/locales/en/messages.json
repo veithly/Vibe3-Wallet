@@ -18,6 +18,13 @@
     "retry": "Retry",
     "refresh": "Refresh"
   },
+  "global": {
+    "Edit": "Edit",
+    "Delete": "Delete",
+    "Cancel": "Cancel",
+    "Save": "Save",
+    "Deleted": "Deleted"
+  },
   "agent": {
     "title": "AI Agent",
     "chat": {
@@ -104,6 +111,64 @@
     "theme": "Theme",
     "notifications": "Notifications",
     "privacy": "Privacy"
+  },
+  "page": {
+    "dashboard": {
+      "settings": {
+        "features": {
+          "label": "Features",
+          "manageAddress": "Manage Address",
+          "connectedDapp": "Connected Dapps",
+          "customRPCNetworks": "Custom RPC Networks",
+          "customTestnetNetworks": "Custom Testnet Networks",
+          "ecosystem": "Ecosystem"
+        },
+        "settings": {
+          "label": "Settings",
+          "currentLanguage": "Current Language",
+          "toggleThemeMode": "Theme Mode",
+          "themeMode": "Theme Mode"
+        },
+        "lock": {
+          "never": "Never"
+        },
+        "7Days": "7 Days",
+        "1Day": "1 Day",
+        "4Hours": "4 Hours",
+        "1Hour": "1 Hour",
+        "10Minutes": "10 Minutes",
+        "backendServiceUrl": "Backend Service URL",
+        "testnetBackendServiceUrl": "Testnet Backend Service URL",
+        "inputOpenapiHost": "Please input OpenAPI host",
+        "pleaseCheckYourHost": "Please check your host",
+        "host": "Host",
+        "reset": "Reset",
+        "save": "Save",
+        "clearPending": "Clear Pending Transactions",
+        "clearPendingTip1": "This will clear all pending transactions",
+        "clearPendingTip2": "This action cannot be undone",
+        "clearPendingWarningTip": "Are you sure you want to clear all pending transactions?",
+        "clearWatchMode": "Clear Watch Mode",
+        "clearWatchAddressContent": "This will clear all watch addresses",
+        "warning": "Warning",
+        "pendingTransactionCleared": "Pending transactions cleared",
+        "DappAccount": {
+          "title": "Dapp Account",
+          "desc": "Enable dapp account mode",
+          "button": "Enable"
+        },
+        "rateModalTriggerOnHome": {
+          "description": "Rate us on Chrome Web Store"
+        },
+        "rateModal": {
+          "thxTitle": "Thank you!",
+          "thxDesc": "Your feedback helps us improve",
+          "rateOnChromeStoreButton": "Rate on Chrome Web Store",
+          "feedbackDesc": "Tell us what you think",
+          "submitFeedbackButton": "Submit Feedback"
+        }
+      }
+    }
   },
   "errors": {
     "networkError": "Network error occurred",

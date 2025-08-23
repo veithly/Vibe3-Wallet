@@ -556,6 +556,42 @@ const SettingsInner = ({
             reportSettings('Connected Dapps');
           },
         },
+        {
+          leftIcon: RcIconSettingsCodeCC,
+          content: t('page.dashboard.settings.features.customRPCNetworks'),
+          onClick: () => {
+            history.push('/custom-rpc');
+            matomoRequestEvent({
+              category: 'Setting',
+              action: 'clickToUse',
+              label: 'Custom RPC Networks',
+            });
+
+            ga4.fireEvent('More_CustomRPCNetworks', {
+              event_category: 'Click More',
+            });
+
+            reportSettings('Custom RPC Networks');
+          },
+        },
+        {
+          leftIcon: RcIconSettingsCodeCC,
+          content: t('page.dashboard.settings.features.customTestnetNetworks'),
+          onClick: () => {
+            history.push('/custom-testnet');
+            matomoRequestEvent({
+              category: 'Setting',
+              action: 'clickToUse',
+              label: 'Custom Testnet Networks',
+            });
+
+            ga4.fireEvent('More_CustomTestnetNetworks', {
+              event_category: 'Click More',
+            });
+
+            reportSettings('Custom Testnet Networks');
+          },
+        },
       ] as SettingItem[],
     },
     settings: {
