@@ -1,4 +1,504 @@
-// This file is mostly empty now as Settings has been converted to Tailwind CSS
-// Only keeping essential animations and any custom styles that can't be easily replicated with Tailwind
+@import '~@/ui/style/var.less';
 
-// Custom animations or complex styles that Tailwind doesn't cover can be added here
+// 动画定义
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+// 主容器样式
+.settings-modal-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.settings-modal {
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: scaleIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  
+  &.optimized-mode {
+    .settings-header {
+      background: linear-gradient(135deg, #468585 0%, #50a0a0 100%);
+      padding: 16px 20px;
+      box-shadow: 0 2px 12px rgba(70, 133, 133, 0.15);
+      position: relative;
+      overflow: hidden;
+      
+      // 装饰性背景
+      &::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -10%;
+        width: 200px;
+        height: 200px;
+        background: radial-gradient(circle, rgba(255, 255, 255, 0.1) 0%, transparent 70%);
+        border-radius: 50%;
+        pointer-events: none;
+      }
+      
+      h2 {
+        color: #ffffff !important;
+        font-size: 20px;
+        font-weight: 700;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        margin: 0 0 4px 0;
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        
+        &::before {
+          content: '⚙️';
+          font-size: 20px;
+        }
+      }
+      
+      p {
+        color: rgba(255, 255, 255, 0.9) !important;
+        font-size: 13px;
+        margin: 0 0 0 28px;
+        position: relative;
+        z-index: 1;
+      }
+    }
+    
+    .settings-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      
+      // 自定义滚动条
+      &::-webkit-scrollbar {
+        width: 8px;
+      }
+      
+      &::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 4px;
+      }
+      
+      &::-webkit-scrollbar-thumb {
+        background: linear-gradient(180deg, #468585 0%, #50a0a0 100%);
+        border-radius: 4px;
+        
+        &:hover {
+          background: linear-gradient(180deg, #3a7070 0%, #468585 100%);
+        }
+      }
+      
+      // Tab 导航样式优化 - 不使用卡片样式
+      nav {
+        background: transparent;
+        padding: 0 4px;
+        margin-bottom: 16px;
+        border-bottom: 1px solid #e5e7eb;
+        
+        button {
+          position: relative;
+          padding: 10px 16px !important;
+          font-weight: 500;
+          font-size: 14px;
+          transition: all 0.3s ease;
+          
+          &::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #468585, #50a0a0);
+            transform: scaleX(0);
+            transition: transform 0.3s ease;
+          }
+          
+          &:hover {
+            color: #468585 !important;
+            background: rgba(70, 133, 133, 0.05);
+          }
+          
+          &.border-blue-500 {
+            color: #468585 !important;
+            border-color: transparent !important;
+            
+            &::after {
+              transform: scaleX(1);
+            }
+          }
+        }
+      }
+      
+      // 内容样式 - 不使用卡片
+      .providers-tab-content,
+      .agent-models-tab-content,
+      .react-config-tab-content,
+      .whitelist-tab-content {
+        animation: slideInUp 0.3s ease-out;
+        
+        > div {
+          background: transparent !important;
+          border-radius: 0 !important;
+          box-shadow: none !important;
+          border: none !important;
+          padding: 0 !important;
+          margin-bottom: 24px;
+          
+          h3 {
+            color: #2c3e50 !important;
+            font-size: 16px !important;
+            font-weight: 600 !important;
+            margin-bottom: 16px !important;
+            padding-bottom: 8px !important;
+            border-bottom: 1px solid rgba(70, 133, 133, 0.15);
+            display: flex;
+            align-items: center;
+            
+            &::before {
+              content: '';
+              width: 3px;
+              height: 18px;
+              background: linear-gradient(180deg, #468585, #50a0a0);
+              border-radius: 2px;
+              margin-right: 10px;
+            }
+          }
+        }
+        
+        // Provider 区块 - 简洁样式
+        .bg-gray-50 {
+          background: #f9fafb !important;
+          border: 1px solid #e5e7eb !important;
+          border-radius: 8px !important;
+          transition: all 0.3s ease;
+          
+          &:hover {
+            background: #f3f4f6 !important;
+            border-color: rgba(70, 133, 133, 0.3) !important;
+          }
+        }
+        
+        // 输入框样式 - 缩小尺寸
+        input[type="text"],
+        input[type="password"],
+        input[type="number"],
+        select {
+          background: white !important;
+          border: 1px solid #e5e7eb !important;
+          border-radius: 6px !important;
+          padding: 6px 10px !important;
+          font-size: 14px !important;
+          transition: all 0.3s ease;
+          
+          &:hover {
+            border-color: rgba(70, 133, 133, 0.3) !important;
+          }
+          
+          &:focus {
+            border-color: #468585 !important;
+            box-shadow: 0 0 0 2px rgba(70, 133, 133, 0.1) !important;
+            outline: none !important;
+          }
+        }
+        
+        // 按钮样式
+        button {
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          border-radius: 8px !important;
+          font-weight: 500;
+          
+          &.text-green-600 {
+            background: linear-gradient(135deg, #468585, #50a0a0) !important;
+            color: white !important;
+            border: none !important;
+            box-shadow: 0 2px 6px rgba(70, 133, 133, 0.2);
+            
+            &:hover {
+              transform: translateY(-1px);
+              box-shadow: 0 4px 10px rgba(70, 133, 133, 0.3);
+            }
+          }
+          
+          &.text-blue-600 {
+            background: linear-gradient(135deg, #50a0a0, #5eb8b8) !important;
+            color: white !important;
+            border: none !important;
+            
+            &:hover {
+              transform: scale(1.02);
+            }
+          }
+          
+          &.text-red-600 {
+            &:hover {
+              background: #fee2e2 !important;
+            }
+          }
+        }
+        
+        // Toggle switches
+        .peer-checked\:bg-blue-600 {
+          background: linear-gradient(135deg, #468585, #50a0a0) !important;
+        }
+        
+        // Agent 卡片图标
+        svg {
+          &.text-blue-500 {
+            color: #468585 !important;
+            width: 20px !important;
+            height: 20px !important;
+          }
+        }
+        
+        // Agent 模型配置卡片
+        .agent-models-tab-content {
+          h4 {
+            font-size: 15px !important;
+            
+            svg {
+              margin-right: 10px !important;
+            }
+          }
+        }
+      }
+    }
+    
+    .settings-footer {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafa 100%) !important;
+      border-top: 1px solid rgba(70, 133, 133, 0.1) !important;
+      padding: 12px 16px !important;
+      box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+      
+      button {
+        padding: 8px 16px !important;
+        border-radius: 6px !important;
+        font-size: 14px !important;
+        font-weight: 500;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        
+        &:first-child {
+          background: white !important;
+          border: 2px solid #e5e7eb !important;
+          
+          &:hover {
+            background: #f9fafb !important;
+            border-color: #d1d5db !important;
+            transform: translateY(-1px);
+          }
+        }
+        
+        &:last-child {
+          background: linear-gradient(135deg, #468585, #50a0a0) !important;
+          border: none !important;
+          box-shadow: 0 2px 8px rgba(70, 133, 133, 0.25);
+          
+          &:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(70, 133, 133, 0.35);
+          }
+          
+          &:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+          }
+        }
+      }
+    }
+  }
+  
+  // Loading 和 Error 状态
+  .settings-loading,
+  .settings-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    padding: 40px;
+    
+    h3 {
+      color: #468585;
+      font-size: 20px;
+      margin-bottom: 12px;
+    }
+    
+    p {
+      color: #6b7280;
+      margin-bottom: 20px;
+    }
+    
+    button {
+      background: linear-gradient(135deg, #468585, #50a0a0);
+      color: white;
+      padding: 10px 24px;
+      border-radius: 8px;
+      border: none;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      
+      &:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(70, 133, 133, 0.3);
+      }
+    }
+  }
+  
+  // 弹出模态框样式
+  .fixed.inset-0 {
+    animation: fadeIn 0.2s ease-out;
+    
+    > div:last-child {
+      animation: scaleIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      border-radius: 16px !important;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15) !important;
+      
+      h3 {
+        color: #2c3e50;
+      }
+      
+      button {
+        &:last-child {
+          background: linear-gradient(135deg, #468585, #50a0a0) !important;
+          
+          &:hover:not(:disabled) {
+            transform: scale(1.02);
+          }
+        }
+      }
+    }
+  }
+  
+  // 暗色模式支持
+  &.dark {
+    background: #1a1a1a;
+    
+    .settings-header {
+      background: linear-gradient(135deg, #1e3a3a, #2d5555);
+    }
+    
+    .settings-content {
+      background: #1a1a1a;
+      
+      nav {
+        background: #2a2a2a;
+        
+        button {
+          color: #9ca3af !important;
+          
+          &:hover {
+            color: #50a0a0 !important;
+          }
+          
+          &.border-blue-500 {
+            color: #50a0a0 !important;
+          }
+        }
+      }
+      
+      .providers-tab-content > div,
+      .agent-models-tab-content > div,
+      .react-config-tab-content > div,
+      .whitelist-tab-content > div {
+        background: #2a2a2a !important;
+        border-color: rgba(70, 133, 133, 0.2) !important;
+        
+        h3 {
+          color: #ffffff !important;
+        }
+      }
+      
+      .bg-gray-50 {
+        background: linear-gradient(135deg, #2a2a2a, #333) !important;
+      }
+      
+      input, select {
+        background: #1a1a1a !important;
+        border-color: #444 !important;
+        color: white !important;
+        
+        &:hover {
+          border-color: rgba(70, 133, 133, 0.4) !important;
+        }
+      }
+    }
+    
+    .settings-footer {
+      background: linear-gradient(180deg, #2a2a2a, #1a1a1a) !important;
+      border-top-color: #333 !important;
+    }
+  }
+}
+
+// 响应式设计
+@media (max-width: 768px) {
+  .settings-modal {
+    .settings-content {
+      padding: 16px;
+      
+      nav {
+        padding: 0 8px;
+        
+        button {
+          padding: 12px 12px !important;
+          font-size: 13px;
+        }
+      }
+    }
+  }
+}
+
+// 动画延迟类
+.providers-tab-content > div {
+  animation-delay: 0.1s;
+}
+
+.agent-models-tab-content > div {
+  animation-delay: 0.15s;
+}
+
+.react-config-tab-content > div {
+  animation-delay: 0.2s;
+}
+
+.whitelist-tab-content > div {
+  animation-delay: 0.25s;
+}

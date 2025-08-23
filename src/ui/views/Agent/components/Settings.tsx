@@ -15,6 +15,7 @@ import {
 import { logger } from '../utils/logger';
 import IconButton from './IconButton';
 import ProviderValidator from './ProviderValidator';
+import '../styles/Settings.less';
 
 
 // ReAct configuration interface
