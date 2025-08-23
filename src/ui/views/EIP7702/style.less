@@ -1,0 +1,186 @@
+.eip-7702-container {
+  min-height: 100vh;
+  background: var(--r-neutral-bg-1);
+  display: flex;
+  flex-direction: column;
+
+  .eip-7702-content {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+
+    .section-header {
+      margin-bottom: 24px;
+
+      h2 {
+        font-size: 20px;
+        font-weight: 600;
+        color: var(--r-neutral-title-1);
+        margin-bottom: 8px;
+      }
+
+      .description {
+        font-size: 14px;
+        color: var(--r-neutral-body);
+        line-height: 20px;
+      }
+    }
+
+    .current-account-info {
+      background: var(--r-neutral-card-1);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 24px;
+
+      .info-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+
+        .label {
+          font-size: 14px;
+          color: var(--r-neutral-body);
+        }
+
+        .value {
+          font-size: 14px;
+          color: var(--r-neutral-title-1);
+          font-family: monospace;
+          word-break: break-all;
+        }
+      }
+    }
+
+    .eip-7702-form {
+      .ant-form-item-label {
+        label {
+          font-size: 14px;
+          font-weight: 500;
+          color: var(--r-neutral-title-1);
+        }
+      }
+
+      .input-field {
+        background: var(--r-neutral-card-1);
+        border: 1px solid var(--r-neutral-line);
+        color: var(--r-neutral-title-1);
+
+        &:hover {
+          border-color: var(--r-blue-default);
+        }
+
+        &:focus {
+          border-color: var(--r-blue-default);
+          box-shadow: 0 0 0 2px rgba(112, 132, 255, 0.1);
+        }
+
+        &::placeholder {
+          color: var(--r-neutral-foot);
+        }
+      }
+
+      .button-group {
+        margin-top: 32px;
+
+        .ant-btn {
+          height: 48px;
+          font-size: 16px;
+          font-weight: 500;
+          border-radius: 8px;
+        }
+      }
+    }
+
+    .warning-box {
+      background: rgba(255, 176, 32, 0.1);
+      border: 1px solid rgba(255, 176, 32, 0.3);
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 24px;
+      margin-bottom: 32px;
+
+      strong {
+        color: #FFB020;
+        font-size: 14px;
+        display: block;
+        margin-bottom: 12px;
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 20px;
+        
+        li {
+          color: var(--r-neutral-body);
+          font-size: 13px;
+          line-height: 20px;
+          margin-bottom: 4px;
+
+          &:last-child {
+            margin-bottom: 0;
+          }
+        }
+      }
+    }
+
+    .authorized-contracts {
+      h3 {
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--r-neutral-title-1);
+        margin-bottom: 16px;
+      }
+
+      .contracts-list {
+        background: var(--r-neutral-card-1);
+        border-radius: 8px;
+        padding: 24px;
+
+        .empty-state {
+          text-align: center;
+          color: var(--r-neutral-foot);
+          font-size: 14px;
+          padding: 32px 0;
+        }
+
+        .contract-item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 12px;
+          border-bottom: 1px solid var(--r-neutral-line);
+
+          &:last-child {
+            border-bottom: none;
+          }
+
+          .contract-address {
+            font-family: monospace;
+            font-size: 14px;
+            color: var(--r-neutral-title-1);
+          }
+
+          .contract-actions {
+            display: flex;
+            gap: 8px;
+
+            .ant-btn {
+              height: 28px;
+              font-size: 12px;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// Dark mode support
+html[data-theme='dark'] {
+  .eip-7702-container {
+    .warning-box {
+      background: rgba(255, 176, 32, 0.05);
+      border-color: rgba(255, 176, 32, 0.2);
+    }
+  }
+}

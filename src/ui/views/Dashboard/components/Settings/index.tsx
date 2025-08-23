@@ -592,6 +592,24 @@ const SettingsInner = ({
             reportSettings('Custom Testnet Networks');
           },
         },
+
+        {
+          content: 'EIP-7702',
+          onClick: () => {
+            history.push('/eip-7702');
+            matomoRequestEvent({
+              category: 'Setting',
+              action: 'clickToUse',
+              label: 'EIP-7702',
+            });
+
+            ga4.fireEvent('More_EIP7702', {
+              event_category: 'Click More',
+            });
+
+            reportSettings('EIP-7702');
+          },
+        },
       ] as SettingItem[],
     },
     settings: {

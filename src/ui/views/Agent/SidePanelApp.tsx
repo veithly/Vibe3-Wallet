@@ -304,6 +304,7 @@ export const SidePanelApp = () => {
             state,
             hasContent: !!content,
           });
+          // 立即重置按钮状态，确保响应完成后恢复默认样式
           setInputEnabled(true);
           setShowStopButton(false);
           setIsReplaying(false);
@@ -464,11 +465,12 @@ export const SidePanelApp = () => {
       // If LLM signaled a normal stop, immediately revert UI to Send
       if (data?.finish_reason === 'stop') {
         try { setStreamingMessageId(null); } catch {}
+        // 确保在 agent 响应完成后立即恢复按钮为默认样式
         setInputEnabled(true);
         setShowStopButton(false);
         setIsFollowUpMode(true);
         resetReActStatus();
-        logger.info(COMPONENT_NAME, "finish_reason 'stop' received; UI reset to Send");
+        logger.info(COMPONENT_NAME, "finish_reason 'stop' received; UI reset to Send button");
       }
     },
     [appendMessage, resetReActStatus, streamingMessageId]
@@ -673,6 +675,7 @@ export const SidePanelApp = () => {
             timestamp: Date.now(),
             messageType: 'error',
           });
+          // 错误发生时也要恢复按钮状态
           setInputEnabled(true);
           setShowStopButton(false);
           resetReActStatus();
@@ -704,6 +707,12 @@ export const SidePanelApp = () => {
             logger.info(COMPONENT_NAME, 'Function call with tool_calls finish reason detected', {
               functionCallsCount: message.data.functionCalls.length,
             });
+            // 如果是 tool_calls，agent 还在处理中，保持 stop 按钮
+          } else if (message.data?.finish_reason === 'stop') {
+            // 如果函数调用完成，恢复默认按钮
+            setInputEnabled(true);
+            setShowStopButton(false);
+            logger.info(COMPONENT_NAME, 'Function call completed, restoring Send button');
           }
         } else if (message && message.type === 'tool_result') {
           logger.debug(COMPONENT_NAME, 'Received tool_result event', {
@@ -1168,12 +1177,14 @@ export const SidePanelApp = () => {
             }
           }
 
+          // 流式响应完成，立即恢复按钮为默认发送样式
           setStreamingMessageId(null);
           setInputEnabled(true);
           setShowStopButton(false);
           setIsFollowUpMode(true);
           resetReActStatus();
 
+          logger.info(COMPONENT_NAME, 'Streaming complete, resetting button to Send');
           logEvent('streaming_complete', { taskId: message.taskId });
         } else if (message && message.type === 'streaming_error') {
           logger.error(COMPONENT_NAME, 'Streaming error occurred', {
@@ -1209,6 +1220,7 @@ export const SidePanelApp = () => {
             });
           }
 
+          // 流式错误时也要恢复按钮状态
           setStreamingMessageId(null);
           setInputEnabled(true);
           setShowStopButton(false);
@@ -1889,10 +1901,10 @@ export const SidePanelApp = () => {
         const tabId = await getActiveTabId();
         logger.debug(COMPONENT_NAME, 'Got tab ID', { tabId });
 
-        // Set UI state immediately
+        // Set UI state immediately - 开始处理时显示 stop 按钮
         setInputEnabled(false);
         setShowStopButton(true);
-        logger.debug(COMPONENT_NAME, 'UI state updated');
+        logger.debug(COMPONENT_NAME, 'UI state updated - showing Stop button');
 
         // Initialize ReAct status
         updateReActStatus({

@@ -224,8 +224,9 @@ export default function ChatInput({
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                 boxShadow: '0 2px 8px rgba(255, 75, 75, 0.3)',
+                animation: 'fadeIn 0.3s ease-in-out',
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.transform = 'scale(1.05)';
@@ -261,10 +262,11 @@ export default function ChatInput({
                 alignItems: 'center',
                 justifyContent: 'center',
                 transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                boxShadow: isSendButtonDisabled 
-                  ? 'none' 
+                boxShadow: isSendButtonDisabled
+                  ? 'none'
                   : '0 2px 8px rgba(70, 133, 133, 0.3)',
                 transform: 'scale(1)',
+                animation: 'fadeIn 0.3s ease-in-out',
               }}
               onMouseEnter={(e) => {
                 if (!isSendButtonDisabled) {

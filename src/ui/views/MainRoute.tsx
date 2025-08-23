@@ -83,6 +83,7 @@ import dayjs from 'dayjs';
 import { PreferenceStore } from '@/background/service/preference';
 import SendPoly from './SendPoly';
 import WhitelistInput from './WhitelistInput';
+import EIP7702 from './EIP7702';
 
 declare global {
   interface Window {
@@ -417,6 +418,9 @@ const Main = () => {
         </PrivateRoute>
         <PrivateRoute path="/gas-account">
           <GasAccount />
+        </PrivateRoute>
+        <PrivateRoute exact path="/eip-7702">
+          <EIP7702 />
         </PrivateRoute>
       </Switch>
 
