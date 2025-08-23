@@ -22,11 +22,34 @@ export interface ToolDefinition {
   requiredPermissions?: string[];
 }
 
+interface ToolExecutionCache {
+  key: string;
+  result: any;
+  timestamp: number;
+  ttl: number;
+}
+
+interface ToolUsageStats {
+  name: string;
+  callCount: number;
+  successCount: number;
+  errorCount: number;
+  averageExecutionTime: number;
+  lastCalled: number;
+}
+
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
   private categories: Map<string, string[]> = new Map();
   private executionTracker = new Map<string, number>();
   private lastHighlightedByTabId = new Map<number, any[]>();
+  private cache: Map<string, ToolExecutionCache> = new Map();
+  private usageStats: Map<string, ToolUsageStats> = new Map();
+  private retryConfig = {
+    maxRetries: 3,
+    retryDelay: 1000,
+    backoffMultiplier: 2,
+  };
 
   // Deduplication controls for high-frequency element scanning
   private pendingGetClickableByKey = new Map<string, Promise<any>>();
@@ -49,8 +72,279 @@ export class ToolRegistry {
   private initializeWeb3Tools(): void {
     // Core Web3 tools
 
+    // 基础查询工具 - 无需用户确认
+    this.registerTool({
+      name: 'getBalance',
+      description: 'Get total balance and asset information for a wallet address',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Wallet address to check balance for',
+          pattern: '^0x[a-fA-F0-9]{40}$',
+        },
+        {
+          type: 'number',
+          description: 'Optional: Chain ID (default: current chain)',
+          minimum: 1,
+        },
+      ],
+      required: ['address'],
+      handler: this.createWalletQueryHandler('getBalance'),
+      category: 'web3',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
 
+    this.registerTool({
+      name: 'getTokenBalance',
+      description: 'Get specific token balance for a wallet address',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Wallet address to check token balance for',
+          pattern: '^0x[a-fA-F0-9]{40}$',
+        },
+        {
+          type: 'string',
+          description: 'Token contract address (use empty for native token)',
+          pattern: '^0x[a-fA-F0-9]{40}$',
+        },
+        {
+          type: 'number',
+          description: 'Optional: Chain ID (default: current chain)',
+          minimum: 1,
+        },
+      ],
+      required: ['address', 'tokenAddress'],
+      handler: this.createWalletQueryHandler('getTokenBalance'),
+      category: 'web3',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
 
+    this.registerTool({
+      name: 'getTransactionHistory',
+      description: 'Get transaction history for a wallet address',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Wallet address to get transaction history for',
+          pattern: '^0x[a-fA-F0-9]{40}$',
+        },
+        {
+          type: 'number',
+          description: 'Optional: Chain ID (default: all chains)',
+          minimum: 1,
+        },
+        {
+          type: 'number',
+          description: 'Optional: Number of transactions to return (default: 50, max: 200)',
+          minimum: 1,
+          maximum: 200,
+        },
+      ],
+      required: ['address'],
+      handler: this.createWalletQueryHandler('getTransactionHistory'),
+      category: 'web3',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'getTokenPrice',
+      description: 'Get current price of a specific token',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Token contract address or symbol',
+          pattern: '^0x[a-fA-F0-9]{40}$|^[A-Za-z0-9]+$',
+        },
+        {
+          type: 'number',
+          description: 'Optional: Chain ID (default: current chain)',
+          minimum: 1,
+        },
+        {
+          type: 'string',
+          description: 'Optional: Quote currency (default: USD)',
+        },
+      ],
+      required: ['token'],
+      handler: this.createWalletQueryHandler('getTokenPrice'),
+      category: 'web3',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    this.registerTool({
+      name: 'getAllAssets',
+      description: 'Get all assets (tokens and NFTs) for a wallet address',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Wallet address to get assets for',
+          pattern: '^0x[a-fA-F0-9]{40}$',
+        },
+        {
+          type: 'number',
+          description: 'Optional: Chain ID (default: current chain)',
+          minimum: 1,
+        },
+      ],
+      required: ['address'],
+      handler: this.createWalletQueryHandler('getAllAssets'),
+      category: 'web3',
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    });
+
+    // 基础交易工具 - 需要用户确认
+    this.registerTool({
+      name: 'sendTransaction',
+      description: 'Send a transaction to a recipient address',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Recipient address',
+          pattern: '^0x[a-fA-F0-9]{40}$',
+        },
+        {
+          type: 'string',
+          description: 'Transaction value in ETH (e.g., "0.1")',
+        },
+        {
+          type: 'string',
+          description: 'Optional: Transaction data (hex string)',
+          pattern: '^0x[0-9a-fA-F]*$',
+        },
+        {
+          type: 'number',
+          description: 'Optional: Chain ID (default: current chain)',
+          minimum: 1,
+        },
+        {
+          type: 'string',
+          description: 'Optional: Gas price in Gwei',
+        },
+      ],
+      required: ['to', 'value'],
+      handler: this.createWalletTransactionHandler('sendTransaction'),
+      category: 'web3',
+      riskLevel: 'high',
+      requiresConfirmation: true,
+    });
+
+    this.registerTool({
+      name: 'approveToken',
+      description: 'Approve a token for spending by a contract',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Token contract address to approve',
+          pattern: '^0x[a-fA-F0-9]{40}$',
+        },
+        {
+          type: 'string',
+          description: 'Spender contract address',
+          pattern: '^0x[a-fA-F0-9]{40}$',
+        },
+        {
+          type: 'string',
+          description: 'Amount to approve (use "0" for unlimited)',
+        },
+        {
+          type: 'number',
+          description: 'Optional: Chain ID (default: current chain)',
+          minimum: 1,
+        },
+      ],
+      required: ['tokenAddress', 'spender', 'amount'],
+      handler: this.createWalletTransactionHandler('approveToken'),
+      category: 'web3',
+      riskLevel: 'medium',
+      requiresConfirmation: true,
+    });
+
+    // 高级DeFi工具 - 复杂的多步骤操作
+    this.registerTool({
+      name: 'swapTokens',
+      description: 'Swap tokens using DEX aggregator with best route',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Token to swap from (contract address or symbol)',
+        },
+        {
+          type: 'string',
+          description: 'Token to swap to (contract address or symbol)',
+        },
+        {
+          type: 'string',
+          description: 'Amount to swap',
+        },
+        {
+          type: 'number',
+          description: 'Optional: Chain ID (default: current chain)',
+          minimum: 1,
+        },
+        {
+          type: 'number',
+          description: 'Optional: Slippage tolerance in percentage (default: 0.5)',
+          minimum: 0.1,
+          maximum: 50,
+        },
+        {
+          type: 'string',
+          description: 'Optional: Preferred DEX (e.g., "Uniswap", "1inch")',
+        },
+      ],
+      required: ['fromToken', 'toToken', 'amount'],
+      handler: this.createAdvancedWalletHandler('swapTokens'),
+      category: 'web3',
+      riskLevel: 'high',
+      requiresConfirmation: true,
+    });
+
+    this.registerTool({
+      name: 'bridgeTokens',
+      description: 'Bridge tokens between different blockchain networks',
+      parameters: [
+        {
+          type: 'string',
+          description: 'Token to bridge (contract address or symbol)',
+        },
+        {
+          type: 'string',
+          description: 'Amount to bridge',
+        },
+        {
+          type: 'number',
+          description: 'Source chain ID',
+          minimum: 1,
+        },
+        {
+          type: 'number',
+          description: 'Destination chain ID',
+          minimum: 1,
+        },
+        {
+          type: 'string',
+          description: 'Optional: Recipient address (default: current address)',
+          pattern: '^0x[a-fA-F0-9]{40}$',
+        },
+        {
+          type: 'string',
+          description: 'Optional: Preferred bridge protocol',
+        },
+      ],
+      required: ['token', 'amount', 'fromChainId', 'toChainId'],
+      handler: this.createAdvancedWalletHandler('bridgeTokens'),
+      category: 'web3',
+      riskLevel: 'high',
+      requiresConfirmation: true,
+    });
+
+    // 现有的工具保持不变
     this.registerTool({
       name: 'getNFTs',
       description: 'Get NFTs owned by a specific address',
@@ -158,8 +452,6 @@ export class ToolRegistry {
       requiresConfirmation: false,
     });
 
-
-
     this.registerTool({
       name: 'signMessage',
       description: 'Sign a message with the current wallet',
@@ -183,10 +475,6 @@ export class ToolRegistry {
     });
 
     // Advanced DeFi tools (selected tools removed)
-
-
-
-
   }
 
   private initializeUtilityTools(): void {
@@ -1381,6 +1669,144 @@ export class ToolRegistry {
     };
   }
 
+  private createWalletQueryHandler(actionName: string) {
+    return async (params: any) => {
+      try {
+        logger.info(`Executing wallet query action: ${actionName}`, params);
+
+        // Create agent context
+        const context: AgentContext = {
+          tabId: 1, // Required field
+          sessionId: 'agent-session', // Required field
+          eventHandler: (event: any) => {}, // Required field
+          currentChain: '1', // Default to Ethereum
+          currentAddress: '', // Removed preferenceService dependency
+          riskLevel: 'low',
+          balances: {},
+          gasPrices: {},
+          protocols: {},
+          origin: '',
+        };
+
+        // Use real Web3Action class for query operations
+        const web3Action = new Web3Action(context);
+        const result = await web3Action.executeAction(actionName, params);
+
+        return {
+          action: actionName,
+          params,
+          data: result?.data ?? null,
+          result: result?.data ?? null,
+          success: result.success,
+          timestamp: Date.now(),
+          error: result.error,
+        };
+      } catch (error) {
+        logger.error(`Wallet query action failed: ${actionName}`, error);
+        return {
+          action: actionName,
+          params,
+          result: null,
+          success: false,
+          timestamp: Date.now(),
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
+    };
+  }
+
+  private createWalletTransactionHandler(actionName: string) {
+    return async (params: any) => {
+      try {
+        logger.info(`Executing wallet transaction action: ${actionName}`, params);
+
+        // Create agent context
+        const context: AgentContext = {
+          tabId: 1, // Required field
+          sessionId: 'agent-session', // Required field
+          eventHandler: (event: any) => {}, // Required field
+          currentChain: '1', // Default to Ethereum
+          currentAddress: '', // Removed preferenceService dependency
+          riskLevel: 'high',
+          balances: {},
+          gasPrices: {},
+          protocols: {},
+          origin: '',
+        };
+
+        // Use real Web3Action class for transaction operations
+        const web3Action = new Web3Action(context);
+        const result = await web3Action.executeAction(actionName, params);
+
+        return {
+          action: actionName,
+          params,
+          data: result?.data ?? null,
+          result: result?.data ?? null,
+          success: result.success,
+          timestamp: Date.now(),
+          error: result.error,
+        };
+      } catch (error) {
+        logger.error(`Wallet transaction action failed: ${actionName}`, error);
+        return {
+          action: actionName,
+          params,
+          result: null,
+          success: false,
+          timestamp: Date.now(),
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
+    };
+  }
+
+  private createAdvancedWalletHandler(actionName: string) {
+    return async (params: any) => {
+      try {
+        logger.info(`Executing advanced wallet action: ${actionName}`, params);
+
+        // Create agent context
+        const context: AgentContext = {
+          tabId: 1, // Required field
+          sessionId: 'agent-session', // Required field
+          eventHandler: (event: any) => {}, // Required field
+          currentChain: '1', // Default to Ethereum
+          currentAddress: '', // Removed preferenceService dependency
+          riskLevel: 'high',
+          balances: {},
+          gasPrices: {},
+          protocols: {},
+          origin: '',
+        };
+
+        // Use real Web3Action class for advanced DeFi operations
+        const web3Action = new Web3Action(context);
+        const result = await web3Action.executeAction(actionName, params);
+
+        return {
+          action: actionName,
+          params,
+          data: result?.data ?? null,
+          result: result?.data ?? null,
+          success: result.success,
+          timestamp: Date.now(),
+          error: result.error,
+        };
+      } catch (error) {
+        logger.error(`Advanced wallet action failed: ${actionName}`, error);
+        return {
+          action: actionName,
+          params,
+          result: null,
+          success: false,
+          timestamp: Date.now(),
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
+    };
+  }
+
   private createElementSelectionHandler(actionName: string) {
     return async (params: any) => {
       try {
@@ -1686,18 +2112,26 @@ export class ToolRegistry {
     }
   }
 
+  // Legacy executeTool method - kept for backward compatibility
   async executeTool(name: string, params: any): Promise<any> {
-    const tool = this.tools.get(name);
+    return this.executeToolOptimized(name, params);
+  }
+
+  // Optimized tool execution method with caching, retry, and monitoring
+  public async executeToolOptimized(toolName: string, params: any): Promise<any> {
+    const startTime = Date.now();
+    const tool = this.tools.get(toolName);
+
     if (!tool) {
-      throw new Error(`Tool not found: ${name}`);
+      throw new Error(`Tool not found: ${toolName}`);
     }
 
     // Special validation for element selection tools
-    if (this.isElementSelectionTool(name)) {
+    if (this.isElementSelectionTool(toolName)) {
       const validation = await this.validateElementSelectionPrerequisites();
       if (!validation.valid) {
         return {
-          action: name,
+          action: toolName,
           params,
           data: null,
           result: null,
@@ -1709,15 +2143,35 @@ export class ToolRegistry {
     }
 
     try {
-      logger.info(`Executing tool: ${name}`, params);
-      const rawResult = await tool.handler(params);
+      // Check cache for query tools
+      if (tool.category === 'web3' && !tool.requiresConfirmation) {
+        const cachedResult = this.getCachedResult(toolName, params);
+        if (cachedResult) {
+          this.updateUsageStats(toolName, true, Date.now() - startTime);
+          return cachedResult;
+        }
+      }
+
+      // Execute tool with retry mechanism
+      const rawResult = await this.executeWithRetry(
+        () => tool.handler(params),
+        toolName
+      );
 
       // Normalize to ensure 'data' is always present
-      const result = this.ensureStandardResult(name, params, rawResult);
+      const result = this.ensureStandardResult(toolName, params, rawResult);
+
+      const executionTime = Date.now() - startTime;
+      this.updateUsageStats(toolName, true, executionTime);
+
+      // Cache result for query tools
+      if (tool.category === 'web3' && !tool.requiresConfirmation) {
+        this.setCachedResult(toolName, params, result, 30000); // 30 seconds TTL
+      }
 
       // Monitor tab state after tool execution
-      await this.monitorTabStateAfterTool(name, result);
-      logger.info(`Tool execution completed: ${name}`, {
+      await this.monitorTabStateAfterTool(toolName, result);
+      logger.info(`Tool executed successfully: ${toolName} (${executionTime}ms)`, {
         hasData: !!result?.data,
       });
 
@@ -1727,7 +2181,7 @@ export class ToolRegistry {
         const { Actors } = await import('@/ui/views/Agent/types/message');
         const current = await chatHistoryStore.getCurrentSession();
         if (current && current.id) {
-          const safeContent = JSON.stringify({ tool: name, params: params || {}, result });
+          const safeContent = JSON.stringify({ tool: toolName, params: params || {}, result });
           await chatHistoryStore.addMessage(current.id, {
             actor: Actors.USER,
             content: safeContent,
@@ -1740,7 +2194,10 @@ export class ToolRegistry {
 
       return result;
     } catch (error) {
-      logger.error(`Tool execution failed: ${name}`, error);
+      const executionTime = Date.now() - startTime;
+      this.updateUsageStats(toolName, false, executionTime);
+
+      logger.error(`Tool execution failed: ${toolName}`, error);
       throw error;
     }
   }
@@ -2247,6 +2704,133 @@ export class ToolRegistry {
     } catch (error) {
       logger.warn('Failed to monitor tab state after tool execution', error);
     }
+  }
+
+  // Cache management methods
+  private generateCacheKey(toolName: string, params: any): string {
+    return `${toolName}_${JSON.stringify(params)}`;
+  }
+
+  private getCachedResult(toolName: string, params: any): any | null {
+    const cacheKey = this.generateCacheKey(toolName, params);
+    const cached = this.cache.get(cacheKey);
+
+    if (cached && Date.now() - cached.timestamp < cached.ttl) {
+      logger.debug(`Cache hit for tool: ${toolName}`);
+      return cached.result;
+    }
+
+    if (cached) {
+      this.cache.delete(cacheKey);
+    }
+
+    return null;
+  }
+
+  private setCachedResult(toolName: string, params: any, result: any, ttl: number = 30000): void {
+    const cacheKey = this.generateCacheKey(toolName, params);
+    this.cache.set(cacheKey, {
+      key: cacheKey,
+      result,
+      timestamp: Date.now(),
+      ttl,
+    });
+    logger.debug(`Cached result for tool: ${toolName}`);
+  }
+
+  // Usage statistics methods
+  private updateUsageStats(toolName: string, success: boolean, executionTime: number): void {
+    const stats = this.usageStats.get(toolName) || {
+      name: toolName,
+      callCount: 0,
+      successCount: 0,
+      errorCount: 0,
+      averageExecutionTime: 0,
+      lastCalled: 0,
+    };
+
+    stats.callCount++;
+    stats.lastCalled = Date.now();
+
+    if (success) {
+      stats.successCount++;
+    } else {
+      stats.errorCount++;
+    }
+
+    // Update average execution time
+    stats.averageExecutionTime = (stats.averageExecutionTime * (stats.callCount - 1) + executionTime) / stats.callCount;
+
+    this.usageStats.set(toolName, stats);
+  }
+
+  public getUsageStats(): ToolUsageStats[] {
+    return Array.from(this.usageStats.values());
+  }
+
+  // Retry mechanism
+  private async executeWithRetry<T>(
+    operation: () => Promise<T>,
+    toolName: string,
+    maxRetries: number = this.retryConfig.maxRetries
+  ): Promise<T> {
+    let lastError: Error;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+
+        if (attempt === maxRetries) {
+          logger.error(`Tool execution failed after ${maxRetries + 1} attempts: ${toolName}`, lastError);
+          throw lastError;
+        }
+
+        const delay = this.retryConfig.retryDelay * Math.pow(this.retryConfig.backoffMultiplier, attempt);
+        logger.warn(`Tool execution failed, retrying in ${delay}ms: ${toolName}`, lastError);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+
+    throw lastError!;
+  }
+
+
+
+  // Cache cleanup method
+  public cleanupCache(): void {
+    const now = Date.now();
+    for (const [key, cached] of this.cache.entries()) {
+      if (now - cached.timestamp > cached.ttl) {
+        this.cache.delete(key);
+      }
+    }
+    logger.debug('Cache cleanup completed');
+  }
+
+  // Performance monitoring
+  public getPerformanceMetrics(): any {
+    const stats = this.getUsageStats();
+    const totalCalls = stats.reduce((sum, stat) => sum + stat.callCount, 0);
+    const totalErrors = stats.reduce((sum, stat) => sum + stat.errorCount, 0);
+    const avgExecutionTime = stats.reduce((sum, stat) => sum + stat.averageExecutionTime, 0) / stats.length || 0;
+
+    return {
+      totalTools: this.tools.size,
+      totalCalls,
+      totalErrors,
+      successRate: totalCalls > 0 ? ((totalCalls - totalErrors) / totalCalls) * 100 : 0,
+      averageExecutionTime: avgExecutionTime,
+      cacheSize: this.cache.size,
+      cacheHitRate: this.calculateCacheHitRate(),
+    };
+  }
+
+  private calculateCacheHitRate(): number {
+    // This would need to be implemented with actual cache hit tracking
+    // For now, return a placeholder
+    return 0;
   }
 }
 

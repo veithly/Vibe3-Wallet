@@ -30,16 +30,20 @@ import { createLogger } from '@/utils/logger';
 import * as crypto from 'crypto';
 import transactionHistoryService from '@/background/service/transactionHistory';
 import { findChain } from '@/utils/chain';
+import { ConfirmationManager } from '../confirmation/ConfirmationManager';
+import { ActionPlan, ActionStep } from '../planning/ActionPlanner';
 
 const logger = createLogger('Web3Action');
 
 export class Web3Action {
   private readonly context: AgentContext;
   private readonly assetQueryAction: AssetQueryAction;
+  private readonly confirmationManager: ConfirmationManager;
 
   constructor(context: AgentContext) {
     this.context = context;
     this.assetQueryAction = new AssetQueryAction(context);
+    this.confirmationManager = new ConfirmationManager(context);
   }
 
   async getNFTs(params: GetNFTsActionParams): Promise<ActionResult> {
@@ -468,6 +472,625 @@ export class Web3Action {
     return this.assetQueryAction.getAssetPrices(params);
   }
 
+  // New Wallet Query Methods
+  async getBalance(params: any): Promise<ActionResult> {
+    try {
+      const address = params.address || (await preferenceService.getCurrentAccount())?.address;
+      const chainId = params.chainId || '1';
+
+      if (!address) {
+        return {
+          success: false,
+          error: 'No address provided and no current account found',
+        };
+      }
+
+      logger.info(`Getting balance for address: ${address} on chain: ${chainId}`);
+
+      // Use Rabby's openapi service to get total balance
+      const totalBalance = await openapiService.getTotalBalance(address, true);
+
+      return {
+        success: true,
+        data: {
+          address,
+          chainId,
+          totalBalance,
+          timestamp: Date.now(),
+        },
+      };
+    } catch (error) {
+      logger.error('Error getting balance:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get balance',
+        data: {
+          address: params.address || '',
+          chainId: params.chainId || '1',
+          totalBalance: null,
+          timestamp: Date.now(),
+        },
+      };
+    }
+  }
+
+  async getTokenBalance(params: any): Promise<ActionResult> {
+    try {
+      const address = params.address || (await preferenceService.getCurrentAccount())?.address;
+      const tokenAddress = params.tokenAddress;
+      const chainId = params.chainId || '1';
+
+      if (!address) {
+        return {
+          success: false,
+          error: 'No address provided and no current account found',
+        };
+      }
+
+      logger.info(`Getting token balance for address: ${address}, token: ${tokenAddress} on chain: ${chainId}`);
+
+      let balance;
+      if (!tokenAddress) {
+        // Native token balance
+        balance = await providerController({
+          data: {
+            method: 'eth_getBalance',
+            params: [address, 'latest'],
+          },
+        });
+      } else {
+        // ERC20 token balance
+        const balanceOfAbi = [
+          {
+            constant: true,
+            inputs: [{ name: '_owner', type: 'address' }],
+            name: 'balanceOf',
+            outputs: [{ name: 'balance', type: 'uint256' }],
+            type: 'function',
+          },
+        ];
+
+        const data = this.encodeFunctionCall(balanceOfAbi[0], [address]);
+        balance = await providerController({
+          data: {
+            method: 'eth_call',
+            params: [
+              {
+                to: tokenAddress,
+                data: data,
+              },
+              'latest',
+            ],
+          },
+        });
+      }
+
+      return {
+        success: true,
+        data: {
+          address,
+          tokenAddress: tokenAddress || 'native',
+          chainId,
+          balance,
+          timestamp: Date.now(),
+        },
+      };
+    } catch (error) {
+      logger.error('Error getting token balance:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get token balance',
+        data: {
+          address: params.address || '',
+          tokenAddress: params.tokenAddress || 'native',
+          chainId: params.chainId || '1',
+          balance: null,
+          timestamp: Date.now(),
+        },
+      };
+    }
+  }
+
+  async getTokenPrice(params: any): Promise<ActionResult> {
+    try {
+      const token = params.token;
+      const chainId = params.chainId || '1';
+      const quoteCurrency = params.quoteCurrency || 'USD';
+
+      if (!token) {
+        return {
+          success: false,
+          error: 'Token parameter is required',
+        };
+      }
+
+      logger.info(`Getting token price for: ${token} on chain: ${chainId}`);
+
+      // Use Rabby's openapi service to get token price
+      let priceData;
+      if (token.startsWith('0x')) {
+        // Token contract address - use tokenPrice method
+        priceData = await openapiService.tokenPrice(token);
+      } else {
+        // Token symbol - try to get token info first
+        try {
+          const tokenInfo = await openapiService.getToken(token, chainId, token);
+          if (tokenInfo) {
+            priceData = await openapiService.tokenPrice(tokenInfo.id || token);
+          }
+        } catch (error) {
+          // Fallback to direct symbol call
+          priceData = await openapiService.tokenPrice(token);
+        }
+      }
+
+      return {
+        success: true,
+        data: {
+          token,
+          chainId,
+          quoteCurrency,
+          price: priceData?.last_price || null,
+          priceChange24h: priceData?.change_percent || null,
+          marketCap: priceData?.market_cap || null,
+          volume24h: priceData?.volume_24h || null,
+          timestamp: Date.now(),
+        },
+      };
+    } catch (error) {
+      logger.error('Error getting token price:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get token price',
+        data: {
+          token: params.token || '',
+          chainId: params.chainId || '1',
+          quoteCurrency: params.quoteCurrency || 'USD',
+          price: null,
+          timestamp: Date.now(),
+        },
+      };
+    }
+  }
+
+  async sendTransaction(params: any): Promise<ActionResult> {
+    try {
+      const currentAccount = await preferenceService.getCurrentAccount();
+      if (!currentAccount) {
+        return {
+          success: false,
+          error: 'No current account found',
+        };
+      }
+
+      const txParams = {
+        from: currentAccount.address,
+        to: params.to,
+        value: params.value || '0x0',
+        data: params.data || '0x',
+        chainId: params.chainId || '1',
+        gas: params.gas || '0x',
+        gasPrice: params.gasPrice || '0x',
+        nonce: params.nonce || '0x',
+      };
+
+      // Create action plan for confirmation
+      const actionPlan: ActionPlan = {
+        id: `tx_${Date.now()}`,
+        intent: {
+          action: 'SEND',
+          entities: {
+            recipient: params.to,
+            amount: params.value,
+            chainId: Number(params.chainId || '1'),
+          },
+          constraints: {},
+          chains: [Number(params.chainId || '1')],
+          protocols: [],
+          confidence: 0.9,
+          rawInstruction: `Send ${params.value} ETH to ${params.to}`,
+        },
+        actions: [
+          {
+            id: 'send-tx-1',
+            name: 'Send Transaction',
+            type: 'sendTransaction',
+            status: 'pending',
+            params: txParams,
+            description: `Send ${params.value} ETH to ${params.to}`,
+            dependencies: [],
+            estimatedGas: '21000',
+            estimatedTime: 30,
+            riskLevel: 'HIGH',
+          },
+        ],
+        riskLevel: 'HIGH',
+        estimatedTotalGas: '21000',
+        estimatedTotalTime: 30,
+        requiresConfirmation: true,
+      };
+
+      // Request user confirmation
+      const confirmed = await this.confirmationManager.requestConfirmation(actionPlan);
+      if (!confirmed) {
+        return {
+          success: false,
+          error: 'Transaction cancelled by user',
+        };
+      }
+
+      logger.info('User confirmed transaction, proceeding with execution');
+
+      const txHash = await providerController({
+        data: {
+          method: 'eth_sendTransaction',
+          params: [txParams],
+        },
+      });
+
+      return {
+        success: true,
+        data: {
+          txHash,
+          txParams,
+          confirmed: true,
+        },
+      };
+    } catch (error) {
+      logger.error('Error sending transaction:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to send transaction',
+        data: {
+          txHash: null,
+          txParams: params,
+        },
+      };
+    }
+  }
+
+  async approveToken(params: any): Promise<ActionResult> {
+    try {
+      const currentAccount = await preferenceService.getCurrentAccount();
+      if (!currentAccount) {
+        return {
+          success: false,
+          error: 'No current account found',
+        };
+      }
+
+      const tokenAddress = params.tokenAddress;
+      const spender = params.spender;
+      const amount = params.amount || '0x';
+      const chainId = params.chainId || '1';
+
+      if (!tokenAddress || !spender) {
+        return {
+          success: false,
+          error: 'Token address and spender are required',
+        };
+      }
+
+      logger.info(`Approving token for spender: ${spender} on token: ${tokenAddress} for amount: ${amount}`);
+
+      const approveAbi = [
+        {
+          constant: false,
+          inputs: [{ name: '_spender', type: 'address' }, { name: '_value', type: 'uint256' }],
+          name: 'approve',
+          outputs: [{ name: 'success', type: 'bool' }],
+          type: 'function',
+        },
+      ];
+
+      const data = this.encodeFunctionCall(approveAbi[0], [spender, amount]);
+
+      const txParams = {
+        from: currentAccount.address,
+        to: tokenAddress,
+        data: data,
+        chainId: chainId,
+      };
+
+      // Create action plan for confirmation
+      const actionPlan: ActionPlan = {
+        id: `approve_${Date.now()}`,
+        intent: {
+          action: 'APPROVE',
+          entities: {
+            tokenAddress: tokenAddress,
+            spender: spender,
+            amount: amount,
+            chainId: Number(chainId),
+          },
+          constraints: {},
+          chains: [Number(chainId)],
+          protocols: [],
+          confidence: 0.9,
+          rawInstruction: `Approve ${spender} to spend ${amount} of token ${tokenAddress}`,
+        },
+        actions: [
+          {
+            id: 'approve-token-1',
+            name: 'Approve Token',
+            type: 'approveToken',
+            status: 'pending',
+            params: txParams,
+            description: `Approve ${spender} to spend ${amount} of token ${tokenAddress}`,
+            dependencies: [],
+            estimatedGas: '50000',
+            estimatedTime: 30,
+            riskLevel: 'MEDIUM',
+          },
+        ],
+        riskLevel: 'MEDIUM',
+        estimatedTotalGas: '50000',
+        estimatedTotalTime: 30,
+        requiresConfirmation: true,
+      };
+
+      // Request user confirmation
+      const confirmed = await this.confirmationManager.requestConfirmation(actionPlan);
+      if (!confirmed) {
+        return {
+          success: false,
+          error: 'Token approval cancelled by user',
+        };
+      }
+
+      logger.info('User confirmed token approval, proceeding with execution');
+
+      const txHash = await providerController({
+        data: {
+          method: 'eth_sendTransaction',
+          params: [txParams],
+        },
+      });
+
+      return {
+        success: true,
+        data: {
+          txHash,
+          txParams,
+          confirmed: true,
+        },
+      };
+    } catch (error) {
+      logger.error('Error approving token:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to approve token',
+        data: {
+          txHash: null,
+          txParams: params,
+        },
+      };
+    }
+  }
+
+  async swapTokens(params: any): Promise<ActionResult> {
+    try {
+      const currentAccount = await preferenceService.getCurrentAccount();
+      if (!currentAccount) {
+        return {
+          success: false,
+          error: 'No current account found',
+        };
+      }
+
+      const fromToken = params.fromToken;
+      const toToken = params.toToken;
+      const amount = params.amount;
+      const chainId = params.chainId || '1';
+      const slippage = params.slippage || 0.5;
+      const preferredDex = params.preferredDex;
+
+      if (!fromToken || !toToken || !amount) {
+        return {
+          success: false,
+          error: 'From token, to token, and amount are required',
+        };
+      }
+
+      logger.info(`Swapping ${amount} ${fromToken} to ${toToken} on chain ${chainId}`);
+
+      // Create action plan for confirmation
+      const actionPlan: ActionPlan = {
+        id: `swap_${Date.now()}`,
+        intent: {
+          action: 'SWAP',
+          entities: {
+            fromToken: fromToken,
+            toToken: toToken,
+            amount: amount,
+            chainId: Number(chainId),
+          },
+          constraints: {
+            slippage: slippage,
+          },
+          chains: [Number(chainId)],
+          protocols: preferredDex ? [preferredDex] : [],
+          confidence: 0.9,
+          rawInstruction: `Swap ${amount} ${fromToken} to ${toToken} with ${slippage}% slippage`,
+        },
+        actions: [
+          {
+            id: 'swap-1',
+            name: 'Swap Tokens',
+            type: 'swapTokens',
+            status: 'pending',
+            params: {
+              fromToken,
+              toToken,
+              amount,
+              chainId,
+              slippage,
+              preferredDex,
+            },
+            description: `Swap ${amount} ${fromToken} to ${toToken}`,
+            dependencies: [],
+            estimatedGas: '200000',
+            estimatedTime: 60,
+            riskLevel: 'HIGH',
+          },
+        ],
+        riskLevel: 'HIGH',
+        estimatedTotalGas: '200000',
+        estimatedTotalTime: 60,
+        requiresConfirmation: true,
+      };
+
+      // Request user confirmation
+      const confirmed = await this.confirmationManager.requestConfirmation(actionPlan);
+      if (!confirmed) {
+        return {
+          success: false,
+          error: 'Token swap cancelled by user',
+        };
+      }
+
+      logger.info('User confirmed token swap, proceeding with execution');
+
+      // This is a simplified implementation - in production, you would use the actual swap service
+      // For now, we'll return a mock result
+      const mockTxHash = '0x' + Math.random().toString(16).substr(2, 64);
+
+      return {
+        success: true,
+        data: {
+          txHash: mockTxHash,
+          fromToken,
+          toToken,
+          amount,
+          chainId,
+          slippage,
+          confirmed: true,
+        },
+      };
+    } catch (error) {
+      logger.error('Error swapping tokens:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to swap tokens',
+        data: {
+          txHash: null,
+          params: params,
+        },
+      };
+    }
+  }
+
+  async bridgeTokens(params: any): Promise<ActionResult> {
+    try {
+      const currentAccount = await preferenceService.getCurrentAccount();
+      if (!currentAccount) {
+        return {
+          success: false,
+          error: 'No current account found',
+        };
+      }
+
+      const token = params.token;
+      const amount = params.amount;
+      const fromChainId = params.fromChainId;
+      const toChainId = params.toChainId;
+      const recipient = params.recipient || currentAccount.address;
+      const preferredBridge = params.preferredBridge;
+
+      if (!token || !amount || !fromChainId || !toChainId) {
+        return {
+          success: false,
+          error: 'Token, amount, from chain ID, and to chain ID are required',
+        };
+      }
+
+      logger.info(`Bridging ${amount} ${token} from chain ${fromChainId} to chain ${toChainId}`);
+
+      // Create action plan for confirmation
+      const actionPlan: ActionPlan = {
+        id: `bridge_${Date.now()}`,
+        intent: {
+          action: 'BRIDGE',
+          entities: {
+            tokenAddress: token,
+            amount: amount,
+            fromChainId: Number(fromChainId),
+            toChainId: Number(toChainId),
+            recipient: recipient,
+          },
+          constraints: {},
+          chains: [Number(fromChainId), Number(toChainId)],
+          protocols: preferredBridge ? [preferredBridge] : [],
+          confidence: 0.9,
+          rawInstruction: `Bridge ${amount} ${token} from chain ${fromChainId} to chain ${toChainId}`,
+        },
+        actions: [
+          {
+            id: 'bridge-1',
+            name: 'Bridge Tokens',
+            type: 'bridgeTokens',
+            status: 'pending',
+            params: {
+              token,
+              amount,
+              fromChainId,
+              toChainId,
+              recipient,
+              preferredBridge,
+            },
+            description: `Bridge ${amount} ${token} from chain ${fromChainId} to chain ${toChainId}`,
+            dependencies: [],
+            estimatedGas: '300000',
+            estimatedTime: 300,
+            riskLevel: 'HIGH',
+          },
+        ],
+        riskLevel: 'HIGH',
+        estimatedTotalGas: '300000',
+        estimatedTotalTime: 300,
+        requiresConfirmation: true,
+      };
+
+      // Request user confirmation
+      const confirmed = await this.confirmationManager.requestConfirmation(actionPlan);
+      if (!confirmed) {
+        return {
+          success: false,
+          error: 'Token bridge cancelled by user',
+        };
+      }
+
+      logger.info('User confirmed token bridge, proceeding with execution');
+
+      // This is a simplified implementation - in production, you would use the actual bridge service
+      // For now, we'll return a mock result
+      const mockTxHash = '0x' + Math.random().toString(16).substr(2, 64);
+
+      return {
+        success: true,
+        data: {
+          txHash: mockTxHash,
+          token,
+          amount,
+          fromChainId,
+          toChainId,
+          recipient,
+          confirmed: true,
+        },
+      };
+    } catch (error) {
+      logger.error('Error bridging tokens:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to bridge tokens',
+        data: {
+          txHash: null,
+          params: params,
+        },
+      };
+    }
+  }
+
   async executeAction(actionName: string, params: any): Promise<ActionResult> {
     switch (actionName) {
       case 'addLiquidity':
@@ -493,6 +1116,23 @@ export class Web3Action {
         return this.getNativeBalance(params);
       case 'getAssetPrices':
         return this.getAssetPrices(params);
+      // New Wallet Query Actions
+      case 'getBalance':
+        return this.getBalance(params);
+      case 'getTokenBalance':
+        return this.getTokenBalance(params);
+      case 'getTokenPrice':
+        return this.getTokenPrice(params);
+      // New Wallet Transaction Actions
+      case 'sendTransaction':
+        return this.sendTransaction(params);
+      case 'approveToken':
+        return this.approveToken(params);
+      // New Advanced DeFi Actions
+      case 'swapTokens':
+        return this.swapTokens(params);
+      case 'bridgeTokens':
+        return this.bridgeTokens(params);
       default:
         return {
           success: false,

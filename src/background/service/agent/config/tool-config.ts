@@ -36,3 +36,5 @@ export function getEnabledTools(): string[] {
 export function getDisabledTools(): ToolConfig[] {
   return TOOL_CONFIGURATIONS.filter(tool => !tool.enabled);
 }
+
+

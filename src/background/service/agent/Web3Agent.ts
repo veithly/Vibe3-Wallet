@@ -4719,4 +4719,69 @@ export class Web3Agent extends EventEmitter {
     // Handle streaming chunks from LLM responses
     this.emit('streaming_chunk', chunk);
   }
+
+  private async processToolCall(toolCall: FunctionCall): Promise<ToolMessage> {
+    try {
+      logger.info('Processing tool call:', toolCall);
+
+      // Get tool from registry
+      const tool = toolRegistry.getTool(toolCall.name);
+      if (!tool) {
+        throw new Error(`Tool not found: ${toolCall.name}`);
+      }
+
+      // Execute tool with monitoring
+      const startTime = Date.now();
+      const result = await toolRegistry.executeToolOptimized(toolCall.name, toolCall.arguments);
+      const executionTime = Date.now() - startTime;
+
+      // Log performance metrics
+      logger.info(`Tool execution completed: ${toolCall.name} (${executionTime}ms)`);
+
+      // Check if we need to perform cache cleanup
+      if (Math.random() < 0.1) { // 10% chance to cleanup cache
+        toolRegistry.cleanupCache();
+      }
+
+      return new ToolMessage({
+        content: JSON.stringify(result),
+        name: toolCall.name || 'tool',
+        tool_call_id: toolCall.id || `call_${Date.now()}`,
+      });
+    } catch (error) {
+      logger.error('Tool execution failed:', error);
+      return new ToolMessage({
+        content: JSON.stringify({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        }),
+        name: toolCall.name || 'tool',
+        tool_call_id: toolCall.id || `call_${Date.now()}`,
+      });
+    }
+  }
+
+  // Performance monitoring methods
+  public getToolPerformanceMetrics(): any {
+    return toolRegistry.getPerformanceMetrics();
+  }
+
+  public getToolUsageStats(): any[] {
+    return toolRegistry.getUsageStats();
+  }
+
+  // Periodic cleanup and monitoring
+  private startPeriodicMaintenance(): void {
+    // Cleanup cache every 5 minutes
+    setInterval(() => {
+      toolRegistry.cleanupCache();
+      logger.debug('Periodic cache cleanup completed');
+    }, 5 * 60 * 1000);
+
+    // Log performance metrics every 10 minutes
+    setInterval(() => {
+      const metrics = this.getToolPerformanceMetrics();
+      logger.info('Tool performance metrics:', metrics);
+    }, 10 * 60 * 1000);
+  }
 }
