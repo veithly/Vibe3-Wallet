@@ -231,8 +231,8 @@ function MessageBlock({
         animation: 'slideUp 0.3s ease-out',
       }}
     >
-      {/* Avatar */}
-      {!isSameActor && (
+      {/* Avatar - Only show for user messages */}
+      {!isSameActor && isUserMessage && (
         <div
           className="message-avatar"
           style={{
@@ -240,9 +240,7 @@ function MessageBlock({
             width: '36px',
             height: '36px',
             borderRadius: '50%',
-            background: isUserMessage
-              ? 'linear-gradient(135deg, #468585, #50a0a0)'
-              : actor.iconBackground,
+            background: 'linear-gradient(135deg, #468585, #50a0a0)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -251,25 +249,11 @@ function MessageBlock({
             alignSelf: 'flex-start', // Ensure avatar aligns to top
           }}
         >
-          {isUserMessage ? (
-            <div style={{ fontSize: '20px' }}>👤</div>
-          ) : (
-            <img
-              src={actor.icon}
-              alt={actor.name}
-              style={{ width: '24px', height: '24px' }}
-              onError={(e) => {
-                logger.warn('MessageList', 'Failed to load actor icon', {
-                  actor: actor.name,
-                  icon: actor.icon,
-                });
-                (e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyUzYuNDggMjIgMTIgMjJTMjIgMTcuNTIgMjIgMTJTMTcuNTIgMiAxMiAyWk0xMiAxNEM5Ljc5IDE0IDggMTIuMjEgOCAxMFM5Ljc5IDggMTIgOFMxNiA5Ljc5IDE2IDEyUzE0LjIxIDE0IDEyIDE0Wk0xMiAxOEMxMC45IDE4IDEwIDE3LjEgMTAgMTZDMTAgMTUuOSAxMC45IDE1IDEyIDE1UzE0IDE1LjkgMTQgMTZDMTQgMTcuMSAxMy4xIDE4IDEyIDE4WiIgZmlsbD0iY3VycmVudENvbG9yIi8+Cjwvc3ZnPgo=';
-              }}
-            />
-          )}
+          <div style={{ fontSize: '20px' }}>👤</div>
         </div>
       )}
-      {isSameActor && <div style={{ width: '36px', flexShrink: 0 }} />}
+      {/* Only add spacer for same actor user messages */}
+      {isSameActor && isUserMessage && <div style={{ width: '36px', flexShrink: 0 }} />}
 
       {/* Message bubble */}
       <div
